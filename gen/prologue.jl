@@ -1,0 +1,1 @@
+INT8_MIN = typemin(Int8)

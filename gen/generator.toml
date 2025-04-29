@@ -1,0 +1,8 @@
+[general]
+library_name = "libzenohc"
+output_file_path = "./LibZenohC.jl"
+module_name = "LibZenohC"
+jll_pkg_name = "ZenohC_jll"
+export_symbol_prefixes = ["z_", "zc_", "ze_"]
+output_ignorelist =["Z_RELIABILITY_DEFAULT"]
+prologue_file_path="prologue.jl"
