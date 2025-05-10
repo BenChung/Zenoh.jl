@@ -41,6 +41,14 @@ struct ZBytes{R <: Union{Base.RefValue{LibZenohC.z_owned_bytes_t}, Ptr{LibZenohC
         _handle_result(rtc)
         return out
     end
+    function ZBytes(r::Vector{T}) where T
+        out = new{Base.RefValue{LibZenohC.z_owned_bytes_t}}(Ref{LibZenohC.z_owned_bytes_t}())
+        Base.preserve_handle(r)
+        rtc = LibZenohC.z_bytes_from_buf(out.b, r, length(r)*sizeof(T), 
+            @cfunction(_release, Ptr{Cvoid}, (Ptr{Cvoid}, Ptr{Cvoid})), Base.pointer_from_objref(r))
+        _handle_result(rtc)
+        return out
+    end
     function ZBytes(p::Ptr{LibZenohC.z_loaned_bytes_t})
         return new{Ptr{LibZenohC.z_loaned_bytes_t}}(p)
     end
