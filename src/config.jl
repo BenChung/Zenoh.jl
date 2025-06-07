@@ -24,14 +24,13 @@ struct Config
         new(cfg)
     end
 end
-
 """
-Reads a configuration from a JSON-serialized string, such as ‘{mode:”client”,connect:{endpoints:[“tcp/127.0.0.1:7447”]}}’.
+Gets a JSON-serialized value at the key position of the configuration.
 """
 function Base.getindex(c::Config, key::String)
     r=Ref{LibZenohC.z_owned_string_t}()
     GC.@preserve key _handle_result(LibZenohC.zc_config_get_from_str(_loan(c.c), pointer(Base.unsafe_convert(Cstring, key)), r))
-    res = unsafe_string(LibZenohC.z_string_data(_loan(r)))
+    res = _string(r)
     _drop(_move(r))
     return res
 end
@@ -49,7 +48,7 @@ Convert a config into an equivalent JSON string.
 function toJson(c::Config)
     r=Ref{LibZenohC.z_owned_string_t}()
     _handle_result(LibZenohC.zc_config_to_string(_loan(c.c), r))
-    res = unsafe_string(LibZenohC.z_string_data(_loan(r)))
+    res = _string(r)
     _drop(_move(r))
     return res
 end
@@ -57,3 +56,5 @@ end
 function Base.show(io::IO, c::Config)
     println(io, toJson(c))
 end
+
+export Config

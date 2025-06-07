@@ -25,6 +25,11 @@ include("config.jl")
 include("session.jl")
 
 
+
+function _string(r::Ref{LibZenohC.z_owned_string_t})
+    return unsafe_string(LibZenohC.z_string_data(_loan(r)), LibZenohC.z_string_len(_loan(r)))
+end
+
 const _refs_in_flight = Dict{UInt64, Ref}()
 const _refptr = Ref{UInt64}(0)
 

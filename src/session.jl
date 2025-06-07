@@ -44,7 +44,7 @@ function Base.show(io::IO, id::LibZenohC.z_id_t)
     r=Ref{LibZenohC.z_owned_string_t}()
     idr=Ref{LibZenohC.z_id_t}(id)
     LibZenohC.z_id_to_string(idr, r)
-    res = unsafe_string(LibZenohC.z_string_data(_loan(r)))
+    res = _string(r)
     _drop(_move(r))
     print(io, "z_id: $res")
 end
