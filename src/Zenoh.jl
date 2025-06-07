@@ -303,6 +303,28 @@ function Base.close(s::Subscriber)
     _handle_result(LibZenohC.z_undeclare_subscriber(_move(s.sub)))
 end
 
+struct Publisher
+    pub::Base.RefValue{LibZenohC.z_owned_publisher_t}
+    keyexpr::Keyexpr # we have to keep this for GC
+    function Publisher(s::Session, k::Keyexpr)
+        opts = Ref{LibZenohC.z_publisher_options_t}()
+        LibZenohC.z_publisher_options_default(opts)
+        pub = Ref{LibZenohC.z_owned_publisher_t}()
+        ret = LibZenohC.z_declare_publisher(_loan(s), pub, _loan(k), opts)
+        _handle_result(ret)
+        return new(pub, k)
+    end
+end
+function Base.close(s::Publisher)
+    _handle_result(LibZenohC.z_undeclare_publisher(_move(s.pub)))
+end
+
+function put(p::Publisher, payload)
+    bytes = ZBytes(payload)
+    rtc = LibZenohC.z_publisher_put(_loan(p.pub), _move(bytes), C_NULL)
+    _handle_result(rtc)
+end
+
 function put(s::Session, k::Keyexpr, payload)
     bytes = ZBytes(payload)
     rtc = LibZenohC.z_put(_loan(s), _loan(k), _move(bytes), C_NULL)
@@ -329,7 +351,9 @@ function payload(s::Sample)
     return ZBytes(LibZenohC.z_sample_payload(s.s))
 end
 
-
+function setup_logging()
+    _handle_result(LibZenohC.zc_init_log_from_env_or("info"))
+end
 
 
 _loan(s::Session) = _loan(s.s)
