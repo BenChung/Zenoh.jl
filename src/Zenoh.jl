@@ -104,6 +104,7 @@ function Base.readavailable(zr::ZBytesReader)
     readbytes!(zr, arr, nbytes)
     return arr
 end
+Base.eof(zr::ZBytesReader) = bytesavailable(zr) == 0
 function Base.close(zr::ZBytesReader)
     # don't have to do anything
 end
@@ -176,7 +177,7 @@ mutable struct ZBytesSliceReader{Z <: ZBytes} <: IO
 end
 function Base.open(z::ZBytes, ::Val{:readslice})
     bytes_remaining = length(z)
-    return ZBytesSliceReader(z, Ref(LibZenohC.z_bytes_get_slice_iterator(_loan(z.b))), Ref{LibZenohC.z_view_slice_t}(), nothing, UInt64(0), bytes_remaining, 0)
+    return ZBytesSliceReader(z, Ref(LibZenohC.z_bytes_get_slice_iterator(_loan(z.b))), Ref{LibZenohC.z_view_slice_t}(), nothing, UInt64(0), bytes_remaining, UInt64(0))
 end
 Base.readbytes!(zr::ZBytesSliceReader, b::AbstractVector{UInt8}, nb) = unsafe_read(zr, Base.unsafe_convert(Ptr{UInt8}, b), nb)
 function Base.unsafe_read(zr::ZBytesSliceReader, b::Ptr{UInt8}, nb::UInt) 
