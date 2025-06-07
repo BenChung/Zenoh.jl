@@ -277,14 +277,16 @@ end
 """
 Subscribe to keyexpr `k` in session `s`, calling handler `f`.
 """
-function Base.open(f::Function, s::Session, k::Keyexpr)
+function Base.open(f::Function, s::Session, k::Keyexpr; should_close_on_error=true)
+    sub::Union{Subscriber, Nothing} = nothing
     sub_func, sub_ctx = cclosure(2, Cvoid, (Ptr{LibZenohC.z_loaned_sample_t}, )) do sample 
         try
             f(Sample(sample))
         catch e
             Base.showerror(stderr, e, catch_backtrace())
-
-            println()
+            if should_close_on_error && !isnothing(sub)
+                close(sub)
+            end
         end
         nothing
     end
