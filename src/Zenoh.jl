@@ -38,15 +38,15 @@ function _release(data::Ptr{Cvoid}, ctx::Ptr{Cvoid})
     return C_NULL
 end
 struct ZBytes{R <: Union{Base.RefValue{LibZenohC.z_owned_bytes_t}, Ptr{LibZenohC.z_loaned_bytes_t}}} 
-    b::R
-    function ZBytes(r::Ref{T}) where T
-        out = new{Base.RefValue{LibZenohC.z_owned_bytes_t}}(Ref{LibZenohC.z_owned_bytes_t}())
+        b::R
+        function ZBytes(r::Ref{T}) where T
+            out = new{Base.RefValue{LibZenohC.z_owned_bytes_t}}(Ref{LibZenohC.z_owned_bytes_t}())
             Base.preserve_handle(r)
             rtc = LibZenohC.z_bytes_from_buf(out.b, Base.unsafe_convert(Ptr{UInt8}, Base.unsafe_convert(Ptr{T}, r)), sizeof(T), 
-            @cfunction(_release, Ptr{Cvoid}, (Ptr{Cvoid}, Ptr{Cvoid})), Base.pointer_from_objref(r))
-        _handle_result(rtc)
-        return out
-    end
+                @cfunction(_release, Ptr{Cvoid}, (Ptr{Cvoid}, Ptr{Cvoid})), Base.pointer_from_objref(r))
+            _handle_result(rtc)
+            return out
+        end
     function ZBytes(r::Vector{T}) where T
         out = new{Base.RefValue{LibZenohC.z_owned_bytes_t}}(Ref{LibZenohC.z_owned_bytes_t}())
         Base.preserve_handle(r)
