@@ -1,23 +1,5 @@
 module Zenoh
 using CClosure
-#=
-    z_owned_config_t config;
-    z_config_default(&config);
-    z_owned_session_t s;
-    if (z_open(&s, z_move(config)) != 0) {
-        printf("Failed to open Zenoh session\n");
-        exit(-1);
-    }
-
-    z_owned_bytes_t payload;
-    z_bytes_from_static_str(&payload, "value");
-    z_view_keyexpr_t key_expr;
-    z_view_keyexpr_from_string(&key_expr, "key/expression");
-
-    z_put(z_loan(s), z_loan(key_expr), z_move(payload), NULL);
-
-    z_drop(z_move(s));
-=#
 include("../gen/LibZenohC.jl")
 include("ownership.jl")
 include("result.jl")
@@ -319,24 +301,66 @@ function Base.close(s::Publisher)
     _handle_result(LibZenohC.z_undeclare_publisher(_move(s.pub)))
 end
 
-function put(p::Publisher, payload)
-    bytes = ZBytes(payload)
-    rtc = LibZenohC.z_publisher_put(_loan(p.pub), _move(bytes), C_NULL)
-    _handle_result(rtc)
-end
-
-function put(s::Session, k::Keyexpr, payload)
-    bytes = ZBytes(payload)
-    rtc = LibZenohC.z_put(_loan(s), _loan(k), _move(bytes), C_NULL)
-    _handle_result(rtc)
-end
 
 struct ZTimestamp
-    ts::Ptr{LibZenohC.z_timestamp_t}
+    ts::Base.RefValue{LibZenohC.z_timestamp_t}
 end
-zid(z::ZTimestamp) = LibZenohC.z_timestamp_id(z)
-ntp64_time(z::ZTimestamp) = LibZenohC.z_timestamp_ntp64_time(z)
 
+function ZTimestamp(s::Session)
+    ts = Ref{LibZenohC.z_timestamp_t}()
+    ret = LibZenohC.z_timestamp_new(ts, _loan(s))
+    _handle_result(ret)
+    return ZTimestamp(ts)
+end
+
+function ZTimestamp(ptr::Ptr{LibZenohC.z_timestamp_t})
+    ts = Ref{LibZenohC.z_timestamp_t}()
+    # Copy the timestamp data by value
+    unsafe_copyto!(Base.unsafe_convert(Ptr{LibZenohC.z_timestamp_t}, ts), ptr, 1)
+    return ZTimestamp(ts)
+end
+
+zid(z::ZTimestamp) = LibZenohC.z_timestamp_id(z.ts)
+ntp64_time(z::ZTimestamp) = LibZenohC.z_timestamp_ntp64_time(z.ts)
+
+function _init_put_opts(::Type{LibZenohC.z_publisher_put_options_t})
+    opts = Ref{LibZenohC.z_publisher_put_options_t}()
+    LibZenohC.z_publisher_put_options_default(opts)
+    return opts
+end
+
+function _init_put_opts(::Type{LibZenohC.z_put_options_t})
+    opts = Ref{LibZenohC.z_put_options_t}()
+    LibZenohC.z_put_options_default(opts)
+    return opts
+end
+
+const _Put_Types = Union{LibZenohC.z_publisher_put_options_t, LibZenohC.z_put_options_t}
+function _make_put_opts(::Type{T}; timestamp::Union{Nothing, ZTimestamp}=nothing) where T<:_Put_Types
+    opts = _init_put_opts(T)
+    
+    if !isnothing(timestamp)
+        opts[].timestamp = Base.unsafe_convert(Ptr{LibZenohC.z_timestamp_t}, timestamp.ts)
+    end
+    
+    return opts
+end
+
+function put(p::Publisher, payload; kwargs...)
+    bytes = ZBytes(payload)
+    opts = _make_put_opts(LibZenohC.z_publisher_put_options_t; kwargs...)
+    
+    rtc = LibZenohC.z_publisher_put(_loan(p.pub), _move(bytes), opts)
+    _handle_result(rtc)
+end
+
+function put(s::Session, k::Keyexpr, payload; kwargs...)
+    bytes = ZBytes(payload)
+    opts = _make_put_opts(LibZenohC.z_put_options_t; kwargs...)
+    
+    rtc = LibZenohC.z_put(_loan(s), _loan(k), _move(bytes), opts)
+    _handle_result(rtc)
+end
 
 function timestamp(s::Sample)
     ts = LibZenohC.z_sample_timestamp(s.s)
