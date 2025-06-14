@@ -340,7 +340,7 @@ function _make_put_opts(::Type{T}; timestamp::Union{Nothing, ZTimestamp}=nothing
     opts = _init_put_opts(T)
     
     if !isnothing(timestamp)
-        opts[].timestamp = Base.unsafe_convert(Ptr{LibZenohC.z_timestamp_t}, timestamp.ts)
+        Base.unsafe_convert(Ptr{LibZenohC.z_publisher_put_options_t}, opts).timestamp = Base.unsafe_convert(Ptr{LibZenohC.z_timestamp_t}, timestamp.ts)
     end
     
     return opts
