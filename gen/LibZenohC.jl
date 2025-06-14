@@ -3051,10 +3051,31 @@ struct z_publisher_options_t
     priority::z_priority_t
     is_express::Bool
 end
+function Base.getproperty(x::Ptr{z_publisher_options_t}, f::Symbol)
+    f === :encoding && return Ptr{Ptr{z_moved_encoding_t}}(x + 0)
+    f === :congestion_control && return Ptr{z_congestion_control_t}(x + 8)
+    f === :priority && return Ptr{z_priority_t}(x + 12)
+    f === :is_express && return Ptr{Bool}(x + 16)
+    return getfield(x, f)
+end
+
+function Base.setproperty!(x::Ptr{z_publisher_options_t}, f::Symbol, v)
+    unsafe_store!(getproperty(x, f), v)
+end
+
 
 struct z_query_consolidation_t
     mode::z_consolidation_mode_t
 end
+function Base.getproperty(x::Ptr{z_query_consolidation_t}, f::Symbol)
+    f === :mode && return Ptr{z_consolidation_mode_t}(x + 0)
+    return getfield(x, f)
+end
+
+function Base.setproperty!(x::Ptr{z_query_consolidation_t}, f::Symbol, v)
+    unsafe_store!(getproperty(x, f), v)
+end
+
 
 struct z_delete_options_t
     congestion_control::z_congestion_control_t
@@ -3062,6 +3083,18 @@ struct z_delete_options_t
     is_express::Bool
     timestamp::Ptr{z_timestamp_t}
 end
+function Base.getproperty(x::Ptr{z_delete_options_t}, f::Symbol)
+    f === :congestion_control && return Ptr{z_congestion_control_t}(x + 0)
+    f === :priority && return Ptr{z_priority_t}(x + 4)
+    f === :is_express && return Ptr{Bool}(x + 8)
+    f === :timestamp && return Ptr{Ptr{z_timestamp_t}}(x + 16)
+    return getfield(x, f)
+end
+
+function Base.setproperty!(x::Ptr{z_delete_options_t}, f::Symbol, v)
+    unsafe_store!(getproperty(x, f), v)
+end
+
 
 struct z_get_options_t
     target::z_query_target_t
@@ -3074,10 +3107,36 @@ struct z_get_options_t
     attachment::Ptr{z_moved_bytes_t}
     timeout_ms::UInt64
 end
+function Base.getproperty(x::Ptr{z_get_options_t}, f::Symbol)
+    f === :target && return Ptr{z_query_target_t}(x + 0)
+    f === :consolidation && return Ptr{z_query_consolidation_t}(x + 4)
+    f === :payload && return Ptr{Ptr{z_moved_bytes_t}}(x + 8)
+    f === :encoding && return Ptr{Ptr{z_moved_encoding_t}}(x + 16)
+    f === :congestion_control && return Ptr{z_congestion_control_t}(x + 24)
+    f === :is_express && return Ptr{Bool}(x + 28)
+    f === :priority && return Ptr{z_priority_t}(x + 32)
+    f === :attachment && return Ptr{Ptr{z_moved_bytes_t}}(x + 40)
+    f === :timeout_ms && return Ptr{UInt64}(x + 48)
+    return getfield(x, f)
+end
+
+function Base.setproperty!(x::Ptr{z_get_options_t}, f::Symbol, v)
+    unsafe_store!(getproperty(x, f), v)
+end
+
 
 struct z_liveliness_subscriber_options_t
     history::Bool
 end
+function Base.getproperty(x::Ptr{z_liveliness_subscriber_options_t}, f::Symbol)
+    f === :history && return Ptr{Bool}(x + 0)
+    return getfield(x, f)
+end
+
+function Base.setproperty!(x::Ptr{z_liveliness_subscriber_options_t}, f::Symbol, v)
+    unsafe_store!(getproperty(x, f), v)
+end
+
 
 struct z_liveliness_token_options_t
     _dummy::UInt8
@@ -3086,6 +3145,15 @@ end
 struct z_liveliness_get_options_t
     timeout_ms::UInt64
 end
+function Base.getproperty(x::Ptr{z_liveliness_get_options_t}, f::Symbol)
+    f === :timeout_ms && return Ptr{UInt64}(x + 0)
+    return getfield(x, f)
+end
+
+function Base.setproperty!(x::Ptr{z_liveliness_get_options_t}, f::Symbol, v)
+    unsafe_store!(getproperty(x, f), v)
+end
+
 
 struct z_open_options_t
     _dummy::UInt8
@@ -3094,12 +3162,32 @@ end
 struct z_publisher_delete_options_t
     timestamp::Ptr{z_timestamp_t}
 end
+function Base.getproperty(x::Ptr{z_publisher_delete_options_t}, f::Symbol)
+    f === :timestamp && return Ptr{Ptr{z_timestamp_t}}(x + 0)
+    return getfield(x, f)
+end
+
+function Base.setproperty!(x::Ptr{z_publisher_delete_options_t}, f::Symbol, v)
+    unsafe_store!(getproperty(x, f), v)
+end
+
 
 struct z_publisher_put_options_t
     encoding::Ptr{z_moved_encoding_t}
     timestamp::Ptr{z_timestamp_t}
     attachment::Ptr{z_moved_bytes_t}
 end
+function Base.getproperty(x::Ptr{z_publisher_put_options_t}, f::Symbol)
+    f === :encoding && return Ptr{Ptr{z_moved_encoding_t}}(x + 0)
+    f === :timestamp && return Ptr{Ptr{z_timestamp_t}}(x + 8)
+    f === :attachment && return Ptr{Ptr{z_moved_bytes_t}}(x + 16)
+    return getfield(x, f)
+end
+
+function Base.setproperty!(x::Ptr{z_publisher_put_options_t}, f::Symbol, v)
+    unsafe_store!(getproperty(x, f), v)
+end
+
 
 struct z_put_options_t
     encoding::Ptr{z_moved_encoding_t}
@@ -3109,6 +3197,20 @@ struct z_put_options_t
     timestamp::Ptr{z_timestamp_t}
     attachment::Ptr{z_moved_bytes_t}
 end
+function Base.getproperty(x::Ptr{z_put_options_t}, f::Symbol)
+    f === :encoding && return Ptr{Ptr{z_moved_encoding_t}}(x + 0)
+    f === :congestion_control && return Ptr{z_congestion_control_t}(x + 8)
+    f === :priority && return Ptr{z_priority_t}(x + 12)
+    f === :is_express && return Ptr{Bool}(x + 16)
+    f === :timestamp && return Ptr{Ptr{z_timestamp_t}}(x + 24)
+    f === :attachment && return Ptr{Ptr{z_moved_bytes_t}}(x + 32)
+    return getfield(x, f)
+end
+
+function Base.setproperty!(x::Ptr{z_put_options_t}, f::Symbol, v)
+    unsafe_store!(getproperty(x, f), v)
+end
+
 
 struct z_query_reply_options_t
     encoding::Ptr{z_moved_encoding_t}
@@ -3118,6 +3220,20 @@ struct z_query_reply_options_t
     timestamp::Ptr{z_timestamp_t}
     attachment::Ptr{z_moved_bytes_t}
 end
+function Base.getproperty(x::Ptr{z_query_reply_options_t}, f::Symbol)
+    f === :encoding && return Ptr{Ptr{z_moved_encoding_t}}(x + 0)
+    f === :congestion_control && return Ptr{z_congestion_control_t}(x + 8)
+    f === :priority && return Ptr{z_priority_t}(x + 12)
+    f === :is_express && return Ptr{Bool}(x + 16)
+    f === :timestamp && return Ptr{Ptr{z_timestamp_t}}(x + 24)
+    f === :attachment && return Ptr{Ptr{z_moved_bytes_t}}(x + 32)
+    return getfield(x, f)
+end
+
+function Base.setproperty!(x::Ptr{z_query_reply_options_t}, f::Symbol, v)
+    unsafe_store!(getproperty(x, f), v)
+end
+
 
 struct z_query_reply_del_options_t
     congestion_control::z_congestion_control_t
@@ -3126,15 +3242,47 @@ struct z_query_reply_del_options_t
     timestamp::Ptr{z_timestamp_t}
     attachment::Ptr{z_moved_bytes_t}
 end
+function Base.getproperty(x::Ptr{z_query_reply_del_options_t}, f::Symbol)
+    f === :congestion_control && return Ptr{z_congestion_control_t}(x + 0)
+    f === :priority && return Ptr{z_priority_t}(x + 4)
+    f === :is_express && return Ptr{Bool}(x + 8)
+    f === :timestamp && return Ptr{Ptr{z_timestamp_t}}(x + 16)
+    f === :attachment && return Ptr{Ptr{z_moved_bytes_t}}(x + 24)
+    return getfield(x, f)
+end
+
+function Base.setproperty!(x::Ptr{z_query_reply_del_options_t}, f::Symbol, v)
+    unsafe_store!(getproperty(x, f), v)
+end
+
 
 struct z_query_reply_err_options_t
     encoding::Ptr{z_moved_encoding_t}
 end
+function Base.getproperty(x::Ptr{z_query_reply_err_options_t}, f::Symbol)
+    f === :encoding && return Ptr{Ptr{z_moved_encoding_t}}(x + 0)
+    return getfield(x, f)
+end
+
+function Base.setproperty!(x::Ptr{z_query_reply_err_options_t}, f::Symbol, v)
+    unsafe_store!(getproperty(x, f), v)
+end
+
 
 struct z_scout_options_t
     timeout_ms::UInt64
     what::z_what_t
 end
+function Base.getproperty(x::Ptr{z_scout_options_t}, f::Symbol)
+    f === :timeout_ms && return Ptr{UInt64}(x + 0)
+    f === :what && return Ptr{z_what_t}(x + 8)
+    return getfield(x, f)
+end
+
+function Base.setproperty!(x::Ptr{z_scout_options_t}, f::Symbol, v)
+    unsafe_store!(getproperty(x, f), v)
+end
+
 
 struct z_task_attr_t
     _0::Csize_t
