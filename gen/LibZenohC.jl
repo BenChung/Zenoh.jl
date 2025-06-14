@@ -210,11 +210,11 @@ function z_condvar_loan(this_)
 end
 
 struct z_owned_config_t
-    data::NTuple{1912, UInt8}
+    data::NTuple{1960, UInt8}
 end
 
 function Base.getproperty(x::Ptr{z_owned_config_t}, f::Symbol)
-    f === :_0 && return Ptr{NTuple{1912, UInt8}}(x + 0)
+    f === :_0 && return Ptr{NTuple{1960, UInt8}}(x + 0)
     return getfield(x, f)
 end
 
@@ -230,11 +230,11 @@ function Base.setproperty!(x::Ptr{z_owned_config_t}, f::Symbol, v)
 end
 
 struct z_loaned_config_t
-    data::NTuple{1912, UInt8}
+    data::NTuple{1960, UInt8}
 end
 
 function Base.getproperty(x::Ptr{z_loaned_config_t}, f::Symbol)
-    f === :_0 && return Ptr{NTuple{1912, UInt8}}(x + 0)
+    f === :_0 && return Ptr{NTuple{1960, UInt8}}(x + 0)
     return getfield(x, f)
 end
 
@@ -650,11 +650,11 @@ function z_query_loan(this_)
 end
 
 struct z_owned_queryable_t
-    data::NTuple{16, UInt8}
+    data::NTuple{48, UInt8}
 end
 
 function Base.getproperty(x::Ptr{z_owned_queryable_t}, f::Symbol)
-    f === :_0 && return Ptr{NTuple{16, UInt8}}(x + 0)
+    f === :_0 && return Ptr{NTuple{48, UInt8}}(x + 0)
     return getfield(x, f)
 end
 
@@ -670,11 +670,11 @@ function Base.setproperty!(x::Ptr{z_owned_queryable_t}, f::Symbol, v)
 end
 
 struct z_loaned_queryable_t
-    data::NTuple{16, UInt8}
+    data::NTuple{48, UInt8}
 end
 
 function Base.getproperty(x::Ptr{z_loaned_queryable_t}, f::Symbol)
-    f === :_0 && return Ptr{NTuple{16, UInt8}}(x + 0)
+    f === :_0 && return Ptr{NTuple{48, UInt8}}(x + 0)
     return getfield(x, f)
 end
 
@@ -1536,7 +1536,7 @@ function z_condvar_drop(this_)
 end
 
 struct z_moved_config_t
-    data::NTuple{1912, UInt8}
+    data::NTuple{1960, UInt8}
 end
 
 function Base.getproperty(x::Ptr{z_moved_config_t}, f::Symbol)
@@ -1800,7 +1800,7 @@ function z_query_drop(this_)
 end
 
 struct z_moved_queryable_t
-    data::NTuple{16, UInt8}
+    data::NTuple{48, UInt8}
 end
 
 function Base.getproperty(x::Ptr{z_moved_queryable_t}, f::Symbol)
@@ -3850,6 +3850,10 @@ function z_query_target_default()
     ccall((:z_query_target_default, libzenohc), z_query_target_t, ())
 end
 
+function z_queryable_keyexpr(queryable)
+    ccall((:z_queryable_keyexpr, libzenohc), Ptr{z_loaned_keyexpr_t}, (Ptr{z_loaned_queryable_t},), queryable)
+end
+
 function z_queryable_options_default(this_)
     ccall((:z_queryable_options_default, libzenohc), Cvoid, (Ptr{z_queryable_options_t},), this_)
 end
@@ -4543,13 +4547,13 @@ function z_free(ptr)
     ccall((:z_free, libzenohc), Cvoid, (Ptr{Cvoid},), ptr)
 end
 
-const ZENOH_C = "1.3.3"
+const ZENOH_C = "1.4.0"
 
 const ZENOH_C_MAJOR = 1
 
-const ZENOH_C_MINOR = 3
+const ZENOH_C_MINOR = 4
 
-const ZENOH_C_PATCH = 3
+const ZENOH_C_PATCH = 0
 
 const DEFAULT_SCOUTING_TIMEOUT = 1000
 
