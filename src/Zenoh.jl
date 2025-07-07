@@ -61,7 +61,7 @@ Base.length(z::ZBytes{Ptr{LibZenohC.z_loaned_bytes_t}}) = LibZenohC.z_bytes_len(
 
 struct ZBytesReader{Z <: ZBytes} <: IO
     z::Z
-    r::Ref{LibZenohC.z_bytes_reader_t}
+    r::Base.RefValue{LibZenohC.z_bytes_reader_t}
 end
 function Base.open(z::ZBytes{Base.RefValue{LibZenohC.z_owned_bytes_t}}, ::Val{:read})
     return ZBytesReader(z, Ref(LibZenohC.z_bytes_get_reader(_loan(z.b))))
@@ -124,7 +124,7 @@ end
 
 
 struct ZBytesSliceIterator
-    it::Ref{LibZenohC.z_bytes_slice_iterator_t}
+    it::Base.RefValue{LibZenohC.z_bytes_slice_iterator_t}
 end
 function Base.iterate(b::ZBytes)
     biterator = ZBytesSliceIterator(Ref(LibZenohC.z_bytes_get_slice_iterator(b)))
@@ -260,7 +260,7 @@ end
 Subscribe to keyexpr `k` in session `s`, calling handler `f`.
 """
 function Base.open(f::Function, s::Session, k::Keyexpr; should_close_on_error=true)
-    sub::Union{Subscriber, Nothing} = nothing
+    sub_ref::Base.RefValue{Union{Subscriber, Nothing}} = Base.RefValue{Union{Subscriber, Nothing}}(nothing)
     sub_func, sub_ctx = cclosure(2, Cvoid, (Ptr{LibZenohC.z_loaned_sample_t}, )) do sample 
         try
             f(Sample(sample))
@@ -273,6 +273,7 @@ function Base.open(f::Function, s::Session, k::Keyexpr; should_close_on_error=tr
         nothing
     end
     sub = Subscriber{typeof(sub_ctx)}(Ref{LibZenohC.z_owned_subscriber_t}(), k, Ref{typeof(sub_ctx)}())
+    sub_ref[] = sub
     sub.sub_ctx[] = sub_ctx
     sub_closure = Ref{LibZenohC.z_owned_closure_sample_t}()
     LibZenohC.z_closure_sample(sub_closure, sub_func, C_NULL, sub.sub_ctx)
