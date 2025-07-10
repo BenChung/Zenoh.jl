@@ -256,6 +256,8 @@ struct Sample
     s::Ptr{LibZenohC.z_loaned_sample_t}
 end
 
+const in_trim = hasfield(typeof(Base.JLOptions()), :trim) ? (Base.JLOptions().trim != 0) : false
+
 """
 Subscribe to keyexpr `k` in session `s`, calling handler `f`.
 """
@@ -265,9 +267,13 @@ function Base.open(f::Function, s::Session, k::Keyexpr; should_close_on_error=tr
         try
             f(Sample(sample))
         catch e
-            Base.showerror(stderr, e, catch_backtrace())
-            if should_close_on_error && !isnothing(sub)
-                close(sub)
+            if in_trim
+                ccall(:jl_, Cvoid, (Any,), e)
+            else
+            #Base.showerror(stderr, e, catch_backtrace())
+                if should_close_on_error && !isnothing(sub_ref[])
+                    close(sub_ref[])
+                end
             end
         end
         nothing
