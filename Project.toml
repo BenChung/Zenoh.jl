@@ -1,7 +1,7 @@
 name = "Zenoh"
 uuid = "b742139f-8771-480b-a9b2-33222b45d29b"
 authors = ["Benjamin Chung <ckfinite@gmail.com>"]
-version = "0.1.4"
+version = "0.1.5"
 
 [deps]
 CClosure = "6238cdf7-1651-426a-bbec-388a63a3d275"
