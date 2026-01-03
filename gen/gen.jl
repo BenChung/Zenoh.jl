@@ -1,8 +1,8 @@
 using Clang.Generators
-using ZenohC_jll
+using libzenohc_jll
 cd(@__DIR__)
 
-include_dir = normpath(ZenohC_jll.artifact_dir, "include")
+include_dir = normpath(libzenohc_jll.artifact_dir, "include")
 options = load_options(joinpath(@__DIR__, "generator.toml"))
 
 args = get_default_args() 

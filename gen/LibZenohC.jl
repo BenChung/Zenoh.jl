@@ -1,7 +1,7 @@
 module LibZenohC
 
-using ZenohC_jll
-export ZenohC_jll
+using libzenohc_jll
+export libzenohc_jll
 
 using CEnum
 
@@ -102,11 +102,29 @@ struct z_owned_closure_hello_t
 end
 
 struct z_loaned_closure_hello_t
-    _0::NTuple{3, Csize_t}
+    _0::Csize_t
+    _1::Csize_t
+    _2::Csize_t
 end
 
 function z_closure_hello_loan(closure)
     ccall((:z_closure_hello_loan, libzenohc), Ptr{z_loaned_closure_hello_t}, (Ptr{z_owned_closure_hello_t},), closure)
+end
+
+struct z_owned_closure_matching_status_t
+    _context::Ptr{Cvoid}
+    _call::Ptr{Cvoid}
+    _drop::Ptr{Cvoid}
+end
+
+struct z_loaned_closure_matching_status_t
+    _0::Csize_t
+    _1::Csize_t
+    _2::Csize_t
+end
+
+function z_closure_matching_status_loan(closure)
+    ccall((:z_closure_matching_status_loan, libzenohc), Ptr{z_loaned_closure_matching_status_t}, (Ptr{z_owned_closure_matching_status_t},), closure)
 end
 
 struct z_owned_closure_query_t
@@ -116,7 +134,9 @@ struct z_owned_closure_query_t
 end
 
 struct z_loaned_closure_query_t
-    _0::NTuple{3, Csize_t}
+    _0::Csize_t
+    _1::Csize_t
+    _2::Csize_t
 end
 
 function z_closure_query_loan(closure)
@@ -130,7 +150,9 @@ struct z_owned_closure_reply_t
 end
 
 struct z_loaned_closure_reply_t
-    _0::NTuple{3, Csize_t}
+    _0::Csize_t
+    _1::Csize_t
+    _2::Csize_t
 end
 
 function z_closure_reply_loan(closure)
@@ -144,7 +166,9 @@ struct z_owned_closure_sample_t
 end
 
 struct z_loaned_closure_sample_t
-    _0::NTuple{3, Csize_t}
+    _0::Csize_t
+    _1::Csize_t
+    _2::Csize_t
 end
 
 function z_closure_sample_loan(closure)
@@ -158,7 +182,9 @@ struct z_owned_closure_zid_t
 end
 
 struct z_loaned_closure_zid_t
-    _0::NTuple{3, Csize_t}
+    _0::Csize_t
+    _1::Csize_t
+    _2::Csize_t
 end
 
 function z_closure_zid_loan(closure)
@@ -210,11 +236,11 @@ function z_condvar_loan(this_)
 end
 
 struct z_owned_config_t
-    data::NTuple{1960, UInt8}
+    data::NTuple{1984, UInt8}
 end
 
 function Base.getproperty(x::Ptr{z_owned_config_t}, f::Symbol)
-    f === :_0 && return Ptr{NTuple{1960, UInt8}}(x + 0)
+    f === :_0 && return Ptr{NTuple{1984, UInt8}}(x + 0)
     return getfield(x, f)
 end
 
@@ -230,11 +256,11 @@ function Base.setproperty!(x::Ptr{z_owned_config_t}, f::Symbol, v)
 end
 
 struct z_loaned_config_t
-    data::NTuple{1960, UInt8}
+    data::NTuple{1984, UInt8}
 end
 
 function Base.getproperty(x::Ptr{z_loaned_config_t}, f::Symbol)
-    f === :_0 && return Ptr{NTuple{1960, UInt8}}(x + 0)
+    f === :_0 && return Ptr{NTuple{1984, UInt8}}(x + 0)
     return getfield(x, f)
 end
 
@@ -562,11 +588,11 @@ function z_liveliness_token_loan(this_)
 end
 
 struct z_owned_publisher_t
-    data::NTuple{104, UInt8}
+    data::NTuple{112, UInt8}
 end
 
 function Base.getproperty(x::Ptr{z_owned_publisher_t}, f::Symbol)
-    f === :_0 && return Ptr{NTuple{104, UInt8}}(x + 0)
+    f === :_0 && return Ptr{NTuple{112, UInt8}}(x + 0)
     return getfield(x, f)
 end
 
@@ -582,11 +608,11 @@ function Base.setproperty!(x::Ptr{z_owned_publisher_t}, f::Symbol, v)
 end
 
 struct z_loaned_publisher_t
-    data::NTuple{104, UInt8}
+    data::NTuple{112, UInt8}
 end
 
 function Base.getproperty(x::Ptr{z_loaned_publisher_t}, f::Symbol)
-    f === :_0 && return Ptr{NTuple{104, UInt8}}(x + 0)
+    f === :_0 && return Ptr{NTuple{112, UInt8}}(x + 0)
     return getfield(x, f)
 end
 
@@ -603,6 +629,50 @@ end
 
 function z_publisher_loan(this_)
     ccall((:z_publisher_loan, libzenohc), Ptr{z_loaned_publisher_t}, (Ptr{z_owned_publisher_t},), this_)
+end
+
+struct z_owned_querier_t
+    data::NTuple{80, UInt8}
+end
+
+function Base.getproperty(x::Ptr{z_owned_querier_t}, f::Symbol)
+    f === :_0 && return Ptr{NTuple{80, UInt8}}(x + 0)
+    return getfield(x, f)
+end
+
+function Base.getproperty(x::z_owned_querier_t, f::Symbol)
+    r = Ref{z_owned_querier_t}(x)
+    ptr = Base.unsafe_convert(Ptr{z_owned_querier_t}, r)
+    fptr = getproperty(ptr, f)
+    GC.@preserve r unsafe_load(fptr)
+end
+
+function Base.setproperty!(x::Ptr{z_owned_querier_t}, f::Symbol, v)
+    unsafe_store!(getproperty(x, f), v)
+end
+
+struct z_loaned_querier_t
+    data::NTuple{80, UInt8}
+end
+
+function Base.getproperty(x::Ptr{z_loaned_querier_t}, f::Symbol)
+    f === :_0 && return Ptr{NTuple{80, UInt8}}(x + 0)
+    return getfield(x, f)
+end
+
+function Base.getproperty(x::z_loaned_querier_t, f::Symbol)
+    r = Ref{z_loaned_querier_t}(x)
+    ptr = Base.unsafe_convert(Ptr{z_loaned_querier_t}, r)
+    fptr = getproperty(ptr, f)
+    GC.@preserve r unsafe_load(fptr)
+end
+
+function Base.setproperty!(x::Ptr{z_loaned_querier_t}, f::Symbol, v)
+    unsafe_store!(getproperty(x, f), v)
+end
+
+function z_querier_loan(this_)
+    ccall((:z_querier_loan, libzenohc), Ptr{z_loaned_querier_t}, (Ptr{z_owned_querier_t},), this_)
 end
 
 struct z_owned_query_t
@@ -1256,7 +1326,9 @@ struct zc_owned_closure_log_t
 end
 
 struct zc_loaned_closure_log_t
-    _0::NTuple{3, Csize_t}
+    _0::Csize_t
+    _1::Csize_t
+    _2::Csize_t
 end
 
 function zc_closure_log_loan(closure)
@@ -1395,6 +1467,10 @@ function z_publisher_loan_mut(this_)
     ccall((:z_publisher_loan_mut, libzenohc), Ptr{z_loaned_publisher_t}, (Ptr{z_owned_publisher_t},), this_)
 end
 
+function z_querier_loan_mut(this_)
+    ccall((:z_querier_loan_mut, libzenohc), Ptr{z_loaned_querier_t}, (Ptr{z_owned_querier_t},), this_)
+end
+
 function z_query_loan_mut(this_)
     ccall((:z_query_loan_mut, libzenohc), Ptr{z_loaned_query_t}, (Ptr{z_owned_query_t},), this_)
 end
@@ -1479,6 +1555,14 @@ function z_closure_hello_drop(this_)
     ccall((:z_closure_hello_drop, libzenohc), Cvoid, (Ptr{z_moved_closure_hello_t},), this_)
 end
 
+struct z_moved_closure_matching_status_t
+    _this::z_owned_closure_matching_status_t
+end
+
+function z_closure_matching_status_drop(closure_)
+    ccall((:z_closure_matching_status_drop, libzenohc), Cvoid, (Ptr{z_moved_closure_matching_status_t},), closure_)
+end
+
 struct z_moved_closure_query_t
     _this::z_owned_closure_query_t
 end
@@ -1536,7 +1620,7 @@ function z_condvar_drop(this_)
 end
 
 struct z_moved_config_t
-    data::NTuple{1960, UInt8}
+    data::NTuple{1984, UInt8}
 end
 
 function Base.getproperty(x::Ptr{z_moved_config_t}, f::Symbol)
@@ -1727,6 +1811,50 @@ function z_liveliness_token_drop(this_)
     ccall((:z_liveliness_token_drop, libzenohc), Cvoid, (Ptr{z_moved_liveliness_token_t},), this_)
 end
 
+struct z_owned_matching_listener_t
+    data::NTuple{24, UInt8}
+end
+
+function Base.getproperty(x::Ptr{z_owned_matching_listener_t}, f::Symbol)
+    f === :_0 && return Ptr{NTuple{24, UInt8}}(x + 0)
+    return getfield(x, f)
+end
+
+function Base.getproperty(x::z_owned_matching_listener_t, f::Symbol)
+    r = Ref{z_owned_matching_listener_t}(x)
+    ptr = Base.unsafe_convert(Ptr{z_owned_matching_listener_t}, r)
+    fptr = getproperty(ptr, f)
+    GC.@preserve r unsafe_load(fptr)
+end
+
+function Base.setproperty!(x::Ptr{z_owned_matching_listener_t}, f::Symbol, v)
+    unsafe_store!(getproperty(x, f), v)
+end
+
+struct z_moved_matching_listener_t
+    data::NTuple{24, UInt8}
+end
+
+function Base.getproperty(x::Ptr{z_moved_matching_listener_t}, f::Symbol)
+    f === :_this && return Ptr{z_owned_matching_listener_t}(x + 0)
+    return getfield(x, f)
+end
+
+function Base.getproperty(x::z_moved_matching_listener_t, f::Symbol)
+    r = Ref{z_moved_matching_listener_t}(x)
+    ptr = Base.unsafe_convert(Ptr{z_moved_matching_listener_t}, r)
+    fptr = getproperty(ptr, f)
+    GC.@preserve r unsafe_load(fptr)
+end
+
+function Base.setproperty!(x::Ptr{z_moved_matching_listener_t}, f::Symbol, v)
+    unsafe_store!(getproperty(x, f), v)
+end
+
+function z_matching_listener_drop(this_)
+    ccall((:z_matching_listener_drop, libzenohc), Cvoid, (Ptr{z_moved_matching_listener_t},), this_)
+end
+
 struct z_moved_mutex_t
     data::NTuple{24, UInt8}
 end
@@ -1752,7 +1880,7 @@ function z_mutex_drop(this_)
 end
 
 struct z_moved_publisher_t
-    data::NTuple{104, UInt8}
+    data::NTuple{112, UInt8}
 end
 
 function Base.getproperty(x::Ptr{z_moved_publisher_t}, f::Symbol)
@@ -1773,6 +1901,30 @@ end
 
 function z_publisher_drop(this_)
     ccall((:z_publisher_drop, libzenohc), Cvoid, (Ptr{z_moved_publisher_t},), this_)
+end
+
+struct z_moved_querier_t
+    data::NTuple{80, UInt8}
+end
+
+function Base.getproperty(x::Ptr{z_moved_querier_t}, f::Symbol)
+    f === :_this && return Ptr{z_owned_querier_t}(x + 0)
+    return getfield(x, f)
+end
+
+function Base.getproperty(x::z_moved_querier_t, f::Symbol)
+    r = Ref{z_moved_querier_t}(x)
+    ptr = Base.unsafe_convert(Ptr{z_moved_querier_t}, r)
+    fptr = getproperty(ptr, f)
+    GC.@preserve r unsafe_load(fptr)
+end
+
+function Base.setproperty!(x::Ptr{z_moved_querier_t}, f::Symbol, v)
+    unsafe_store!(getproperty(x, f), v)
+end
+
+function z_querier_drop(this_)
+    ccall((:z_querier_drop, libzenohc), Cvoid, (Ptr{z_moved_querier_t},), this_)
 end
 
 struct z_moved_query_t
@@ -2175,6 +2327,10 @@ function z_closure_hello_move(x)
     ccall((:z_closure_hello_move, libzenohc), Ptr{z_moved_closure_hello_t}, (Ptr{z_owned_closure_hello_t},), x)
 end
 
+function z_closure_matching_status_move(x)
+    ccall((:z_closure_matching_status_move, libzenohc), Ptr{z_moved_closure_matching_status_t}, (Ptr{z_owned_closure_matching_status_t},), x)
+end
+
 function z_closure_query_move(x)
     ccall((:z_closure_query_move, libzenohc), Ptr{z_moved_closure_query_t}, (Ptr{z_owned_closure_query_t},), x)
 end
@@ -2227,12 +2383,20 @@ function z_liveliness_token_move(x)
     ccall((:z_liveliness_token_move, libzenohc), Ptr{z_moved_liveliness_token_t}, (Ptr{z_owned_liveliness_token_t},), x)
 end
 
+function z_matching_listener_move(x)
+    ccall((:z_matching_listener_move, libzenohc), Ptr{z_moved_matching_listener_t}, (Ptr{z_owned_matching_listener_t},), x)
+end
+
 function z_mutex_move(x)
     ccall((:z_mutex_move, libzenohc), Ptr{z_moved_mutex_t}, (Ptr{z_owned_mutex_t},), x)
 end
 
 function z_publisher_move(x)
     ccall((:z_publisher_move, libzenohc), Ptr{z_moved_publisher_t}, (Ptr{z_owned_publisher_t},), x)
+end
+
+function z_querier_move(x)
+    ccall((:z_querier_move, libzenohc), Ptr{z_moved_querier_t}, (Ptr{z_owned_querier_t},), x)
 end
 
 function z_query_move(x)
@@ -2311,6 +2475,10 @@ function z_internal_closure_hello_null(this_)
     ccall((:z_internal_closure_hello_null, libzenohc), Cvoid, (Ptr{z_owned_closure_hello_t},), this_)
 end
 
+function z_internal_closure_matching_status_null(this_)
+    ccall((:z_internal_closure_matching_status_null, libzenohc), Cvoid, (Ptr{z_owned_closure_matching_status_t},), this_)
+end
+
 function z_internal_closure_query_null(this_)
     ccall((:z_internal_closure_query_null, libzenohc), Cvoid, (Ptr{z_owned_closure_query_t},), this_)
 end
@@ -2363,12 +2531,20 @@ function z_internal_liveliness_token_null(this_)
     ccall((:z_internal_liveliness_token_null, libzenohc), Cvoid, (Ptr{z_owned_liveliness_token_t},), this_)
 end
 
+function z_internal_matching_listener_null(this_)
+    ccall((:z_internal_matching_listener_null, libzenohc), Cvoid, (Ptr{z_owned_matching_listener_t},), this_)
+end
+
 function z_internal_mutex_null(this_)
     ccall((:z_internal_mutex_null, libzenohc), Cvoid, (Ptr{z_owned_mutex_t},), this_)
 end
 
 function z_internal_publisher_null(this_)
     ccall((:z_internal_publisher_null, libzenohc), Cvoid, (Ptr{z_owned_publisher_t},), this_)
+end
+
+function z_internal_querier_null(this_)
+    ccall((:z_internal_querier_null, libzenohc), Cvoid, (Ptr{z_owned_querier_t},), this_)
 end
 
 function z_internal_query_null(this_)
@@ -2447,6 +2623,10 @@ function z_closure_hello_take(this_, x)
     ccall((:z_closure_hello_take, libzenohc), Cvoid, (Ptr{z_owned_closure_hello_t}, Ptr{z_moved_closure_hello_t}), this_, x)
 end
 
+function z_closure_matching_status_take(closure_, x)
+    ccall((:z_closure_matching_status_take, libzenohc), Cvoid, (Ptr{z_owned_closure_matching_status_t}, Ptr{z_moved_closure_matching_status_t}), closure_, x)
+end
+
 function z_closure_query_take(closure_, x)
     ccall((:z_closure_query_take, libzenohc), Cvoid, (Ptr{z_owned_closure_query_t}, Ptr{z_moved_closure_query_t}), closure_, x)
 end
@@ -2499,12 +2679,20 @@ function z_liveliness_token_take(this_, x)
     ccall((:z_liveliness_token_take, libzenohc), Cvoid, (Ptr{z_owned_liveliness_token_t}, Ptr{z_moved_liveliness_token_t}), this_, x)
 end
 
+function z_matching_listener_take(this_, x)
+    ccall((:z_matching_listener_take, libzenohc), Cvoid, (Ptr{z_owned_matching_listener_t}, Ptr{z_moved_matching_listener_t}), this_, x)
+end
+
 function z_mutex_take(this_, x)
     ccall((:z_mutex_take, libzenohc), Cvoid, (Ptr{z_owned_mutex_t}, Ptr{z_moved_mutex_t}), this_, x)
 end
 
 function z_publisher_take(this_, x)
     ccall((:z_publisher_take, libzenohc), Cvoid, (Ptr{z_owned_publisher_t}, Ptr{z_moved_publisher_t}), this_, x)
+end
+
+function z_querier_take(this_, x)
+    ccall((:z_querier_take, libzenohc), Cvoid, (Ptr{z_owned_querier_t}, Ptr{z_moved_querier_t}), this_, x)
 end
 
 function z_query_take(this_, x)
@@ -2599,6 +2787,10 @@ function z_internal_closure_hello_check(this_)
     ccall((:z_internal_closure_hello_check, libzenohc), Bool, (Ptr{z_owned_closure_hello_t},), this_)
 end
 
+function z_internal_closure_matching_status_check(this_)
+    ccall((:z_internal_closure_matching_status_check, libzenohc), Bool, (Ptr{z_owned_closure_matching_status_t},), this_)
+end
+
 function z_internal_closure_query_check(this_)
     ccall((:z_internal_closure_query_check, libzenohc), Bool, (Ptr{z_owned_closure_query_t},), this_)
 end
@@ -2651,12 +2843,20 @@ function z_internal_liveliness_token_check(this_)
     ccall((:z_internal_liveliness_token_check, libzenohc), Bool, (Ptr{z_owned_liveliness_token_t},), this_)
 end
 
+function z_internal_matching_listener_check(this_)
+    ccall((:z_internal_matching_listener_check, libzenohc), Bool, (Ptr{z_owned_matching_listener_t},), this_)
+end
+
 function z_internal_mutex_check(this_)
     ccall((:z_internal_mutex_check, libzenohc), Bool, (Ptr{z_owned_mutex_t},), this_)
 end
 
 function z_internal_publisher_check(this_)
     ccall((:z_internal_publisher_check, libzenohc), Bool, (Ptr{z_owned_publisher_t},), this_)
+end
+
+function z_internal_querier_check(this_)
+    ccall((:z_internal_querier_check, libzenohc), Bool, (Ptr{z_owned_querier_t},), this_)
 end
 
 function z_internal_query_check(query)
@@ -2727,6 +2927,14 @@ function z_closure_hello_call(closure, hello)
     ccall((:z_closure_hello_call, libzenohc), Cvoid, (Ptr{z_loaned_closure_hello_t}, Ptr{z_loaned_hello_t}), closure, hello)
 end
 
+struct z_matching_status_t
+    matching::Bool
+end
+
+function z_closure_matching_status_call(closure, mathing_status)
+    ccall((:z_closure_matching_status_call, libzenohc), Cvoid, (Ptr{z_loaned_closure_matching_status_t}, Ptr{z_matching_status_t}), closure, mathing_status)
+end
+
 function z_closure_query_call(closure, query)
     ccall((:z_closure_query_call, libzenohc), Cvoid, (Ptr{z_loaned_closure_query_t}, Ptr{z_loaned_query_t}), closure, query)
 end
@@ -2765,6 +2973,10 @@ end
 
 function z_closure_hello(this_, call, drop, context)
     ccall((:z_closure_hello, libzenohc), Cvoid, (Ptr{z_owned_closure_hello_t}, Ptr{Cvoid}, Ptr{Cvoid}, Ptr{Cvoid}), this_, call, drop, context)
+end
+
+function z_closure_matching_status(this_, call, drop, context)
+    ccall((:z_closure_matching_status, libzenohc), Cvoid, (Ptr{z_owned_closure_matching_status_t}, Ptr{Cvoid}, Ptr{Cvoid}, Ptr{Cvoid}), this_, call, drop, context)
 end
 
 function z_closure_query(this_, call, drop, context)
@@ -3039,10 +3251,11 @@ end
 
 struct z_queryable_options_t
     complete::Bool
+    allowed_origin::zc_locality_t
 end
 
 struct z_subscriber_options_t
-    _0::UInt8
+    allowed_origin::zc_locality_t
 end
 
 struct z_publisher_options_t
@@ -3050,12 +3263,14 @@ struct z_publisher_options_t
     congestion_control::z_congestion_control_t
     priority::z_priority_t
     is_express::Bool
+    allowed_destination::zc_locality_t
 end
 function Base.getproperty(x::Ptr{z_publisher_options_t}, f::Symbol)
     f === :encoding && return Ptr{Ptr{z_moved_encoding_t}}(x + 0)
     f === :congestion_control && return Ptr{z_congestion_control_t}(x + 8)
     f === :priority && return Ptr{z_priority_t}(x + 12)
     f === :is_express && return Ptr{Bool}(x + 16)
+    f === :allowed_destination && return Ptr{zc_locality_t}(x + 20)
     return getfield(x, f)
 end
 
@@ -3077,17 +3292,29 @@ function Base.setproperty!(x::Ptr{z_query_consolidation_t}, f::Symbol, v)
 end
 
 
+struct z_querier_options_t
+    target::z_query_target_t
+    consolidation::z_query_consolidation_t
+    congestion_control::z_congestion_control_t
+    is_express::Bool
+    allowed_destination::zc_locality_t
+    priority::z_priority_t
+    timeout_ms::UInt64
+end
+
 struct z_delete_options_t
     congestion_control::z_congestion_control_t
     priority::z_priority_t
     is_express::Bool
     timestamp::Ptr{z_timestamp_t}
+    allowed_destination::zc_locality_t
 end
 function Base.getproperty(x::Ptr{z_delete_options_t}, f::Symbol)
     f === :congestion_control && return Ptr{z_congestion_control_t}(x + 0)
     f === :priority && return Ptr{z_priority_t}(x + 4)
     f === :is_express && return Ptr{Bool}(x + 8)
     f === :timestamp && return Ptr{Ptr{z_timestamp_t}}(x + 16)
+    f === :allowed_destination && return Ptr{zc_locality_t}(x + 24)
     return getfield(x, f)
 end
 
@@ -3103,6 +3330,7 @@ struct z_get_options_t
     encoding::Ptr{z_moved_encoding_t}
     congestion_control::z_congestion_control_t
     is_express::Bool
+    allowed_destination::zc_locality_t
     priority::z_priority_t
     attachment::Ptr{z_moved_bytes_t}
     timeout_ms::UInt64
@@ -3114,7 +3342,8 @@ function Base.getproperty(x::Ptr{z_get_options_t}, f::Symbol)
     f === :encoding && return Ptr{Ptr{z_moved_encoding_t}}(x + 16)
     f === :congestion_control && return Ptr{z_congestion_control_t}(x + 24)
     f === :is_express && return Ptr{Bool}(x + 28)
-    f === :priority && return Ptr{z_priority_t}(x + 32)
+    f === :allowed_destination && return Ptr{zc_locality_t}(x + 32)
+    f === :priority && return Ptr{z_priority_t}(x + 36)
     f === :attachment && return Ptr{Ptr{z_moved_bytes_t}}(x + 40)
     f === :timeout_ms && return Ptr{UInt64}(x + 48)
     return getfield(x, f)
@@ -3195,6 +3424,7 @@ struct z_put_options_t
     priority::z_priority_t
     is_express::Bool
     timestamp::Ptr{z_timestamp_t}
+    allowed_destination::zc_locality_t
     attachment::Ptr{z_moved_bytes_t}
 end
 function Base.getproperty(x::Ptr{z_put_options_t}, f::Symbol)
@@ -3203,7 +3433,8 @@ function Base.getproperty(x::Ptr{z_put_options_t}, f::Symbol)
     f === :priority && return Ptr{z_priority_t}(x + 12)
     f === :is_express && return Ptr{Bool}(x + 16)
     f === :timestamp && return Ptr{Ptr{z_timestamp_t}}(x + 24)
-    f === :attachment && return Ptr{Ptr{z_moved_bytes_t}}(x + 32)
+    f === :allowed_destination && return Ptr{zc_locality_t}(x + 32)
+    f === :attachment && return Ptr{Ptr{z_moved_bytes_t}}(x + 40)
     return getfield(x, f)
 end
 
@@ -3211,6 +3442,12 @@ function Base.setproperty!(x::Ptr{z_put_options_t}, f::Symbol, v)
     unsafe_store!(getproperty(x, f), v)
 end
 
+
+struct z_querier_get_options_t
+    payload::Ptr{z_moved_bytes_t}
+    encoding::Ptr{z_moved_encoding_t}
+    attachment::Ptr{z_moved_bytes_t}
+end
 
 struct z_query_reply_options_t
     encoding::Ptr{z_moved_encoding_t}
@@ -3460,6 +3697,10 @@ end
 
 function z_declare_publisher(session, publisher, key_expr, options)
     ccall((:z_declare_publisher, libzenohc), z_result_t, (Ptr{z_loaned_session_t}, Ptr{z_owned_publisher_t}, Ptr{z_loaned_keyexpr_t}, Ptr{z_publisher_options_t}), session, publisher, key_expr, options)
+end
+
+function z_declare_querier(session, querier, key_expr, options)
+    ccall((:z_declare_querier, libzenohc), z_result_t, (Ptr{z_loaned_session_t}, Ptr{z_owned_querier_t}, Ptr{z_loaned_keyexpr_t}, Ptr{z_querier_options_t}), session, querier, key_expr, options)
 end
 
 function z_declare_queryable(session, queryable, key_expr, callback, options)
@@ -3738,6 +3979,10 @@ function z_get_options_default(this_)
     ccall((:z_get_options_default, libzenohc), Cvoid, (Ptr{z_get_options_t},), this_)
 end
 
+function z_get_with_parameters_substr(session, key_expr, parameters, parameters_len, callback, options)
+    ccall((:z_get_with_parameters_substr, libzenohc), z_result_t, (Ptr{z_loaned_session_t}, Ptr{z_loaned_keyexpr_t}, Ptr{Cchar}, Csize_t, Ptr{z_moved_closure_reply_t}, Ptr{z_get_options_t}), session, key_expr, parameters, parameters_len, callback, options)
+end
+
 function z_hello_locators(this_, locators_out)
     ccall((:z_hello_locators, libzenohc), Cvoid, (Ptr{z_loaned_hello_t}, Ptr{z_owned_string_array_t}), this_, locators_out)
 end
@@ -3890,12 +4135,24 @@ function z_priority_default()
     ccall((:z_priority_default, libzenohc), z_priority_t, ())
 end
 
+function z_publisher_declare_background_matching_listener(publisher, callback)
+    ccall((:z_publisher_declare_background_matching_listener, libzenohc), z_result_t, (Ptr{z_loaned_publisher_t}, Ptr{z_moved_closure_matching_status_t}), publisher, callback)
+end
+
+function z_publisher_declare_matching_listener(publisher, matching_listener, callback)
+    ccall((:z_publisher_declare_matching_listener, libzenohc), z_result_t, (Ptr{z_loaned_publisher_t}, Ptr{z_owned_matching_listener_t}, Ptr{z_moved_closure_matching_status_t}), publisher, matching_listener, callback)
+end
+
 function z_publisher_delete(publisher, options)
     ccall((:z_publisher_delete, libzenohc), z_result_t, (Ptr{z_loaned_publisher_t}, Ptr{z_publisher_delete_options_t}), publisher, options)
 end
 
 function z_publisher_delete_options_default(this_)
     ccall((:z_publisher_delete_options_default, libzenohc), Cvoid, (Ptr{z_publisher_delete_options_t},), this_)
+end
+
+function z_publisher_get_matching_status(this_, matching_status)
+    ccall((:z_publisher_get_matching_status, libzenohc), z_result_t, (Ptr{z_loaned_publisher_t}, Ptr{z_matching_status_t}), this_, matching_status)
 end
 
 function z_publisher_keyexpr(publisher)
@@ -3920,6 +4177,38 @@ end
 
 function z_put_options_default(this_)
     ccall((:z_put_options_default, libzenohc), Cvoid, (Ptr{z_put_options_t},), this_)
+end
+
+function z_querier_declare_background_matching_listener(querier, callback)
+    ccall((:z_querier_declare_background_matching_listener, libzenohc), z_result_t, (Ptr{z_loaned_querier_t}, Ptr{z_moved_closure_matching_status_t}), querier, callback)
+end
+
+function z_querier_declare_matching_listener(querier, matching_listener, callback)
+    ccall((:z_querier_declare_matching_listener, libzenohc), z_result_t, (Ptr{z_loaned_querier_t}, Ptr{z_owned_matching_listener_t}, Ptr{z_moved_closure_matching_status_t}), querier, matching_listener, callback)
+end
+
+function z_querier_get(querier, parameters, callback, options)
+    ccall((:z_querier_get, libzenohc), z_result_t, (Ptr{z_loaned_querier_t}, Ptr{Cchar}, Ptr{z_moved_closure_reply_t}, Ptr{z_querier_get_options_t}), querier, parameters, callback, options)
+end
+
+function z_querier_get_matching_status(this_, matching_status)
+    ccall((:z_querier_get_matching_status, libzenohc), z_result_t, (Ptr{z_loaned_querier_t}, Ptr{z_matching_status_t}), this_, matching_status)
+end
+
+function z_querier_get_options_default(this_)
+    ccall((:z_querier_get_options_default, libzenohc), Cvoid, (Ptr{z_querier_get_options_t},), this_)
+end
+
+function z_querier_get_with_parameters_substr(querier, parameters, parameters_len, callback, options)
+    ccall((:z_querier_get_with_parameters_substr, libzenohc), z_result_t, (Ptr{z_loaned_querier_t}, Ptr{Cchar}, Csize_t, Ptr{z_moved_closure_reply_t}, Ptr{z_querier_get_options_t}), querier, parameters, parameters_len, callback, options)
+end
+
+function z_querier_keyexpr(querier)
+    ccall((:z_querier_keyexpr, libzenohc), Ptr{z_loaned_keyexpr_t}, (Ptr{z_loaned_querier_t},), querier)
+end
+
+function z_querier_options_default(this_)
+    ccall((:z_querier_options_default, libzenohc), Cvoid, (Ptr{z_querier_options_t},), this_)
 end
 
 function z_query_attachment(this_)
@@ -4270,8 +4559,16 @@ function z_undeclare_keyexpr(session, key_expr)
     ccall((:z_undeclare_keyexpr, libzenohc), z_result_t, (Ptr{z_loaned_session_t}, Ptr{z_moved_keyexpr_t}), session, key_expr)
 end
 
+function z_undeclare_matching_listener(this_)
+    ccall((:z_undeclare_matching_listener, libzenohc), z_result_t, (Ptr{z_moved_matching_listener_t},), this_)
+end
+
 function z_undeclare_publisher(this_)
     ccall((:z_undeclare_publisher, libzenohc), z_result_t, (Ptr{z_moved_publisher_t},), this_)
+end
+
+function z_undeclare_querier(this_)
+    ccall((:z_undeclare_querier, libzenohc), z_result_t, (Ptr{z_moved_querier_t},), this_)
 end
 
 function z_undeclare_queryable(this_)
@@ -4358,8 +4655,16 @@ function zc_config_from_file(this_, path)
     ccall((:zc_config_from_file, libzenohc), z_result_t, (Ptr{z_owned_config_t}, Ptr{Cchar}), this_, path)
 end
 
+function zc_config_from_file_substr(this_, path, len)
+    ccall((:zc_config_from_file_substr, libzenohc), z_result_t, (Ptr{z_owned_config_t}, Ptr{Cchar}, Csize_t), this_, path, len)
+end
+
 function zc_config_from_str(this_, s)
     ccall((:zc_config_from_str, libzenohc), z_result_t, (Ptr{z_owned_config_t}, Ptr{Cchar}), this_, s)
+end
+
+function zc_config_from_substr(this_, s, len)
+    ccall((:zc_config_from_substr, libzenohc), z_result_t, (Ptr{z_owned_config_t}, Ptr{Cchar}, Csize_t), this_, s, len)
 end
 
 function zc_config_get_from_str(this_, key, out_value_string)
@@ -4396,6 +4701,10 @@ end
 
 function zc_internal_encoding_get_data(this_)
     ccall((:zc_internal_encoding_get_data, libzenohc), zc_internal_encoding_data_t, (Ptr{z_loaned_encoding_t},), this_)
+end
+
+function zc_locality_default()
+    ccall((:zc_locality_default, libzenohc), zc_locality_t, ())
 end
 
 function zc_stop_z_runtime()
@@ -4668,6 +4977,9 @@ const z_closure_drop_callback_t = Ptr{Cvoid}
 # typedef void ( * z_closure_hello_callback_t ) ( z_loaned_hello_t * hello , void * context )
 const z_closure_hello_callback_t = Ptr{Cvoid}
 
+# typedef void ( * z_closure_matching_status_callback_t ) ( const z_matching_status_t * matching_status , void * context )
+const z_closure_matching_status_callback_t = Ptr{Cvoid}
+
 # typedef void ( * z_closure_query_callback_t ) ( z_loaned_query_t * query , void * context )
 const z_closure_query_callback_t = Ptr{Cvoid}
 
@@ -4695,13 +5007,13 @@ function z_free(ptr)
     ccall((:z_free, libzenohc), Cvoid, (Ptr{Cvoid},), ptr)
 end
 
-const ZENOH_C = "1.4.0"
+const ZENOH_C = "1.6.2"
 
 const ZENOH_C_MAJOR = 1
 
-const ZENOH_C_MINOR = 4
+const ZENOH_C_MINOR = 6
 
-const ZENOH_C_PATCH = 0
+const ZENOH_C_PATCH = 2
 
 const DEFAULT_SCOUTING_TIMEOUT = 1000
 

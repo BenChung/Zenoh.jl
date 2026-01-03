@@ -2,7 +2,7 @@
 
 julia_version = "1.11.4"
 manifest_format = "2.0"
-project_hash = "423d976783c0b528ecc9606bc6b0e17328e68d2f"
+project_hash = "a85a6e16dafe1197de3e7f3e9f384e04e1f3c5f3"
 
 [[deps.ArgTools]]
 uuid = "0dad84c5-d112-42e6-8d28-ef12dabb789f"
@@ -154,12 +154,6 @@ version = "1.11.0"
 uuid = "4ec0a83e-493e-50e2-b9ac-8f72acf5a8f5"
 version = "1.11.0"
 
-[[deps.ZenohC_jll]]
-deps = ["Artifacts", "JLLWrappers", "Libdl"]
-git-tree-sha1 = "c64d39dd6e40418b33427d87c22ab086ef112c5a"
-uuid = "a3bec183-2cd9-52aa-977e-56c7968661ce"
-version = "1.3.3+0"
-
 [[deps.Zlib_jll]]
 deps = ["Libdl"]
 uuid = "83775a58-1f1d-513f-b197-d71354ab007a"
@@ -169,6 +163,12 @@ version = "1.2.13+1"
 deps = ["Artifacts", "Libdl"]
 uuid = "8f36deef-c2a5-5394-99ed-8e07531fb29a"
 version = "16.0.6+4"
+
+[[deps.libzenohc_jll]]
+deps = ["Artifacts", "JLLWrappers", "Libdl"]
+git-tree-sha1 = "4b040ec5d66c35088ad382dd6c70f67c2809371b"
+uuid = "938f45e1-bfa9-5428-95ae-33d45742c18e"
+version = "1.6.2+0"
 
 [[deps.nghttp2_jll]]
 deps = ["Artifacts", "Libdl"]
