@@ -12,6 +12,8 @@ function _string(r::Ref{LibZenohC.z_owned_string_t})
     return unsafe_string(LibZenohC.z_string_data(_loan(r)), LibZenohC.z_string_len(_loan(r)))
 end
 
+include("encoding.jl")
+
 const _refs_in_flight = Dict{UInt64, Ref}()
 const _refptr = Ref{UInt64}(0)
 
@@ -352,30 +354,41 @@ function _init_put_opts(::Type{LibZenohC.z_put_options_t})
 end
 
 const _Put_Types = Union{LibZenohC.z_publisher_put_options_t, LibZenohC.z_put_options_t}
-function _make_put_opts(::Type{T}; timestamp::Union{Nothing, ZTimestamp}=nothing) where T<:_Put_Types
+function _make_put_opts(::Type{T};
+        timestamp::Union{Nothing, ZTimestamp} = nothing,
+        encoding::Union{Nothing, Encoding, AbstractString, Base.MIME} = nothing) where T <: _Put_Types
     opts = _init_put_opts(T)
 
     if !isnothing(timestamp)
         Base.unsafe_convert(Ptr{T}, opts).timestamp = Base.unsafe_convert(Ptr{LibZenohC.z_timestamp_t}, timestamp.ts)
     end
 
-    return opts
+    enc_ref = isnothing(encoding) ? nothing : _to_owned_encoding(_as_encoding(encoding))
+    if !isnothing(enc_ref)
+        Base.unsafe_convert(Ptr{T}, opts).encoding = _move(enc_ref)
+    end
+
+    return opts, enc_ref
 end
 
 function put(p::Publisher, payload; kwargs...)
     bytes = ZBytes(payload)
-    opts = _make_put_opts(LibZenohC.z_publisher_put_options_t; kwargs...)
-    
-    rtc = LibZenohC.z_publisher_put(_loan(p.pub), _move(bytes), opts)
-    _handle_result(rtc)
+    opts, enc_ref = _make_put_opts(LibZenohC.z_publisher_put_options_t; kwargs...)
+
+    GC.@preserve enc_ref begin
+        rtc = LibZenohC.z_publisher_put(_loan(p.pub), _move(bytes), opts)
+        _handle_result(rtc)
+    end
 end
 
 function put(s::Session, k::Keyexpr, payload; kwargs...)
     bytes = ZBytes(payload)
-    opts = _make_put_opts(LibZenohC.z_put_options_t; kwargs...)
-    
-    rtc = LibZenohC.z_put(_loan(s), _loan(k), _move(bytes), opts)
-    _handle_result(rtc)
+    opts, enc_ref = _make_put_opts(LibZenohC.z_put_options_t; kwargs...)
+
+    GC.@preserve enc_ref begin
+        rtc = LibZenohC.z_put(_loan(s), _loan(k), _move(bytes), opts)
+        _handle_result(rtc)
+    end
 end
 
 function timestamp(s::Sample)
@@ -389,6 +402,33 @@ end
 
 function payload(s::Sample)
     return ZBytes(LibZenohC.z_sample_payload(s.s))
+end
+
+kind(s::Sample) = LibZenohC.z_sample_kind(s.s)
+
+function keyexpr(s::Sample)
+    ke = LibZenohC.z_sample_keyexpr(s.s)
+    view = Ref{LibZenohC.z_view_string_t}()
+    LibZenohC.z_keyexpr_as_view_string(ke, view)
+    loaned = LibZenohC.z_view_string_loan(view)
+    return unsafe_string(LibZenohC.z_string_data(loaned), LibZenohC.z_string_len(loaned))
+end
+
+function attachment(s::Sample)
+    a = LibZenohC.z_sample_attachment(s.s)
+    if a == C_NULL
+        return nothing
+    else
+        return ZBytes(a)
+    end
+end
+
+congestion_control(s::Sample) = LibZenohC.z_sample_congestion_control(s.s)
+priority(s::Sample) = LibZenohC.z_sample_priority(s.s)
+express(s::Sample) = LibZenohC.z_sample_express(s.s)
+
+function encoding(s::Sample)
+    return _from_loaned_encoding(LibZenohC.z_sample_encoding(s.s))
 end
 
 function setup_logging()

@@ -249,6 +249,143 @@ try
             close(s)
         end
     end
+
+    @testset "Sample accessors" begin
+        c = Zenoh.Config(; str = """{connect: { endpoints: ["tcp/localhost:19148"]}}""")
+        s = open(c)
+        sub = nothing
+        pub = nothing
+
+        try
+            test_key_str = "test/sample_accessors"
+            test_key = Zenoh.Keyexpr(test_key_str)
+
+            received_kind = Channel{Zenoh.LibZenohC.z_sample_kind_t}(1)
+            received_keyexpr = Channel{String}(1)
+            received_attachment = Channel{Union{Nothing, Zenoh.ZBytes}}(1)
+            received_encoding = Channel{Zenoh.Encoding}(1)
+            received_cc = Channel{Zenoh.LibZenohC.z_congestion_control_t}(1)
+            received_prio = Channel{Zenoh.LibZenohC.z_priority_t}(1)
+            received_express = Channel{Bool}(1)
+            received_done = Channel{Bool}(1)
+
+            sub = open((sample) -> begin
+                put!(received_kind, Zenoh.kind(sample))
+                put!(received_keyexpr, Zenoh.keyexpr(sample))
+                put!(received_attachment, Zenoh.attachment(sample))
+                put!(received_encoding, Zenoh.encoding(sample))
+                put!(received_cc, Zenoh.congestion_control(sample))
+                put!(received_prio, Zenoh.priority(sample))
+                put!(received_express, Zenoh.express(sample))
+                put!(received_done, true)
+            end, s, test_key)
+
+            pub = Zenoh.Publisher(s, test_key)
+            Zenoh.put(pub, "sample accessor payload")
+
+            @test take!(received_done)
+            @test take!(received_kind) == Zenoh.LibZenohC.Z_SAMPLE_KIND_PUT
+            @test take!(received_keyexpr) == test_key_str
+            @test take!(received_attachment) === nothing
+            enc = take!(received_encoding)
+            @test enc isa Zenoh.Encoding
+            @test !isempty(enc.mime)
+            @test take!(received_cc) == Zenoh.LibZenohC.Z_CONGESTION_CONTROL_DEFAULT
+            @test take!(received_prio) == Zenoh.LibZenohC.Z_PRIORITY_DEFAULT
+            @test take!(received_express) isa Bool
+        finally
+            if !isnothing(sub)
+                close(sub)
+            end
+            if !isnothing(pub)
+                close(pub)
+            end
+            close(s)
+        end
+    end
+
+    @testset "Encoding" begin
+        # Pure-Julia behaviour: construction, equality, string round-trip.
+        e1 = Zenoh.Encoding("application/json")
+        @test e1.mime == "application/json"
+        @test e1.schema === nothing
+        @test string(e1) == "application/json"
+
+        e2 = Zenoh.Encoding("application/json"; schema="v1.2")
+        @test e2.schema == "v1.2"
+        @test string(e2) == "application/json;v1.2"
+        @test e1 != e2
+        @test hash(e1) != hash(e2)
+
+        # MIME input.
+        e3 = Zenoh.Encoding(MIME("text/plain"))
+        @test e3 == Zenoh.Encoding("text/plain")
+
+        # Equality & hash for identical values.
+        @test Zenoh.Encoding("application/xml") == Zenoh.Encoding("application/xml")
+        @test hash(Zenoh.Encoding("application/xml")) == hash(Zenoh.Encoding("application/xml"))
+
+        # show should be parsable-looking and include the schema when present.
+        @test occursin("\"application/json\"", sprint(show, e1))
+        @test occursin("schema=\"v1.2\"", sprint(show, e2))
+
+        # Encodings submodule has canonical constants.
+        @test Zenoh.Encodings.APPLICATION_JSON == Zenoh.Encoding("application/json")
+        @test Zenoh.Encodings.TEXT_PLAIN.mime == "text/plain"
+        @test Zenoh.Encodings.ZENOH_BYTES.mime == "zenoh/bytes"
+    end
+
+    @testset "Put with encoding" begin
+        c = Zenoh.Config(; str = """{connect: { endpoints: ["tcp/localhost:19148"]}}""")
+        s = open(c)
+        sub = nothing
+        pub = nothing
+
+        try
+            test_key = Zenoh.Keyexpr("test/encoding_putget")
+            received_enc = Channel{Zenoh.Encoding}(4)
+            received_msg = Channel{String}(4)
+
+            sub = open((sample) -> begin
+                put!(received_enc, Zenoh.encoding(sample))
+                p = Zenoh.payload(sample)
+                open(p, Val(:read)) do msg
+                    put!(received_msg, read(msg, String))
+                end
+            end, s, test_key)
+
+            pub = Zenoh.Publisher(s, test_key)
+
+            # Publisher.put with Encoding value.
+            Zenoh.put(pub, "json payload"; encoding=Zenoh.Encodings.APPLICATION_JSON)
+            @test take!(received_msg) == "json payload"
+            @test take!(received_enc) == Zenoh.Encoding("application/json")
+
+            # Publisher.put with raw String (coerced to Encoding).
+            Zenoh.put(pub, "yaml payload"; encoding="application/yaml")
+            @test take!(received_msg) == "yaml payload"
+            @test take!(received_enc) == Zenoh.Encoding("application/yaml")
+
+            # Session.put with Encoding value and schema.
+            Zenoh.put(s, test_key, "json with schema";
+                encoding=Zenoh.Encoding("application/json"; schema="v1.0"))
+            @test take!(received_msg) == "json with schema"
+            @test take!(received_enc) == Zenoh.Encoding("application/json"; schema="v1.0")
+
+            # Session.put with Base.MIME.
+            Zenoh.put(s, test_key, "plain text"; encoding=MIME("text/plain"))
+            @test take!(received_msg) == "plain text"
+            @test take!(received_enc) == Zenoh.Encoding("text/plain")
+        finally
+            if !isnothing(sub)
+                close(sub)
+            end
+            if !isnothing(pub)
+                close(pub)
+            end
+            close(s)
+        end
+    end
 finally
     kill(router)
 end
