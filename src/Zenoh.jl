@@ -41,11 +41,15 @@ struct ZBytes{R <: Union{Base.RefValue{LibZenohC.z_owned_bytes_t}, Ptr{LibZenohC
         return new{Ptr{LibZenohC.z_loaned_bytes_t}}(p)
     end
     function ZBytes(s::String)
-        Base.preserve_handle(s)
+        # Box the String in a RefValue so we have a stable, mutable handle to
+        # pass as ctx to the C deleter. preserve_handle/unpreserve_handle pin
+        # the box (and transitively the String) until libzenoh releases it.
+        box = Ref{String}(s)
+        Base.preserve_handle(box)
         cstr = Base.unsafe_convert(Cstring, s)
         b = Ref{LibZenohC.z_owned_bytes_t}()
-        rtc = LibZenohC.z_bytes_from_str(b, pointer(cstr),
-            @cfunction(_release, Ptr{Cvoid}, (Ptr{Cvoid}, Ptr{Cvoid})), Base.reinterpret(Ptr{UInt8}, Base.pointer_from_objref(s)))
+        rtc = GC.@preserve s LibZenohC.z_bytes_from_str(b, pointer(cstr),
+            @cfunction(_release, Ptr{Cvoid}, (Ptr{Cvoid}, Ptr{Cvoid})), Base.pointer_from_objref(box))
         _handle_result(rtc)
         return new{Base.RefValue{LibZenohC.z_owned_bytes_t}}(b)
     end
@@ -106,7 +110,7 @@ struct ZSlice{S <: Union{Base.RefValue{LibZenohC.z_owned_slice_t}, Ptr{LibZenohC
         else
             Base.preserve_handle(buf)
             _handle_result(LibZenohC.z_slice_from_buf(ref, buf, length(buf),
-                @cfunction(_release, Ptr{Cvoid}, (Ptr{Cvoid}, Ptr{Cvoid})), Base.reinterpret(Ptr{UInt8}, Base.pointer_from_objref(s))))
+                @cfunction(_release, Ptr{Cvoid}, (Ptr{Cvoid}, Ptr{Cvoid})), Base.pointer_from_objref(buf)))
             return _add_finalizer(new{Base.RefValue{LibZenohC.z_owned_slice_t}}(ref))
         end
     end
@@ -114,11 +118,13 @@ struct ZSlice{S <: Union{Base.RefValue{LibZenohC.z_owned_slice_t}, Ptr{LibZenohC
         return new{Ptr{LibZenohC.z_loaned_slice_t}}(ref)
     end
 end
-Base.length(s::ZSlice) = LibZenohC.z_slice_len(s.s)
-Base.isempty(s::ZSlice) = LibZenohC.z_slice_is_empty(s.s)
+Base.length(s::ZSlice{Base.RefValue{LibZenohC.z_owned_slice_t}}) = LibZenohC.z_slice_len(_loan(s.s))
+Base.length(s::ZSlice{Ptr{LibZenohC.z_loaned_slice_t}}) = LibZenohC.z_slice_len(s.s)
+Base.isempty(s::ZSlice{Base.RefValue{LibZenohC.z_owned_slice_t}}) = LibZenohC.z_slice_is_empty(_loan(s.s))
+Base.isempty(s::ZSlice{Ptr{LibZenohC.z_loaned_slice_t}}) = LibZenohC.z_slice_is_empty(s.s)
 
 function _add_finalizer(z::ZSlice{Base.RefValue{LibZenohC.z_owned_slice_t}})
-    finalizer(s->LibZenohC.z_slice_drop(_move(s.s)), z.s)
+    finalizer(r -> LibZenohC.z_slice_drop(_move(r)), z.s)
     return z
 end
 
@@ -126,8 +132,11 @@ end
 struct ZBytesSliceIterator
     it::Base.RefValue{LibZenohC.z_bytes_slice_iterator_t}
 end
+_loaned_bytes(b::ZBytes{Base.RefValue{LibZenohC.z_owned_bytes_t}}) = _loan(b.b)
+_loaned_bytes(b::ZBytes{Ptr{LibZenohC.z_loaned_bytes_t}}) = b.b
+
 function Base.iterate(b::ZBytes)
-    biterator = ZBytesSliceIterator(Ref(LibZenohC.z_bytes_get_slice_iterator(b)))
+    biterator = ZBytesSliceIterator(Ref(LibZenohC.z_bytes_get_slice_iterator(_loaned_bytes(b))))
     item = Ref{LibZenohC.z_view_slice_t}()
     has_next = LibZenohC.z_bytes_slice_iterator_next(biterator.it, item)
     if has_next
@@ -345,11 +354,11 @@ end
 const _Put_Types = Union{LibZenohC.z_publisher_put_options_t, LibZenohC.z_put_options_t}
 function _make_put_opts(::Type{T}; timestamp::Union{Nothing, ZTimestamp}=nothing) where T<:_Put_Types
     opts = _init_put_opts(T)
-    
+
     if !isnothing(timestamp)
-        Base.unsafe_convert(Ptr{LibZenohC.z_publisher_put_options_t}, opts).timestamp = Base.unsafe_convert(Ptr{LibZenohC.z_timestamp_t}, timestamp.ts)
+        Base.unsafe_convert(Ptr{T}, opts).timestamp = Base.unsafe_convert(Ptr{LibZenohC.z_timestamp_t}, timestamp.ts)
     end
-    
+
     return opts
 end
 

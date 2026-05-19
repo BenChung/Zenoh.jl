@@ -56,6 +56,32 @@ try
         end
     end
 
+    @testset "ZSlice" begin
+        es = Zenoh.ZSlice()
+        @test isempty(es)
+        @test length(es) == 0
+
+        data = UInt8[1, 2, 3, 4, 5]
+        cs = Zenoh.ZSlice(data; copy=true)
+        @test !isempty(cs)
+        @test length(cs) == 5
+    end
+
+    @testset "ZBytes iteration" begin
+        # Covers the iterate(::ZBytes) path, which must loan the underlying
+        # z_owned_bytes_t before calling z_bytes_get_slice_iterator.
+        zb = Zenoh.ZBytes("hello world")
+        total = 0
+        count = 0
+        for view_slice in zb
+            count += 1
+            loaned = Zenoh.LibZenohC.z_view_slice_loan(view_slice)
+            total += Zenoh.LibZenohC.z_slice_len(loaned)
+        end
+        @test count >= 1
+        @test total == length(zb)
+    end
+
     @testset "Publisher-Subscriber" begin
         # Create a session with the router
         c = Zenoh.Config(; str = """{connect: { endpoints: ["tcp/localhost:19148"]}}""")
@@ -178,6 +204,47 @@ try
             end
             if !isnothing(pub)
                 close(pub)
+            end
+            close(s)
+        end
+    end
+
+    @testset "Session put with timestamp" begin
+        # Exercises Zenoh.put(::Session, ::Keyexpr, payload; timestamp=...),
+        # which writes the timestamp through Ptr{z_put_options_t}. Using the
+        # wrong options struct type would land the write at the wrong offset
+        # and the received timestamp would not match what was sent.
+        c = Zenoh.Config(; str = """{connect: { endpoints: ["tcp/localhost:19148"]}}""")
+        s = open(c)
+        sub = nothing
+
+        try
+            test_key = Zenoh.Keyexpr("test/session_put_ts")
+            received_msg = Channel{String}(1)
+            received_timestamp = Channel{Union{Nothing, Zenoh.ZTimestamp}}(1)
+
+            sub = open((sample) -> begin
+                p = Zenoh.payload(sample)
+                put!(received_timestamp, Zenoh.timestamp(sample))
+                open(p, Val(:read)) do msg
+                    put!(received_msg, read(msg, String))
+                end
+            end, s, test_key)
+
+            test_message = "Session put with explicit timestamp"
+            ts_sent = Zenoh.ZTimestamp(s)
+            Zenoh.put(s, test_key, test_message, timestamp=ts_sent)
+
+            ts_received = take!(received_timestamp)
+            @test ts_received isa Zenoh.ZTimestamp
+            @test Zenoh.ntp64_time(ts_received) == Zenoh.ntp64_time(ts_sent)
+            @test Zenoh.zid(ts_received).id == Zenoh.zid(ts_sent).id
+
+            received = take!(received_msg)
+            @test received == test_message
+        finally
+            if !isnothing(sub)
+                close(sub)
             end
             close(s)
         end

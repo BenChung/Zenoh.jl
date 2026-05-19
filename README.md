@@ -10,7 +10,7 @@ c = Zenoh.Config(; str = """{connect: { endpoints: ["tcp/localhost:7448"]}}""")
 s = open(c)
 kbr = Zenoh.Keyexpr("example")
 Zenoh.put(s, kbr, "hi")
-close(sub)
+close(s)
 ```
 
 ## Subscribe
