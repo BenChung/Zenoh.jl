@@ -166,9 +166,9 @@ version = "16.0.6+4"
 
 [[deps.libzenohc_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl"]
-git-tree-sha1 = "4b040ec5d66c35088ad382dd6c70f67c2809371b"
+git-tree-sha1 = "84998187080f0c9eff45386d9fd2fc28809b445c"
 uuid = "938f45e1-bfa9-5428-95ae-33d45742c18e"
-version = "1.6.2+0"
+version = "1.9.0+0"
 
 [[deps.nghttp2_jll]]
 deps = ["Artifacts", "Libdl"]

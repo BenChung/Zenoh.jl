@@ -236,11 +236,11 @@ function z_condvar_loan(this_)
 end
 
 struct z_owned_config_t
-    data::NTuple{1984, UInt8}
+    data::NTuple{2040, UInt8}
 end
 
 function Base.getproperty(x::Ptr{z_owned_config_t}, f::Symbol)
-    f === :_0 && return Ptr{NTuple{1984, UInt8}}(x + 0)
+    f === :_0 && return Ptr{NTuple{2040, UInt8}}(x + 0)
     return getfield(x, f)
 end
 
@@ -256,11 +256,11 @@ function Base.setproperty!(x::Ptr{z_owned_config_t}, f::Symbol, v)
 end
 
 struct z_loaned_config_t
-    data::NTuple{1984, UInt8}
+    data::NTuple{2040, UInt8}
 end
 
 function Base.getproperty(x::Ptr{z_loaned_config_t}, f::Symbol)
-    f === :_0 && return Ptr{NTuple{1984, UInt8}}(x + 0)
+    f === :_0 && return Ptr{NTuple{2040, UInt8}}(x + 0)
     return getfield(x, f)
 end
 
@@ -588,11 +588,11 @@ function z_liveliness_token_loan(this_)
 end
 
 struct z_owned_publisher_t
-    data::NTuple{112, UInt8}
+    data::NTuple{120, UInt8}
 end
 
 function Base.getproperty(x::Ptr{z_owned_publisher_t}, f::Symbol)
-    f === :_0 && return Ptr{NTuple{112, UInt8}}(x + 0)
+    f === :_0 && return Ptr{NTuple{120, UInt8}}(x + 0)
     return getfield(x, f)
 end
 
@@ -608,11 +608,11 @@ function Base.setproperty!(x::Ptr{z_owned_publisher_t}, f::Symbol, v)
 end
 
 struct z_loaned_publisher_t
-    data::NTuple{112, UInt8}
+    data::NTuple{120, UInt8}
 end
 
 function Base.getproperty(x::Ptr{z_loaned_publisher_t}, f::Symbol)
-    f === :_0 && return Ptr{NTuple{112, UInt8}}(x + 0)
+    f === :_0 && return Ptr{NTuple{120, UInt8}}(x + 0)
     return getfield(x, f)
 end
 
@@ -632,11 +632,11 @@ function z_publisher_loan(this_)
 end
 
 struct z_owned_querier_t
-    data::NTuple{80, UInt8}
+    data::NTuple{88, UInt8}
 end
 
 function Base.getproperty(x::Ptr{z_owned_querier_t}, f::Symbol)
-    f === :_0 && return Ptr{NTuple{80, UInt8}}(x + 0)
+    f === :_0 && return Ptr{NTuple{88, UInt8}}(x + 0)
     return getfield(x, f)
 end
 
@@ -652,11 +652,11 @@ function Base.setproperty!(x::Ptr{z_owned_querier_t}, f::Symbol, v)
 end
 
 struct z_loaned_querier_t
-    data::NTuple{80, UInt8}
+    data::NTuple{88, UInt8}
 end
 
 function Base.getproperty(x::Ptr{z_loaned_querier_t}, f::Symbol)
-    f === :_0 && return Ptr{NTuple{80, UInt8}}(x + 0)
+    f === :_0 && return Ptr{NTuple{88, UInt8}}(x + 0)
     return getfield(x, f)
 end
 
@@ -720,11 +720,11 @@ function z_query_loan(this_)
 end
 
 struct z_owned_queryable_t
-    data::NTuple{48, UInt8}
+    data::NTuple{56, UInt8}
 end
 
 function Base.getproperty(x::Ptr{z_owned_queryable_t}, f::Symbol)
-    f === :_0 && return Ptr{NTuple{48, UInt8}}(x + 0)
+    f === :_0 && return Ptr{NTuple{56, UInt8}}(x + 0)
     return getfield(x, f)
 end
 
@@ -740,11 +740,11 @@ function Base.setproperty!(x::Ptr{z_owned_queryable_t}, f::Symbol, v)
 end
 
 struct z_loaned_queryable_t
-    data::NTuple{48, UInt8}
+    data::NTuple{56, UInt8}
 end
 
 function Base.getproperty(x::Ptr{z_loaned_queryable_t}, f::Symbol)
-    f === :_0 && return Ptr{NTuple{48, UInt8}}(x + 0)
+    f === :_0 && return Ptr{NTuple{56, UInt8}}(x + 0)
     return getfield(x, f)
 end
 
@@ -1204,11 +1204,11 @@ function z_string_loan(this_)
 end
 
 struct z_owned_subscriber_t
-    data::NTuple{48, UInt8}
+    data::NTuple{56, UInt8}
 end
 
 function Base.getproperty(x::Ptr{z_owned_subscriber_t}, f::Symbol)
-    f === :_0 && return Ptr{NTuple{48, UInt8}}(x + 0)
+    f === :_0 && return Ptr{NTuple{56, UInt8}}(x + 0)
     return getfield(x, f)
 end
 
@@ -1224,11 +1224,11 @@ function Base.setproperty!(x::Ptr{z_owned_subscriber_t}, f::Symbol, v)
 end
 
 struct z_loaned_subscriber_t
-    data::NTuple{48, UInt8}
+    data::NTuple{56, UInt8}
 end
 
 function Base.getproperty(x::Ptr{z_loaned_subscriber_t}, f::Symbol)
-    f === :_0 && return Ptr{NTuple{48, UInt8}}(x + 0)
+    f === :_0 && return Ptr{NTuple{56, UInt8}}(x + 0)
     return getfield(x, f)
 end
 
@@ -1620,7 +1620,7 @@ function z_condvar_drop(this_)
 end
 
 struct z_moved_config_t
-    data::NTuple{1984, UInt8}
+    data::NTuple{2040, UInt8}
 end
 
 function Base.getproperty(x::Ptr{z_moved_config_t}, f::Symbol)
@@ -1812,11 +1812,11 @@ function z_liveliness_token_drop(this_)
 end
 
 struct z_owned_matching_listener_t
-    data::NTuple{24, UInt8}
+    data::NTuple{32, UInt8}
 end
 
 function Base.getproperty(x::Ptr{z_owned_matching_listener_t}, f::Symbol)
-    f === :_0 && return Ptr{NTuple{24, UInt8}}(x + 0)
+    f === :_0 && return Ptr{NTuple{32, UInt8}}(x + 0)
     return getfield(x, f)
 end
 
@@ -1832,7 +1832,7 @@ function Base.setproperty!(x::Ptr{z_owned_matching_listener_t}, f::Symbol, v)
 end
 
 struct z_moved_matching_listener_t
-    data::NTuple{24, UInt8}
+    data::NTuple{32, UInt8}
 end
 
 function Base.getproperty(x::Ptr{z_moved_matching_listener_t}, f::Symbol)
@@ -1880,7 +1880,7 @@ function z_mutex_drop(this_)
 end
 
 struct z_moved_publisher_t
-    data::NTuple{112, UInt8}
+    data::NTuple{120, UInt8}
 end
 
 function Base.getproperty(x::Ptr{z_moved_publisher_t}, f::Symbol)
@@ -1904,7 +1904,7 @@ function z_publisher_drop(this_)
 end
 
 struct z_moved_querier_t
-    data::NTuple{80, UInt8}
+    data::NTuple{88, UInt8}
 end
 
 function Base.getproperty(x::Ptr{z_moved_querier_t}, f::Symbol)
@@ -1952,7 +1952,7 @@ function z_query_drop(this_)
 end
 
 struct z_moved_queryable_t
-    data::NTuple{48, UInt8}
+    data::NTuple{56, UInt8}
 end
 
 function Base.getproperty(x::Ptr{z_moved_queryable_t}, f::Symbol)
@@ -2216,7 +2216,7 @@ function z_string_drop(this_)
 end
 
 struct z_moved_subscriber_t
-    data::NTuple{48, UInt8}
+    data::NTuple{56, UInt8}
 end
 
 function Base.getproperty(x::Ptr{z_moved_subscriber_t}, f::Symbol)
@@ -3157,9 +3157,40 @@ function Base.setproperty!(x::Ptr{ze_deserializer_t}, f::Symbol, v)
     unsafe_store!(getproperty(x, f), v)
 end
 
+@cenum z_locality_t::UInt32 begin
+    Z_LOCALITY_ANY = 0
+    Z_LOCALITY_DEFAULT = 0
+    ZC_LOCALITY_ANY = 0
+    Z_LOCALITY_SESSION_LOCAL = 1
+    ZC_LOCALITY_SESSION_LOCAL = 1
+    Z_LOCALITY_REMOTE = 2
+    ZC_LOCALITY_REMOTE = 2
+end
+
+const zc_locality_t = z_locality_t
+
 @cenum z_congestion_control_t::UInt32 begin
     Z_CONGESTION_CONTROL_BLOCK = 0
     Z_CONGESTION_CONTROL_DROP = 1
+    Z_CONGESTION_CONTROL_DEFAULT = 1
+end
+
+@cenum z_priority_t::UInt32 begin
+    Z_PRIORITY_REAL_TIME = 1
+    Z_PRIORITY_INTERACTIVE_HIGH = 2
+    Z_PRIORITY_INTERACTIVE_LOW = 3
+    Z_PRIORITY_DATA_HIGH = 4
+    Z_PRIORITY_DATA = 5
+    Z_PRIORITY_DEFAULT = 5
+    Z_PRIORITY_DATA_LOW = 6
+    Z_PRIORITY_BACKGROUND = 7
+end
+
+@cenum z_query_target_t::UInt32 begin
+    Z_QUERY_TARGET_BEST_MATCHING = 0
+    Z_QUERY_TARGET_DEFAULT = 0
+    Z_QUERY_TARGET_ALL = 1
+    Z_QUERY_TARGET_ALL_COMPLETE = 2
 end
 
 @cenum z_consolidation_mode_t::Int32 begin
@@ -3169,24 +3200,21 @@ end
     Z_CONSOLIDATION_MODE_LATEST = 2
 end
 
-@cenum z_priority_t::UInt32 begin
-    Z_PRIORITY_REAL_TIME = 1
-    Z_PRIORITY_INTERACTIVE_HIGH = 2
-    Z_PRIORITY_INTERACTIVE_LOW = 3
-    Z_PRIORITY_DATA_HIGH = 4
-    Z_PRIORITY_DATA = 5
-    Z_PRIORITY_DATA_LOW = 6
-    Z_PRIORITY_BACKGROUND = 7
+@cenum z_reply_keyexpr_t::UInt32 begin
+    Z_REPLY_KEYEXPR_ANY = 0
+    Z_REPLY_KEYEXPR_MATCHING_QUERY = 1
+    Z_REPLY_KEYEXPR_DEFAULT = 1
 end
 
-@cenum z_query_target_t::UInt32 begin
-    Z_QUERY_TARGET_BEST_MATCHING = 0
-    Z_QUERY_TARGET_ALL = 1
-    Z_QUERY_TARGET_ALL_COMPLETE = 2
+@cenum z_whatami_t::UInt32 begin
+    Z_WHATAMI_ROUTER = 1
+    Z_WHATAMI_PEER = 2
+    Z_WHATAMI_CLIENT = 4
 end
 
 @cenum z_sample_kind_t::UInt32 begin
     Z_SAMPLE_KIND_PUT = 0
+    Z_SAMPLE_KIND_DEFAULT = 0
     Z_SAMPLE_KIND_DELETE = 1
 end
 
@@ -3198,18 +3226,6 @@ end
     Z_WHAT_ROUTER_CLIENT = 5
     Z_WHAT_PEER_CLIENT = 6
     Z_WHAT_ROUTER_PEER_CLIENT = 7
-end
-
-@cenum z_whatami_t::UInt32 begin
-    Z_WHATAMI_ROUTER = 1
-    Z_WHATAMI_PEER = 2
-    Z_WHATAMI_CLIENT = 4
-end
-
-@cenum zc_locality_t::UInt32 begin
-    ZC_LOCALITY_ANY = 0
-    ZC_LOCALITY_SESSION_LOCAL = 1
-    ZC_LOCALITY_REMOTE = 2
 end
 
 @cenum zc_log_severity_t::UInt32 begin
@@ -3251,11 +3267,11 @@ end
 
 struct z_queryable_options_t
     complete::Bool
-    allowed_origin::zc_locality_t
+    allowed_origin::z_locality_t
 end
 
 struct z_subscriber_options_t
-    allowed_origin::zc_locality_t
+    allowed_origin::z_locality_t
 end
 
 struct z_publisher_options_t
@@ -3263,14 +3279,14 @@ struct z_publisher_options_t
     congestion_control::z_congestion_control_t
     priority::z_priority_t
     is_express::Bool
-    allowed_destination::zc_locality_t
+    allowed_destination::z_locality_t
 end
 function Base.getproperty(x::Ptr{z_publisher_options_t}, f::Symbol)
     f === :encoding && return Ptr{Ptr{z_moved_encoding_t}}(x + 0)
     f === :congestion_control && return Ptr{z_congestion_control_t}(x + 8)
     f === :priority && return Ptr{z_priority_t}(x + 12)
     f === :is_express && return Ptr{Bool}(x + 16)
-    f === :allowed_destination && return Ptr{zc_locality_t}(x + 20)
+    f === :allowed_destination && return Ptr{z_locality_t}(x + 20)
     return getfield(x, f)
 end
 
@@ -3297,7 +3313,8 @@ struct z_querier_options_t
     consolidation::z_query_consolidation_t
     congestion_control::z_congestion_control_t
     is_express::Bool
-    allowed_destination::zc_locality_t
+    allowed_destination::z_locality_t
+    accept_replies::z_reply_keyexpr_t
     priority::z_priority_t
     timeout_ms::UInt64
 end
@@ -3307,14 +3324,14 @@ struct z_delete_options_t
     priority::z_priority_t
     is_express::Bool
     timestamp::Ptr{z_timestamp_t}
-    allowed_destination::zc_locality_t
+    allowed_destination::z_locality_t
 end
 function Base.getproperty(x::Ptr{z_delete_options_t}, f::Symbol)
     f === :congestion_control && return Ptr{z_congestion_control_t}(x + 0)
     f === :priority && return Ptr{z_priority_t}(x + 4)
     f === :is_express && return Ptr{Bool}(x + 8)
     f === :timestamp && return Ptr{Ptr{z_timestamp_t}}(x + 16)
-    f === :allowed_destination && return Ptr{zc_locality_t}(x + 24)
+    f === :allowed_destination && return Ptr{z_locality_t}(x + 24)
     return getfield(x, f)
 end
 
@@ -3330,7 +3347,8 @@ struct z_get_options_t
     encoding::Ptr{z_moved_encoding_t}
     congestion_control::z_congestion_control_t
     is_express::Bool
-    allowed_destination::zc_locality_t
+    allowed_destination::z_locality_t
+    accept_replies::z_reply_keyexpr_t
     priority::z_priority_t
     attachment::Ptr{z_moved_bytes_t}
     timeout_ms::UInt64
@@ -3342,10 +3360,11 @@ function Base.getproperty(x::Ptr{z_get_options_t}, f::Symbol)
     f === :encoding && return Ptr{Ptr{z_moved_encoding_t}}(x + 16)
     f === :congestion_control && return Ptr{z_congestion_control_t}(x + 24)
     f === :is_express && return Ptr{Bool}(x + 28)
-    f === :allowed_destination && return Ptr{zc_locality_t}(x + 32)
-    f === :priority && return Ptr{z_priority_t}(x + 36)
-    f === :attachment && return Ptr{Ptr{z_moved_bytes_t}}(x + 40)
-    f === :timeout_ms && return Ptr{UInt64}(x + 48)
+    f === :allowed_destination && return Ptr{z_locality_t}(x + 32)
+    f === :accept_replies && return Ptr{z_reply_keyexpr_t}(x + 36)
+    f === :priority && return Ptr{z_priority_t}(x + 40)
+    f === :attachment && return Ptr{Ptr{z_moved_bytes_t}}(x + 48)
+    f === :timeout_ms && return Ptr{UInt64}(x + 56)
     return getfield(x, f)
 end
 
@@ -3424,7 +3443,7 @@ struct z_put_options_t
     priority::z_priority_t
     is_express::Bool
     timestamp::Ptr{z_timestamp_t}
-    allowed_destination::zc_locality_t
+    allowed_destination::z_locality_t
     attachment::Ptr{z_moved_bytes_t}
 end
 function Base.getproperty(x::Ptr{z_put_options_t}, f::Symbol)
@@ -3433,7 +3452,7 @@ function Base.getproperty(x::Ptr{z_put_options_t}, f::Symbol)
     f === :priority && return Ptr{z_priority_t}(x + 12)
     f === :is_express && return Ptr{Bool}(x + 16)
     f === :timestamp && return Ptr{Ptr{z_timestamp_t}}(x + 24)
-    f === :allowed_destination && return Ptr{zc_locality_t}(x + 32)
+    f === :allowed_destination && return Ptr{z_locality_t}(x + 32)
     f === :attachment && return Ptr{Ptr{z_moved_bytes_t}}(x + 40)
     return getfield(x, f)
 end
@@ -4019,10 +4038,6 @@ function z_internal_congestion_control_default_request()
     ccall((:z_internal_congestion_control_default_request, libzenohc), z_congestion_control_t, ())
 end
 
-function z_internal_congestion_control_default_response()
-    ccall((:z_internal_congestion_control_default_response, libzenohc), z_congestion_control_t, ())
-end
-
 function z_keyexpr_as_view_string(this_, out_string)
     ccall((:z_keyexpr_as_view_string, libzenohc), Cvoid, (Ptr{z_loaned_keyexpr_t}, Ptr{z_view_string_t}), this_, out_string)
 end
@@ -4105,6 +4120,10 @@ end
 
 function z_liveliness_undeclare_token(this_)
     ccall((:z_liveliness_undeclare_token, libzenohc), z_result_t, (Ptr{z_moved_liveliness_token_t},), this_)
+end
+
+function z_locality_default()
+    ccall((:z_locality_default, libzenohc), z_locality_t, ())
 end
 
 function z_mutex_init(this_)
@@ -4209,6 +4228,10 @@ end
 
 function z_querier_options_default(this_)
     ccall((:z_querier_options_default, libzenohc), Cvoid, (Ptr{z_querier_options_t},), this_)
+end
+
+function z_query_accepts_replies(this_)
+    ccall((:z_query_accepts_replies, libzenohc), z_reply_keyexpr_t, (Ptr{z_loaned_query_t},), this_)
 end
 
 function z_query_attachment(this_)
@@ -4337,6 +4360,10 @@ end
 
 function z_reply_is_ok(this_)
     ccall((:z_reply_is_ok, libzenohc), Bool, (Ptr{z_loaned_reply_t},), this_)
+end
+
+function z_reply_keyexpr_default()
+    ccall((:z_reply_keyexpr_default, libzenohc), z_reply_keyexpr_t, ())
 end
 
 function z_reply_ok(this_)
@@ -4704,7 +4731,7 @@ function zc_internal_encoding_get_data(this_)
 end
 
 function zc_locality_default()
-    ccall((:zc_locality_default, libzenohc), zc_locality_t, ())
+    ccall((:zc_locality_default, libzenohc), z_locality_t, ())
 end
 
 function zc_stop_z_runtime()
@@ -5007,13 +5034,13 @@ function z_free(ptr)
     ccall((:z_free, libzenohc), Cvoid, (Ptr{Cvoid},), ptr)
 end
 
-const ZENOH_C = "1.6.2"
+const ZENOH_C = "1.9.0"
 
 const ZENOH_C_MAJOR = 1
 
-const ZENOH_C_MINOR = 6
+const ZENOH_C_MINOR = 9
 
-const ZENOH_C_PATCH = 2
+const ZENOH_C_PATCH = 0
 
 const DEFAULT_SCOUTING_TIMEOUT = 1000
 
@@ -5050,16 +5077,6 @@ const Z_EAGAIN_MUTEX = -11
 const Z_EPOISON_MUTEX = -22
 
 const Z_EGENERIC = INT8_MIN
-
-const Z_CONGESTION_CONTROL_DEFAULT = Z_CONGESTION_CONTROL_DROP
-
-const Z_CONSOLIDATION_MODE_DEFAULT = Z_CONSOLIDATION_MODE_AUTO
-
-const Z_PRIORITY_DEFAULT = Z_PRIORITY_DATA
-
-const Z_QUERY_TARGET_DEFAULT = Z_QUERY_TARGET_BEST_MATCHING
-
-const Z_SAMPLE_KIND_DEFAULT = Z_SAMPLE_KIND_PUT
 
 const Z_CONFIG_MODE_KEY = "mode"
 
