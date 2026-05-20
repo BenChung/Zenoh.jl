@@ -67,6 +67,16 @@ try
         @test length(cs) == 5
     end
 
+    @testset "Keyexpr macro" begin
+        k = kexpr"test/macro"
+        @test k isa Zenoh.Keyexpr
+        # `**/**` is non-canonical (collapses to `**`); strict rejects, `c` accepts.
+        @test_throws Zenoh.ZenohError kexpr"**/**"
+        @test kexpr"**/**"c isa Zenoh.Keyexpr
+        # Unknown flag rejected at macro expansion.
+        @test_throws ArgumentError @macroexpand kexpr"whatever"x
+    end
+
     @testset "ZBytes iteration" begin
         # Covers the iterate(::ZBytes) path, which must loan the underlying
         # z_owned_bytes_t before calling z_bytes_get_slice_iterator.

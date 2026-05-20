@@ -250,7 +250,7 @@ struct Keyexpr
         res = new(k)
         if autocanonize
             rtc = LibZenohC.z_keyexpr_from_str_autocanonize(res.k, pointer(s)) # copies but we shouldn't do much of this
-        else 
+        else
             rtc = LibZenohC.z_keyexpr_from_str(res.k, pointer(s))
         end
         _handle_result(rtc)
@@ -258,6 +258,24 @@ struct Keyexpr
         return res
     end
 end
+
+"""
+    kexpr"key/expr"
+    kexpr"key//expr"c
+
+String macro for constructing a `Keyexpr`. The `c` flag opts into
+autocanonicalization (collapses `//` and similar).
+"""
+macro kexpr_str(s, flags="")
+    autocanonize = false
+    for c in flags
+        c == 'c' || throw(ArgumentError("unknown kexpr flag '$c'; only 'c' is supported"))
+        autocanonize = true
+    end
+    return :(Keyexpr($s; autocanonize=$autocanonize))
+end
+
+export Keyexpr, @kexpr_str
 
 struct Sample{S <: Union{Base.RefValue{LibZenohC.z_owned_sample_t},
                          Ptr{LibZenohC.z_loaned_sample_t}}}
