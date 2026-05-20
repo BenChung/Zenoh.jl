@@ -30,6 +30,34 @@ end
 
 # --- Callback-form get ----------------------------------------------
 
+# Shared callback-get lifecycle. `call_fn(closure) -> rtc` performs
+# whichever C entrypoint (`z_get` / `z_liveliness_get`) consumes the
+# closure. The consume task is spawned before the C call so it's
+# already waiting when libzenohc starts delivering replies. On error
+# the closure's drop callback fires regardless (libzenohc owns it),
+# so we always wait for the task before destroying the ctx.
+function _callback_get(call_fn::F, f::Function;
+        should_close_on_error::Bool=true) where F
+    ctx = CallbackCtx{LibZenohC.z_owned_reply_t}()
+    async_cond = Base.AsyncCondition()
+    init_ctx!(ctx, async_cond)
+
+    closure = Ref{LibZenohC.z_owned_closure_reply_t}()
+    LibZenohC.z_closure_reply(closure, GET_CALL_CB[], GET_DROP_CB[], ctx_p(ctx))
+
+    task = Threads.@spawn consume(f, Reply, ctx, async_cond, should_close_on_error)
+
+    rtc = GC.@preserve ctx call_fn(closure)
+
+    # Whether rtc is Z_OK or not, libzenohc has either delivered every
+    # reply or already invoked the drop callback (which flips closing
+    # → wakes the consumer). Either way, wait then destroy.
+    wait(task)
+    destroy_ctx!(ctx, async_cond, REPLY_DROP_FP[], LibZenohC.z_moved_reply_t)
+    rtc == LibZenohC.Z_OK || _handle_result(rtc)
+    return nothing
+end
+
 """
     get(f, s::Session, k::Keyexpr, parameters=""; kwargs...)
 
@@ -56,10 +84,6 @@ function get(f::Function, s::Session, k::Keyexpr,
         payload = nothing,
         encoding::Union{Nothing, Encoding, AbstractString, Base.MIME} = nothing,
         attachment = nothing)
-    ctx = CallbackCtx{LibZenohC.z_owned_reply_t}()
-    async_cond = Base.AsyncCondition()
-    init_ctx!(ctx, async_cond)
-
     opts = Ref{LibZenohC.z_get_options_t}()
     LibZenohC.z_get_options_default(opts)
     optsP = Base.unsafe_convert(Ptr{LibZenohC.z_get_options_t}, opts)
@@ -74,29 +98,12 @@ function get(f::Function, s::Session, k::Keyexpr,
     isnothing(attach_bytes)  || (optsP.attachment = _move(attach_bytes))
     isnothing(enc_ref)       || (optsP.encoding   = _move(enc_ref))
 
-    closure = Ref{LibZenohC.z_owned_closure_reply_t}()
-    LibZenohC.z_closure_reply(closure, GET_CALL_CB[], GET_DROP_CB[], ctx_p(ctx))
-
-    task = Threads.@spawn consume(f, Reply, ctx, async_cond, should_close_on_error)
-
     params = String(parameters)
-    rtc = GC.@preserve ctx payload_bytes attach_bytes enc_ref params opts begin
-        LibZenohC.z_get(_loan(s), _loan(k),
-            pointer(Base.unsafe_convert(Cstring, params)),
-            _move(closure), opts)
+    _callback_get(f; should_close_on_error=should_close_on_error) do closure
+        GC.@preserve payload_bytes attach_bytes enc_ref params opts begin
+            LibZenohC.z_get(_loan(s), _loan(k),
+                pointer(Base.unsafe_convert(Cstring, params)),
+                _move(closure), opts)
+        end
     end
-    if rtc != LibZenohC.Z_OK
-        # z_get took ownership of the closure even on error: its drop
-        # callback will fire and the consume task will see closing.
-        # Wait for it, then surface the error.
-        wait(task)
-        destroy_ctx!(ctx, async_cond, REPLY_DROP_FP[], LibZenohC.z_moved_reply_t)
-        _handle_result(rtc)
-    end
-
-    # The consume task exits once libzenohc drops the closure (all
-    # replies delivered or timeout). No explicit close needed.
-    wait(task)
-    destroy_ctx!(ctx, async_cond, REPLY_DROP_FP[], LibZenohC.z_moved_reply_t)
-    return nothing
 end

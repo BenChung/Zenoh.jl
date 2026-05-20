@@ -115,6 +115,12 @@ end
 
 # ── Channel-handler subscriber ───────────────────────────────────────
 
+# Abstract supertype shared with LivelinessSubscriberHandler. Both
+# subtypes wrap the same `z_owned_subscriber_t` + channel handler, only
+# the declare entrypoint differs; the recv/iterate machinery is shared
+# via dispatch on this supertype.
+abstract type AbstractSubscriberHandler{HType, Mode} end
+
 """
     SubscriberHandler
 
@@ -125,13 +131,27 @@ Blocking recv runs on a libuv worker thread (`@threadcall`), so other
 Julia tasks — including `close(sub)` from a sibling task — run
 concurrently while iteration waits.
 """
-struct SubscriberHandler{HType, Mode}
+struct SubscriberHandler{HType, Mode} <: AbstractSubscriberHandler{HType, Mode}
     sub::Base.RefValue{LibZenohC.z_owned_subscriber_t}
     h::Base.RefValue{HType}
     keyexpr::Keyexpr
 end
 
-function Base.iterate(sh::SubscriberHandler{H, M}, ::Any=nothing) where {H, M}
+# Shared buffered-subscriber construction. `declare_fn(sub, closure) -> rtc`
+# picks the C declare entrypoint and supplies any extra options. `T`
+# is the concrete handler type (a UnionAll with two type parameters)
+# to construct on success.
+function _open_buffered_sub(declare_fn::F, ::Type{T}, k::Keyexpr,
+        channel::Symbol, capacity::Integer) where {F, T<:AbstractSubscriberHandler}
+    closure = Ref{LibZenohC.z_owned_closure_sample_t}()
+    handler = _new_sample_channel(closure, Val(channel), capacity)
+    sub = Ref{LibZenohC.z_owned_subscriber_t}()
+    rtc = declare_fn(sub, closure)
+    _handle_result(rtc)
+    return T{eltype(typeof(handler)), channel}(sub, handler, k)
+end
+
+function Base.iterate(sh::AbstractSubscriberHandler{H, M}, ::Any=nothing) where {H, M}
     owned = Ref{LibZenohC.z_owned_sample_t}()
     rtc = GC.@preserve sh owned _sample_recv(Val(M), _loan(sh.h),
         Base.unsafe_convert(Ptr{LibZenohC.z_owned_sample_t}, owned))
@@ -140,7 +160,7 @@ function Base.iterate(sh::SubscriberHandler{H, M}, ::Any=nothing) where {H, M}
     throw(ZenohError(rtc))
 end
 
-function Base.take!(sh::SubscriberHandler{H, M}) where {H, M}
+function Base.take!(sh::AbstractSubscriberHandler{H, M}) where {H, M}
     owned = Ref{LibZenohC.z_owned_sample_t}()
     rtc = GC.@preserve sh owned _sample_recv(Val(M), _loan(sh.h),
         Base.unsafe_convert(Ptr{LibZenohC.z_owned_sample_t}, owned))
@@ -148,7 +168,7 @@ function Base.take!(sh::SubscriberHandler{H, M}) where {H, M}
     throw(ZenohError(rtc))
 end
 
-function tryrecv!(sh::SubscriberHandler{H, M}) where {H, M}
+function tryrecv!(sh::AbstractSubscriberHandler{H, M}) where {H, M}
     owned = Ref{LibZenohC.z_owned_sample_t}()
     rtc = _sample_try_recv(Val(M), _loan(sh.h), owned)
     rtc == LibZenohC.Z_OK && return Sample(owned)
@@ -156,12 +176,12 @@ function tryrecv!(sh::SubscriberHandler{H, M}) where {H, M}
     throw(ZenohError(rtc))
 end
 
-function Base.close(sh::SubscriberHandler)
+function Base.close(sh::AbstractSubscriberHandler)
     _handle_result(LibZenohC.z_undeclare_subscriber(_move(sh.sub)))
 end
 
-Base.IteratorSize(::Type{<:SubscriberHandler}) = Base.SizeUnknown()
-Base.eltype(::Type{<:SubscriberHandler}) = Sample
+Base.IteratorSize(::Type{<:AbstractSubscriberHandler}) = Base.SizeUnknown()
+Base.eltype(::Type{<:AbstractSubscriberHandler}) = Sample
 
 # ── Channel-handler get / reply consumer ─────────────────────────────
 

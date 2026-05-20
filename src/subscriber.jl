@@ -33,6 +33,12 @@ end
 
 # --- Julia-side Subscriber -------------------------------------------
 
+# Abstract supertype shared with LivelinessSubscriber. Concrete subtypes
+# must hold the same fields (sub, ctx, async_cond, task, keyexpr, closed);
+# Julia doesn't inherit fields, so the layout is duplicated but the
+# close() lifecycle is shared via dispatch on this supertype.
+abstract type AbstractCallbackSubscriber end
+
 """
     Subscriber
 
@@ -42,13 +48,39 @@ the previous one if not yet consumed) and wakes a Julia task; slow
 consumers see only the latest message. Use
 `open(s, k; channel=:fifo)` for queued semantics.
 """
-mutable struct Subscriber
+mutable struct Subscriber <: AbstractCallbackSubscriber
     sub::Base.RefValue{LibZenohC.z_owned_subscriber_t}
     ctx::CallbackCtx{LibZenohC.z_owned_sample_t}
     async_cond::Base.AsyncCondition
     task::Task
     keyexpr::Keyexpr  # GC pin
     closed::Bool
+end
+
+# Shared callback-subscriber construction. `declare_fn(sub, closure) -> rtc`
+# picks the C declare entrypoint (data vs. liveliness) and supplies any
+# extra options. `T` is the concrete subscriber type to construct on
+# success.
+function _open_callback_sub(declare_fn::F, ::Type{T}, f::Function,
+        k::Keyexpr; should_close_on_error::Bool=true) where {F, T<:AbstractCallbackSubscriber}
+    ctx = CallbackCtx{LibZenohC.z_owned_sample_t}()
+    async_cond = Base.AsyncCondition()
+    init_ctx!(ctx, async_cond)
+
+    closure = Ref{LibZenohC.z_owned_closure_sample_t}()
+    LibZenohC.z_closure_sample(closure, SUB_CALL_CB[], SUB_DROP_CB[], ctx_p(ctx))
+
+    sub = Ref{LibZenohC.z_owned_subscriber_t}()
+    rtc = GC.@preserve ctx declare_fn(sub, closure)
+    if rtc != LibZenohC.Z_OK
+        # declare failed before the closure was installed → drop cb will fire
+        # via z_closure_sample's own ownership machinery. Just clean Julia-side.
+        destroy_ctx!(ctx, async_cond, SAMPLE_DROP_FP[], LibZenohC.z_moved_sample_t)
+        _handle_result(rtc)
+    end
+
+    task = Threads.@spawn consume(f, Sample, ctx, async_cond, should_close_on_error)
+    return T(sub, ctx, async_cond, task, k, false)
 end
 
 """
@@ -66,28 +98,14 @@ the cell until `close(sub)` is called.
 """
 function Base.open(f::Function, s::Session, k::Keyexpr;
         should_close_on_error::Bool=true)
-    ctx = CallbackCtx{LibZenohC.z_owned_sample_t}()
-    async_cond = Base.AsyncCondition()
-    init_ctx!(ctx, async_cond)
-
-    closure = Ref{LibZenohC.z_owned_closure_sample_t}()
-    LibZenohC.z_closure_sample(closure, SUB_CALL_CB[], SUB_DROP_CB[], ctx_p(ctx))
-
-    sub = Ref{LibZenohC.z_owned_subscriber_t}()
-    rtc = GC.@preserve ctx LibZenohC.z_declare_subscriber(
-        _loan(s), sub, _loan(k), _move(closure), C_NULL)
-    if rtc != LibZenohC.Z_OK
-        # declare failed before the closure was installed → drop cb will fire
-        # via z_closure_sample's own ownership machinery. Just clean Julia-side.
-        destroy_ctx!(ctx, async_cond, SAMPLE_DROP_FP[], LibZenohC.z_moved_sample_t)
-        _handle_result(rtc)
+    _open_callback_sub(Subscriber, f, k;
+            should_close_on_error=should_close_on_error) do sub, closure
+        LibZenohC.z_declare_subscriber(_loan(s), sub, _loan(k),
+            _move(closure), C_NULL)
     end
-
-    task = Threads.@spawn consume(f, Sample, ctx, async_cond, should_close_on_error)
-    return Subscriber(sub, ctx, async_cond, task, k, false)
 end
 
-function Base.close(sub::Subscriber)
+function Base.close(sub::AbstractCallbackSubscriber)
     sub.closed && return
     sub.closed = true
 

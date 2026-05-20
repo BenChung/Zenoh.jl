@@ -549,6 +549,119 @@ try
             close(s)
         end
     end
+
+    @testset "Liveliness token + buffered subscriber" begin
+        c = Zenoh.Config(; str = """{connect: { endpoints: ["tcp/localhost:19148"]}}""")
+        s = open(c)
+        sub = nothing
+        tok = nothing
+        try
+            test_key = Zenoh.Keyexpr("test/liveliness/buffered")
+            sub = Zenoh.LivelinessSubscriberHandler(s, test_key; capacity=8)
+
+            # Empty before any token: tryrecv! must not block.
+            @test Zenoh.tryrecv!(sub) === nothing
+
+            # Declare → subscriber sees a PUT announcing the token.
+            tok = Zenoh.LivelinessToken(s, test_key)
+            put_sample = take!(sub)
+            @test put_sample isa Zenoh.Sample
+            @test Zenoh.kind(put_sample) == Zenoh.LibZenohC.Z_SAMPLE_KIND_PUT
+            @test Zenoh.keyexpr(put_sample) == "test/liveliness/buffered"
+
+            # Undeclare → subscriber sees a DELETE.
+            close(tok)
+            tok = nothing
+            del_sample = take!(sub)
+            @test Zenoh.kind(del_sample) == Zenoh.LibZenohC.Z_SAMPLE_KIND_DELETE
+        finally
+            !isnothing(tok) && close(tok)
+            !isnothing(sub) && close(sub)
+            close(s)
+        end
+    end
+
+    @testset "Liveliness callback subscriber" begin
+        c = Zenoh.Config(; str = """{connect: { endpoints: ["tcp/localhost:19148"]}}""")
+        s = open(c)
+        sub = nothing
+        tok = nothing
+        try
+            test_key = Zenoh.Keyexpr("test/liveliness/callback")
+            seen = Channel{Zenoh.LibZenohC.z_sample_kind_t}(4)
+            sub = Zenoh.LivelinessSubscriber((sample) -> put!(seen, Zenoh.kind(sample)),
+                s, test_key)
+
+            tok = Zenoh.LivelinessToken(s, test_key)
+            @test take!(seen) == Zenoh.LibZenohC.Z_SAMPLE_KIND_PUT
+
+            close(tok); tok = nothing
+            @test take!(seen) == Zenoh.LibZenohC.Z_SAMPLE_KIND_DELETE
+        finally
+            !isnothing(tok) && close(tok)
+            !isnothing(sub) && close(sub)
+            close(s)
+        end
+    end
+
+    @testset "Liveliness history replay" begin
+        # history=true should replay existing tokens to a late subscriber.
+        c = Zenoh.Config(; str = """{connect: { endpoints: ["tcp/localhost:19148"]}}""")
+        s = open(c)
+        sub = nothing
+        tok = nothing
+        try
+            test_key = Zenoh.Keyexpr("test/liveliness/history")
+            tok = Zenoh.LivelinessToken(s, test_key)
+            sleep(0.1)  # let the token propagate before the late subscribe
+
+            sub = Zenoh.LivelinessSubscriberHandler(s, test_key;
+                capacity=4, history=true)
+            sample = take!(sub)
+            @test Zenoh.kind(sample) == Zenoh.LibZenohC.Z_SAMPLE_KIND_PUT
+            @test Zenoh.keyexpr(sample) == "test/liveliness/history"
+        finally
+            !isnothing(tok) && close(tok)
+            !isnothing(sub) && close(sub)
+            close(s)
+        end
+    end
+
+    @testset "liveliness_get snapshot" begin
+        c = Zenoh.Config(; str = """{connect: { endpoints: ["tcp/localhost:19148"]}}""")
+        s = open(c)
+        tok = nothing
+        try
+            test_key_str = "test/liveliness/snapshot"
+            test_key = Zenoh.Keyexpr(test_key_str)
+
+            # Empty snapshot before declare.
+            empty = Zenoh.liveliness_get(s, test_key; timeout_ms=300)
+            @test collect(empty) isa Vector{Zenoh.Reply}
+
+            tok = Zenoh.LivelinessToken(s, test_key)
+            sleep(0.1)  # token must reach the router before the snapshot
+
+            handler = Zenoh.liveliness_get(s, test_key; timeout_ms=1000)
+            seen_keys = String[]
+            for reply in handler
+                if Zenoh.is_ok(reply)
+                    push!(seen_keys, Zenoh.keyexpr(Zenoh.sample(reply)))
+                end
+            end
+            @test test_key_str in seen_keys
+
+            # Callback form: must invoke f at least once for the live token.
+            count = Ref(0)
+            Zenoh.liveliness_get(s, test_key; timeout_ms=1000) do reply
+                Zenoh.is_ok(reply) && (count[] += 1)
+            end
+            @test count[] >= 1
+        finally
+            !isnothing(tok) && close(tok)
+            close(s)
+        end
+    end
 finally
     kill(router)
 end

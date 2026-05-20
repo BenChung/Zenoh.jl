@@ -429,17 +429,15 @@ iteration will then terminate once buffered samples are drained.
 """
 function Base.open(s::Session, k::Keyexpr;
         channel::Symbol = :fifo, capacity::Integer = 16)
-    closure = Ref{LibZenohC.z_owned_closure_sample_t}()
-    handler = _new_sample_channel(closure, Val(channel), capacity)
-    sub = Ref{LibZenohC.z_owned_subscriber_t}()
-    rtc = LibZenohC.z_declare_subscriber(_loan(s), sub, _loan(k),
-        _move(closure), C_NULL)
-    _handle_result(rtc)
-    return SubscriberHandler{eltype(typeof(handler)), channel}(sub, handler, k)
+    _open_buffered_sub(SubscriberHandler, k, channel, capacity) do sub, closure
+        LibZenohC.z_declare_subscriber(_loan(s), sub, _loan(k),
+            _move(closure), C_NULL)
+    end
 end
 
 include("subscriber.jl")
 include("get_callback.jl")
+include("liveliness.jl")
 
 function setup_logging()
     _handle_result(LibZenohC.zc_init_log_from_env_or("info"))
