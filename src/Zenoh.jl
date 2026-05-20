@@ -5,6 +5,7 @@ include("ownership.jl")
 include("result.jl")
 include("config.jl")
 include("session.jl")
+include("callback.jl")
 
 
 
@@ -258,11 +259,6 @@ struct Keyexpr
     end
 end
 
-struct Subscriber{TC}
-    sub::Base.RefValue{LibZenohC.z_owned_subscriber_t}
-    keyexpr::Keyexpr
-    sub_ctx::Base.RefValue{TC}
-end
 struct Sample{S <: Union{Base.RefValue{LibZenohC.z_owned_sample_t},
                          Ptr{LibZenohC.z_loaned_sample_t}}}
     s::S
@@ -276,42 +272,6 @@ end
 
 _loaned_sample(s::Sample{Ptr{LibZenohC.z_loaned_sample_t}}) = s.s
 _loaned_sample(s::Sample{Base.RefValue{LibZenohC.z_owned_sample_t}}) = _loan(s.s)
-
-const in_trim = hasfield(typeof(Base.JLOptions()), :trim) ? (Base.JLOptions().trim != 0) : false
-
-"""
-Subscribe to keyexpr `k` in session `s`, calling handler `f`.
-"""
-function Base.open(f::Function, s::Session, k::Keyexpr; should_close_on_error=true)
-    sub_ref::Base.RefValue{Union{Subscriber, Nothing}} = Base.RefValue{Union{Subscriber, Nothing}}(nothing)
-    sub_func, sub_ctx = cclosure(2, Cvoid, (Ptr{LibZenohC.z_loaned_sample_t}, )) do sample 
-        try
-            f(Sample(sample))
-        catch e
-            if in_trim
-                ccall(:jl_, Cvoid, (Any,), e)
-            else
-            #Base.showerror(stderr, e, catch_backtrace())
-                if should_close_on_error && !isnothing(sub_ref[])
-                    close(sub_ref[])
-                end
-            end
-        end
-        nothing
-    end
-    sub = Subscriber{typeof(sub_ctx)}(Ref{LibZenohC.z_owned_subscriber_t}(), k, Ref{typeof(sub_ctx)}())
-    sub_ref[] = sub
-    sub.sub_ctx[] = sub_ctx
-    sub_closure = Ref{LibZenohC.z_owned_closure_sample_t}()
-    LibZenohC.z_closure_sample(sub_closure, sub_func, C_NULL, sub.sub_ctx)
-
-    ret = LibZenohC.z_declare_subscriber(_loan(s), sub.sub, _loan(k), _move(sub_closure), C_NULL)
-    _handle_result(ret)
-    return sub
-end
-function Base.close(s::Subscriber)
-    _handle_result(LibZenohC.z_undeclare_subscriber(_move(s.sub)))
-end
 
 struct Publisher
     pub::Base.RefValue{LibZenohC.z_owned_publisher_t}
@@ -460,6 +420,9 @@ function Base.open(s::Session, k::Keyexpr;
     return SubscriberHandler{eltype(typeof(handler)), channel}(sub, handler, k)
 end
 
+include("subscriber.jl")
+include("get_callback.jl")
+
 function setup_logging()
     _handle_result(LibZenohC.zc_init_log_from_env_or("info"))
 end
@@ -468,5 +431,15 @@ end
 _loan(s::Session) = _loan(s.s)
 _loan(s::Keyexpr) = _loan(s.k)
 _move(p::ZBytes) = _move(p.b)
+
+# Build all @cfunction pointers + dlsym lookups at runtime. Each
+# callback file registered a hook via `_register_init!` in callback.jl;
+# they all fire here. @cfunction at module top level would serialize a
+# JIT address into the precompile image — invalid on reload.
+function __init__()
+    for hook in _CB_INIT_HOOKS
+        hook()
+    end
+end
 
 end # module Zenoh
