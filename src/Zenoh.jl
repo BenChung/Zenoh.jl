@@ -263,9 +263,19 @@ struct Subscriber{TC}
     keyexpr::Keyexpr
     sub_ctx::Base.RefValue{TC}
 end
-struct Sample 
-    s::Ptr{LibZenohC.z_loaned_sample_t}
+struct Sample{S <: Union{Base.RefValue{LibZenohC.z_owned_sample_t},
+                         Ptr{LibZenohC.z_loaned_sample_t}}}
+    s::S
 end
+Sample(p::Ptr{LibZenohC.z_loaned_sample_t}) =
+    Sample{Ptr{LibZenohC.z_loaned_sample_t}}(p)
+function Sample(r::Base.RefValue{LibZenohC.z_owned_sample_t})
+    finalizer(x -> LibZenohC.z_sample_drop(_move(x)), r)
+    return Sample{Base.RefValue{LibZenohC.z_owned_sample_t}}(r)
+end
+
+_loaned_sample(s::Sample{Ptr{LibZenohC.z_loaned_sample_t}}) = s.s
+_loaned_sample(s::Sample{Base.RefValue{LibZenohC.z_owned_sample_t}}) = _loan(s.s)
 
 const in_trim = hasfield(typeof(Base.JLOptions()), :trim) ? (Base.JLOptions().trim != 0) : false
 
@@ -392,7 +402,7 @@ function put(s::Session, k::Keyexpr, payload; kwargs...)
 end
 
 function timestamp(s::Sample)
-    ts = LibZenohC.z_sample_timestamp(s.s)
+    ts = LibZenohC.z_sample_timestamp(_loaned_sample(s))
     if ts == C_NULL
         return nothing
     else
@@ -401,13 +411,13 @@ function timestamp(s::Sample)
 end
 
 function payload(s::Sample)
-    return ZBytes(LibZenohC.z_sample_payload(s.s))
+    return ZBytes(LibZenohC.z_sample_payload(_loaned_sample(s)))
 end
 
-kind(s::Sample) = LibZenohC.z_sample_kind(s.s)
+kind(s::Sample) = LibZenohC.z_sample_kind(_loaned_sample(s))
 
 function keyexpr(s::Sample)
-    ke = LibZenohC.z_sample_keyexpr(s.s)
+    ke = LibZenohC.z_sample_keyexpr(_loaned_sample(s))
     view = Ref{LibZenohC.z_view_string_t}()
     LibZenohC.z_keyexpr_as_view_string(ke, view)
     loaned = LibZenohC.z_view_string_loan(view)
@@ -415,7 +425,7 @@ function keyexpr(s::Sample)
 end
 
 function attachment(s::Sample)
-    a = LibZenohC.z_sample_attachment(s.s)
+    a = LibZenohC.z_sample_attachment(_loaned_sample(s))
     if a == C_NULL
         return nothing
     else
@@ -423,12 +433,31 @@ function attachment(s::Sample)
     end
 end
 
-congestion_control(s::Sample) = LibZenohC.z_sample_congestion_control(s.s)
-priority(s::Sample) = LibZenohC.z_sample_priority(s.s)
-express(s::Sample) = LibZenohC.z_sample_express(s.s)
+congestion_control(s::Sample) = LibZenohC.z_sample_congestion_control(_loaned_sample(s))
+priority(s::Sample) = LibZenohC.z_sample_priority(_loaned_sample(s))
+express(s::Sample) = LibZenohC.z_sample_express(_loaned_sample(s))
 
 function encoding(s::Sample)
-    return _from_loaned_encoding(LibZenohC.z_sample_encoding(s.s))
+    return _from_loaned_encoding(LibZenohC.z_sample_encoding(_loaned_sample(s)))
+end
+
+include("channel.jl")
+
+"""
+Subscribe to keyexpr `k` in session `s` with a buffered channel handler.
+Returns a `SubscriberHandler` that can be iterated or polled with
+`take!`/`tryrecv!`. Call `close(sub)` to undeclare the subscriber;
+iteration will then terminate once buffered samples are drained.
+"""
+function Base.open(s::Session, k::Keyexpr;
+        channel::Symbol = :fifo, capacity::Integer = 16)
+    closure = Ref{LibZenohC.z_owned_closure_sample_t}()
+    handler = _new_sample_channel(closure, Val(channel), capacity)
+    sub = Ref{LibZenohC.z_owned_subscriber_t}()
+    rtc = LibZenohC.z_declare_subscriber(_loan(s), sub, _loan(k),
+        _move(closure), C_NULL)
+    _handle_result(rtc)
+    return SubscriberHandler{eltype(typeof(handler)), channel}(sub, handler, k)
 end
 
 function setup_logging()

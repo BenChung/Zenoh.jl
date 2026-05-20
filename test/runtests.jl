@@ -386,6 +386,159 @@ try
             close(s)
         end
     end
+    @testset "Buffered subscriber" begin
+        c = Zenoh.Config(; str = """{connect: { endpoints: ["tcp/localhost:19148"]}}""")
+        s = open(c)
+        sub = nothing
+        pub = nothing
+
+        try
+            test_key = Zenoh.Keyexpr("test/buffered_sub")
+            sub = open(s, test_key; channel=:fifo, capacity=8)
+            pub = Zenoh.Publisher(s, test_key)
+
+            # tryrecv! on empty channel returns nothing.
+            @test Zenoh.tryrecv!(sub) === nothing
+
+            # Single round-trip: take! blocks until a sample is available.
+            Zenoh.put(pub, "hi-fifo")
+            sample = take!(sub)
+            @test sample isa Zenoh.Sample
+            @test Zenoh.keyexpr(sample) == "test/buffered_sub"
+            open(Zenoh.payload(sample), Val(:read)) do io
+                @test read(io, String) == "hi-fifo"
+            end
+
+            # Iteration on one task, close from another. Because recv uses
+            # @threadcall, the iter task cooperatively waits while the main
+            # task runs close(sub); the close drops the closure, the channel
+            # disconnects, and iteration terminates.
+            for i in 1:3
+                Zenoh.put(pub, "msg-$i")
+            end
+
+            collected = String[]
+            done = Channel{Nothing}(1)
+            iter_task = @async begin
+                try
+                    for sample in sub
+                        open(Zenoh.payload(sample), Val(:read)) do io
+                            push!(collected, read(io, String))
+                        end
+                    end
+                finally
+                    put!(done, nothing)
+                end
+            end
+            sleep(0.2)
+            close(sub)
+            take!(done)
+            @test istaskdone(iter_task)
+            @test !istaskfailed(iter_task)
+            @test "msg-1" in collected
+            @test "msg-2" in collected
+            @test "msg-3" in collected
+            sub = nothing  # already closed
+        finally
+            if !isnothing(sub)
+                close(sub)
+            end
+            if !isnothing(pub)
+                close(pub)
+            end
+            close(s)
+        end
+    end
+
+    @testset "Buffered subscriber (ring)" begin
+        c = Zenoh.Config(; str = """{connect: { endpoints: ["tcp/localhost:19148"]}}""")
+        s = open(c)
+        sub = nothing
+        pub = nothing
+
+        try
+            test_key = Zenoh.Keyexpr("test/buffered_sub_ring")
+            sub = open(s, test_key; channel=:ring, capacity=1)
+            pub = Zenoh.Publisher(s, test_key)
+
+            for i in 1:5
+                Zenoh.put(pub, "ring-$i")
+            end
+            sleep(0.2)
+
+            # Ring with capacity 1 retains at most one sample at any
+            # instant; drain whatever survived without depending on ordering.
+            # Iterate on a sibling task; close from main interrupts the wait.
+            collected = String[]
+            done = Channel{Nothing}(1)
+            @async begin
+                try
+                    for sample in sub
+                        open(Zenoh.payload(sample), Val(:read)) do io
+                            push!(collected, read(io, String))
+                        end
+                    end
+                finally
+                    put!(done, nothing)
+                end
+            end
+            sleep(0.2)
+            close(sub)
+            take!(done)
+            @test all(s -> startswith(s, "ring-"), collected)
+            sub = nothing
+        finally
+            if !isnothing(sub)
+                close(sub)
+            end
+            if !isnothing(pub)
+                close(pub)
+            end
+            close(s)
+        end
+    end
+
+    @testset "Get/Reply" begin
+        c = Zenoh.Config(; str = """{connect: { endpoints: ["tcp/localhost:19148"]}}""")
+        s = open(c)
+
+        try
+            # Plumbing test: querying a key with no queryable should return
+            # an empty iterator (no replies) without throwing.
+            handler = Zenoh.get(s, Zenoh.Keyexpr("test/no_one_replies");
+                timeout_ms=200)
+            replies = collect(handler)
+            @test replies isa Vector{Zenoh.Reply}
+
+            # Optional admin-space query — if the router exposes any keys
+            # matching this pattern, we verify is_ok/sample plumbing on the
+            # returned replies.
+            handler2 = Zenoh.get(s, Zenoh.Keyexpr("@/**"); timeout_ms=2000)
+            for reply in handler2
+                @test reply isa Zenoh.Reply
+                if Zenoh.is_ok(reply)
+                    samp = Zenoh.sample(reply)
+                    @test samp isa Zenoh.Sample
+                    # Accessors should work on owned samples coming through.
+                    @test Zenoh.keyexpr(samp) isa String
+                else
+                    @test Zenoh.error_encoding(reply) isa Zenoh.Encoding
+                end
+            end
+
+            # target/consolidation options + ring mode + moved payload/encoding
+            # paths all wired.
+            handler3 = Zenoh.get(s, Zenoh.Keyexpr("test/no_one_replies");
+                channel=:ring, capacity=4,
+                target=:all, consolidation=:none,
+                timeout_ms=200,
+                payload="hi", encoding=Zenoh.Encodings.APPLICATION_JSON,
+                attachment="meta")
+            @test collect(handler3) isa Vector{Zenoh.Reply}
+        finally
+            close(s)
+        end
+    end
 finally
     kill(router)
 end
