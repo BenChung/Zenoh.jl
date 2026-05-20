@@ -6,6 +6,7 @@ include("result.jl")
 include("config.jl")
 include("session.jl")
 include("callback.jl")
+include("closure_kinds.jl")
 
 
 

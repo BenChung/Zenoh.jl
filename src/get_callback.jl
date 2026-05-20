@@ -1,32 +1,9 @@
 # Single-slot overwrite-on-full callback get. Shared latest-wins
-# machinery lives in `callback.jl`; this file binds it to
-# `z_loaned_reply_t` / `z_owned_reply_t` and wires up the blocking
-# `get(f, s, k, params; …)` form.
-
-# --- Foreign-thread trampolines --------------------------------------
-
-function reply_call_trampoline(reply::Ptr{LibZenohC.z_loaned_reply_t},
-        ctx::Ptr{Cvoid})
-    call_body!(reply, ctx, REPLY_CLONE_FP[], REPLY_DROP_FP[],
-        LibZenohC.z_owned_reply_t, LibZenohC.z_moved_reply_t)
-end
-
-function reply_drop_trampoline(ctx::Ptr{Cvoid})
-    drop_body!(ctx, LibZenohC.z_owned_reply_t)
-end
-
-const GET_CALL_CB    = Ref{Ptr{Cvoid}}(C_NULL)
-const GET_DROP_CB    = Ref{Ptr{Cvoid}}(C_NULL)
-const REPLY_CLONE_FP = Ref{Ptr{Cvoid}}(C_NULL)
-const REPLY_DROP_FP  = Ref{Ptr{Cvoid}}(C_NULL)
-
-_register_init!() do
-    GET_CALL_CB[] = @cfunction(reply_call_trampoline, Cvoid,
-        (Ptr{LibZenohC.z_loaned_reply_t}, Ptr{Cvoid}))
-    GET_DROP_CB[] = @cfunction(reply_drop_trampoline, Cvoid, (Ptr{Cvoid},))
-    REPLY_CLONE_FP[] = cglobal((:z_reply_clone, LibZenohC.libzenohc))
-    REPLY_DROP_FP[]  = cglobal((:z_reply_drop,  LibZenohC.libzenohc))
-end
+# machinery lives in `callback.jl`; the per-kind trampolines and
+# `cglobal` lookups are stamped out by `@closure_kind :reply` in
+# `closure_kinds.jl`. This file wires up the blocking `get(f, s, k, …)`
+# form (and the parallel liveliness-get callback form, via
+# `_callback_get`).
 
 # --- Callback-form get ----------------------------------------------
 
@@ -38,12 +15,7 @@ end
 # so we always wait for the task before destroying the ctx.
 function _callback_get(call_fn::F, f::Function;
         should_close_on_error::Bool=true) where F
-    ctx = CallbackCtx{LibZenohC.z_owned_reply_t}()
-    async_cond = Base.AsyncCondition()
-    init_ctx!(ctx, async_cond)
-
-    closure = Ref{LibZenohC.z_owned_closure_reply_t}()
-    LibZenohC.z_closure_reply(closure, GET_CALL_CB[], GET_DROP_CB[], ctx_p(ctx))
+    ctx, async_cond, closure = _setup_callback(Val(:reply))
 
     task = Threads.@spawn consume(f, Reply, ctx, async_cond, should_close_on_error)
 
@@ -53,7 +25,7 @@ function _callback_get(call_fn::F, f::Function;
     # reply or already invoked the drop callback (which flips closing
     # → wakes the consumer). Either way, wait then destroy.
     wait(task)
-    destroy_ctx!(ctx, async_cond, REPLY_DROP_FP[], LibZenohC.z_moved_reply_t)
+    _teardown_callback(Val(:reply), ctx, async_cond)
     rtc == LibZenohC.Z_OK || _handle_result(rtc)
     return nothing
 end

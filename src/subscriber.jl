@@ -1,35 +1,8 @@
 # Single-slot overwrite-on-full callback subscriber. The shared
-# latest-wins machinery lives in `callback.jl`; this file binds it to
-# `z_loaned_sample_t` / `z_owned_sample_t` and wires up the Julia
-# `Subscriber` lifecycle.
-
-# --- Foreign-thread trampolines --------------------------------------
-
-function sub_call_trampoline(sample::Ptr{LibZenohC.z_loaned_sample_t},
-        ctx::Ptr{Cvoid})
-    call_body!(sample, ctx, SAMPLE_CLONE_FP[], SAMPLE_DROP_FP[],
-        LibZenohC.z_owned_sample_t, LibZenohC.z_moved_sample_t)
-end
-
-function sub_drop_trampoline(ctx::Ptr{Cvoid})
-    drop_body!(ctx, LibZenohC.z_owned_sample_t)
-end
-
-# `@cfunction` and `cglobal` must run at runtime — if computed at
-# module top level they bake JIT/loader addresses into the precompile
-# image. Built in `__init__` via the shared hook registry.
-const SUB_CALL_CB     = Ref{Ptr{Cvoid}}(C_NULL)
-const SUB_DROP_CB     = Ref{Ptr{Cvoid}}(C_NULL)
-const SAMPLE_CLONE_FP = Ref{Ptr{Cvoid}}(C_NULL)
-const SAMPLE_DROP_FP  = Ref{Ptr{Cvoid}}(C_NULL)
-
-_register_init!() do
-    SUB_CALL_CB[] = @cfunction(sub_call_trampoline, Cvoid,
-        (Ptr{LibZenohC.z_loaned_sample_t}, Ptr{Cvoid}))
-    SUB_DROP_CB[] = @cfunction(sub_drop_trampoline, Cvoid, (Ptr{Cvoid},))
-    SAMPLE_CLONE_FP[] = cglobal((:z_sample_clone, LibZenohC.libzenohc))
-    SAMPLE_DROP_FP[]  = cglobal((:z_sample_drop,  LibZenohC.libzenohc))
-end
+# latest-wins machinery lives in `callback.jl`; the per-kind trampolines
+# and `cglobal` lookups are stamped out by `@closure_kind :sample` in
+# `closure_kinds.jl`. This file just wires the Julia `Subscriber`
+# lifecycle on top of those generic hooks.
 
 # --- Julia-side Subscriber -------------------------------------------
 
@@ -63,19 +36,14 @@ end
 # success.
 function _open_callback_sub(declare_fn::F, ::Type{T}, f::Function,
         k::Keyexpr; should_close_on_error::Bool=true) where {F, T<:AbstractCallbackSubscriber}
-    ctx = CallbackCtx{LibZenohC.z_owned_sample_t}()
-    async_cond = Base.AsyncCondition()
-    init_ctx!(ctx, async_cond)
-
-    closure = Ref{LibZenohC.z_owned_closure_sample_t}()
-    LibZenohC.z_closure_sample(closure, SUB_CALL_CB[], SUB_DROP_CB[], ctx_p(ctx))
+    ctx, async_cond, closure = _setup_callback(Val(:sample))
 
     sub = Ref{LibZenohC.z_owned_subscriber_t}()
     rtc = GC.@preserve ctx declare_fn(sub, closure)
     if rtc != LibZenohC.Z_OK
         # declare failed before the closure was installed → drop cb will fire
         # via z_closure_sample's own ownership machinery. Just clean Julia-side.
-        destroy_ctx!(ctx, async_cond, SAMPLE_DROP_FP[], LibZenohC.z_moved_sample_t)
+        _teardown_callback(Val(:sample), ctx, async_cond)
         _handle_result(rtc)
     end
 
@@ -118,8 +86,7 @@ function Base.close(sub::AbstractCallbackSubscriber)
 
     wait(sub.task)
 
-    destroy_ctx!(sub.ctx, sub.async_cond,
-        SAMPLE_DROP_FP[], LibZenohC.z_moved_sample_t)
+    _teardown_callback(Val(:sample), sub.ctx, sub.async_cond)
     # sub.ctx (the Julia CallbackCtx) is released to GC when this
     # Subscriber becomes unreachable.
     return nothing

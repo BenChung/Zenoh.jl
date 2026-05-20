@@ -38,80 +38,22 @@ end
 
 # ── Channel handler dispatch ─────────────────────────────────────────
 #
+# The per-kind channel constructors and recv/try_recv methods live in
+# `closure_kinds.jl` (`_new_channel`, `_recv`, `_try_recv`), stamped
+# out by `@closure_kind :sample` and `@closure_kind :reply`. This file
+# composes them into the user-facing `SubscriberHandler` / `GetHandler`
+# iteration interface.
+#
 # Mode is a Symbol type parameter on the handler struct, so Val(M) at
 # the call site resolves to a singleton at compile time and the right
 # ccall is inlined — no runtime dispatch.
 #
-# The blocking *_recv calls use @threadcall: the C function runs on a
+# The blocking _recv methods use @threadcall: the C function runs on a
 # libuv worker thread and the calling Julia task asynchronously waits
 # for completion, so other Julia tasks (including `close(handler)`)
 # continue to run. The default libuv pool is 4 threads — bump
 # UV_THREADPOOL_SIZE (set before Julia starts) if you need more
 # concurrent in-flight recvs.
-#
-# The non-blocking *_try_recv calls return immediately and stay as
-# direct ccalls.
-
-@inline _sample_recv(::Val{:fifo}, h::Ptr{LibZenohC.z_loaned_fifo_handler_sample_t},
-                     o::Ptr{LibZenohC.z_owned_sample_t}) =
-    @threadcall((:z_fifo_handler_sample_recv, LibZenohC.libzenohc),
-        LibZenohC.z_result_t,
-        (Ptr{LibZenohC.z_loaned_fifo_handler_sample_t}, Ptr{LibZenohC.z_owned_sample_t}),
-        h, o)
-@inline _sample_recv(::Val{:ring}, h::Ptr{LibZenohC.z_loaned_ring_handler_sample_t},
-                     o::Ptr{LibZenohC.z_owned_sample_t}) =
-    @threadcall((:z_ring_handler_sample_recv, LibZenohC.libzenohc),
-        LibZenohC.z_result_t,
-        (Ptr{LibZenohC.z_loaned_ring_handler_sample_t}, Ptr{LibZenohC.z_owned_sample_t}),
-        h, o)
-
-@inline _reply_recv(::Val{:fifo}, h::Ptr{LibZenohC.z_loaned_fifo_handler_reply_t},
-                    o::Ptr{LibZenohC.z_owned_reply_t}) =
-    @threadcall((:z_fifo_handler_reply_recv, LibZenohC.libzenohc),
-        LibZenohC.z_result_t,
-        (Ptr{LibZenohC.z_loaned_fifo_handler_reply_t}, Ptr{LibZenohC.z_owned_reply_t}),
-        h, o)
-@inline _reply_recv(::Val{:ring}, h::Ptr{LibZenohC.z_loaned_ring_handler_reply_t},
-                    o::Ptr{LibZenohC.z_owned_reply_t}) =
-    @threadcall((:z_ring_handler_reply_recv, LibZenohC.libzenohc),
-        LibZenohC.z_result_t,
-        (Ptr{LibZenohC.z_loaned_ring_handler_reply_t}, Ptr{LibZenohC.z_owned_reply_t}),
-        h, o)
-
-@inline _sample_try_recv(::Val{:fifo}, h, o) = LibZenohC.z_fifo_handler_sample_try_recv(h, o)
-@inline _sample_try_recv(::Val{:ring}, h, o) = LibZenohC.z_ring_handler_sample_try_recv(h, o)
-@inline _reply_try_recv(::Val{:fifo}, h, o) = LibZenohC.z_fifo_handler_reply_try_recv(h, o)
-@inline _reply_try_recv(::Val{:ring}, h, o) = LibZenohC.z_ring_handler_reply_try_recv(h, o)
-
-# Build the handler + finalizer for a given mode. Returns the handler
-# Ref so callers can move() it into the channel ctor and stash it on the
-# returned handler struct.
-
-function _new_sample_channel(closure::Ref{LibZenohC.z_owned_closure_sample_t}, ::Val{:fifo}, capacity::Integer)
-    h = Ref{LibZenohC.z_owned_fifo_handler_sample_t}()
-    LibZenohC.z_fifo_channel_sample_new(closure, h, Csize_t(capacity))
-    finalizer(x -> LibZenohC.z_fifo_handler_sample_drop(_move(x)), h)
-    return h
-end
-function _new_sample_channel(closure::Ref{LibZenohC.z_owned_closure_sample_t}, ::Val{:ring}, capacity::Integer)
-    h = Ref{LibZenohC.z_owned_ring_handler_sample_t}()
-    LibZenohC.z_ring_channel_sample_new(closure, h, Csize_t(capacity))
-    finalizer(x -> LibZenohC.z_ring_handler_sample_drop(_move(x)), h)
-    return h
-end
-
-function _new_reply_channel(closure::Ref{LibZenohC.z_owned_closure_reply_t}, ::Val{:fifo}, capacity::Integer)
-    h = Ref{LibZenohC.z_owned_fifo_handler_reply_t}()
-    LibZenohC.z_fifo_channel_reply_new(closure, h, Csize_t(capacity))
-    finalizer(x -> LibZenohC.z_fifo_handler_reply_drop(_move(x)), h)
-    return h
-end
-function _new_reply_channel(closure::Ref{LibZenohC.z_owned_closure_reply_t}, ::Val{:ring}, capacity::Integer)
-    h = Ref{LibZenohC.z_owned_ring_handler_reply_t}()
-    LibZenohC.z_ring_channel_reply_new(closure, h, Csize_t(capacity))
-    finalizer(x -> LibZenohC.z_ring_handler_reply_drop(_move(x)), h)
-    return h
-end
 
 # ── Channel-handler subscriber ───────────────────────────────────────
 
@@ -143,8 +85,8 @@ end
 # to construct on success.
 function _open_buffered_sub(declare_fn::F, ::Type{T}, k::Keyexpr,
         channel::Symbol, capacity::Integer) where {F, T<:AbstractSubscriberHandler}
-    closure = Ref{LibZenohC.z_owned_closure_sample_t}()
-    handler = _new_sample_channel(closure, Val(channel), capacity)
+    closure = _make_closure_ref(Val(:sample))
+    handler = _new_channel(Val(:sample), Val(channel), closure, capacity)
     sub = Ref{LibZenohC.z_owned_subscriber_t}()
     rtc = declare_fn(sub, closure)
     _handle_result(rtc)
@@ -153,7 +95,7 @@ end
 
 function Base.iterate(sh::AbstractSubscriberHandler{H, M}, ::Any=nothing) where {H, M}
     owned = Ref{LibZenohC.z_owned_sample_t}()
-    rtc = GC.@preserve sh owned _sample_recv(Val(M), _loan(sh.h),
+    rtc = GC.@preserve sh owned _recv(Val(:sample), Val(M), _loan(sh.h),
         Base.unsafe_convert(Ptr{LibZenohC.z_owned_sample_t}, owned))
     rtc == LibZenohC.Z_OK && return (Sample(owned), nothing)
     rtc == LibZenohC.Z_CHANNEL_DISCONNECTED && return nothing
@@ -162,7 +104,7 @@ end
 
 function Base.take!(sh::AbstractSubscriberHandler{H, M}) where {H, M}
     owned = Ref{LibZenohC.z_owned_sample_t}()
-    rtc = GC.@preserve sh owned _sample_recv(Val(M), _loan(sh.h),
+    rtc = GC.@preserve sh owned _recv(Val(:sample), Val(M), _loan(sh.h),
         Base.unsafe_convert(Ptr{LibZenohC.z_owned_sample_t}, owned))
     rtc == LibZenohC.Z_OK && return Sample(owned)
     throw(ZenohError(rtc))
@@ -170,7 +112,7 @@ end
 
 function tryrecv!(sh::AbstractSubscriberHandler{H, M}) where {H, M}
     owned = Ref{LibZenohC.z_owned_sample_t}()
-    rtc = _sample_try_recv(Val(M), _loan(sh.h), owned)
+    rtc = _try_recv(Val(:sample), Val(M), _loan(sh.h), owned)
     rtc == LibZenohC.Z_OK && return Sample(owned)
     rtc == LibZenohC.Z_CHANNEL_NODATA && return nothing
     throw(ZenohError(rtc))
@@ -198,7 +140,7 @@ end
 
 function Base.iterate(gh::GetHandler{H, M}, ::Any=nothing) where {H, M}
     owned = Ref{LibZenohC.z_owned_reply_t}()
-    rtc = GC.@preserve gh owned _reply_recv(Val(M), _loan(gh.h),
+    rtc = GC.@preserve gh owned _recv(Val(:reply), Val(M), _loan(gh.h),
         Base.unsafe_convert(Ptr{LibZenohC.z_owned_reply_t}, owned))
     rtc == LibZenohC.Z_OK && return (Reply(owned), nothing)
     rtc == LibZenohC.Z_CHANNEL_DISCONNECTED && return nothing
@@ -207,7 +149,7 @@ end
 
 function Base.take!(gh::GetHandler{H, M}) where {H, M}
     owned = Ref{LibZenohC.z_owned_reply_t}()
-    rtc = GC.@preserve gh owned _reply_recv(Val(M), _loan(gh.h),
+    rtc = GC.@preserve gh owned _recv(Val(:reply), Val(M), _loan(gh.h),
         Base.unsafe_convert(Ptr{LibZenohC.z_owned_reply_t}, owned))
     rtc == LibZenohC.Z_OK && return Reply(owned)
     throw(ZenohError(rtc))
@@ -215,7 +157,7 @@ end
 
 function tryrecv!(gh::GetHandler{H, M}) where {H, M}
     owned = Ref{LibZenohC.z_owned_reply_t}()
-    rtc = _reply_try_recv(Val(M), _loan(gh.h), owned)
+    rtc = _try_recv(Val(:reply), Val(M), _loan(gh.h), owned)
     rtc == LibZenohC.Z_OK && return Reply(owned)
     rtc == LibZenohC.Z_CHANNEL_NODATA && return nothing
     throw(ZenohError(rtc))
@@ -278,8 +220,8 @@ function get(s::Session, k::Keyexpr, parameters::AbstractString="";
     isnothing(attach_bytes)  || (optsP.attachment = _move(attach_bytes))
     isnothing(enc_ref)       || (optsP.encoding   = _move(enc_ref))
 
-    closure = Ref{LibZenohC.z_owned_closure_reply_t}()
-    handler = _new_reply_channel(closure, Val(channel), capacity)
+    closure = _make_closure_ref(Val(:reply))
+    handler = _new_channel(Val(:reply), Val(channel), closure, capacity)
 
     params = String(parameters)
     GC.@preserve payload_bytes attach_bytes enc_ref params opts begin

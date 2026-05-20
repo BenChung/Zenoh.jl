@@ -140,8 +140,8 @@ the token's keyexpr.
 function liveliness_get(s::Session, k::Keyexpr;
         channel::Symbol=:fifo, capacity::Integer=16, timeout_ms::Integer=0)
     opts = _liveliness_get_opts(timeout_ms)
-    closure = Ref{LibZenohC.z_owned_closure_reply_t}()
-    handler = _new_reply_channel(closure, Val(channel), capacity)
+    closure = _make_closure_ref(Val(:reply))
+    handler = _new_channel(Val(:reply), Val(channel), closure, capacity)
     rtc = GC.@preserve opts LibZenohC.z_liveliness_get(
         _loan(s), _loan(k), _move(closure), opts)
     _handle_result(rtc)
