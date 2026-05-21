@@ -42,7 +42,8 @@ function _watchdog_loop(name::AbstractString, timeout::Real,
     ccall(:exit, Cvoid, (Cint,), Cint(124))
 end
 
-function with_test_timeout(name::AbstractString, timeout::Real, body::Function)
+# Body first so `do`-syntax works: `with_test_timeout("x", 10) do … end`.
+function with_test_timeout(body::Function, name::AbstractString, timeout::Real)
     done = Threads.Atomic{Int}(0)
     Threads.@spawn _watchdog_loop(name, timeout, done)
     try

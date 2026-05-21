@@ -1,8 +1,9 @@
 using Zenoh, Zenohd_jll, Test
+include("test_utils.jl")
 router = run(pipeline(`$(Zenohd_jll.zenohd()) -l tcp/localhost:19148`, stdout = stdout), wait=false)
 
 try
-    @testset "Config" begin 
+    @timed_testset "Config" begin 
         c = Zenoh.Config()
         ref = Zenoh.toJson(c)
         c["connect/endpoints"] = "[\"tcp/localhost:19148\"]"
@@ -14,7 +15,7 @@ try
         a::Int
         b::Float64
     end
-    @testset "ZBytes" begin 
+    @timed_testset "ZBytes" begin 
         zb = Zenoh.ZBytes("hi")
         @test length(zb) == 2
         open(zb, Val(:read)) do r 
@@ -56,7 +57,7 @@ try
         end
     end
 
-    @testset "ZSlice" begin
+    @timed_testset "ZSlice" begin
         es = Zenoh.ZSlice()
         @test isempty(es)
         @test length(es) == 0
@@ -67,7 +68,7 @@ try
         @test length(cs) == 5
     end
 
-    @testset "Keyexpr macro" begin
+    @timed_testset "Keyexpr macro" begin
         k = kexpr"test/macro"
         @test k isa Zenoh.Keyexpr
         # `**/**` is non-canonical (collapses to `**`); strict rejects, `c` accepts.
@@ -77,7 +78,7 @@ try
         @test_throws ArgumentError @macroexpand kexpr"whatever"x
     end
 
-    @testset "ZBytes iteration" begin
+    @timed_testset "ZBytes iteration" begin
         # Covers the iterate(::ZBytes) path, which must loan the underlying
         # z_owned_bytes_t before calling z_bytes_get_slice_iterator.
         zb = Zenoh.ZBytes("hello world")
@@ -92,7 +93,7 @@ try
         @test total == length(zb)
     end
 
-    @testset "Publisher-Subscriber" begin
+    @timed_testset "Publisher-Subscriber" begin
         # Create a session with the router
         c = Zenoh.Config(; str = """{connect: { endpoints: ["tcp/localhost:19148"]}}""")
         s = open(c)
@@ -138,7 +139,7 @@ try
         end
     end
 
-    @testset "Timestamp and ZID" begin
+    @timed_testset "Timestamp and ZID" begin
         # Create a session with the router
         c = Zenoh.Config(; str = """{connect: { endpoints: ["tcp/localhost:19148"]}}""")
         s = open(c)
@@ -219,7 +220,7 @@ try
         end
     end
 
-    @testset "Session put with timestamp" begin
+    @timed_testset "Session put with timestamp" begin
         # Exercises Zenoh.put(::Session, ::Keyexpr, payload; timestamp=...),
         # which writes the timestamp through Ptr{z_put_options_t}. Using the
         # wrong options struct type would land the write at the wrong offset
@@ -260,7 +261,7 @@ try
         end
     end
 
-    @testset "Sample accessors" begin
+    @timed_testset "Sample accessors" begin
         c = Zenoh.Config(; str = """{connect: { endpoints: ["tcp/localhost:19148"]}}""")
         s = open(c)
         sub = nothing
@@ -314,7 +315,7 @@ try
         end
     end
 
-    @testset "Encoding" begin
+    @timed_testset "Encoding" begin
         # Pure-Julia behaviour: construction, equality, string round-trip.
         e1 = Zenoh.Encoding("application/json")
         @test e1.mime == "application/json"
@@ -345,7 +346,7 @@ try
         @test Zenoh.Encodings.ZENOH_BYTES.mime == "zenoh/bytes"
     end
 
-    @testset "Put with encoding" begin
+    @timed_testset "Put with encoding" begin
         c = Zenoh.Config(; str = """{connect: { endpoints: ["tcp/localhost:19148"]}}""")
         s = open(c)
         sub = nothing
@@ -396,7 +397,7 @@ try
             close(s)
         end
     end
-    @testset "Buffered subscriber" begin
+    @timed_testset "Buffered subscriber" begin
         c = Zenoh.Config(; str = """{connect: { endpoints: ["tcp/localhost:19148"]}}""")
         s = open(c)
         sub = nothing
@@ -460,7 +461,7 @@ try
         end
     end
 
-    @testset "Buffered subscriber (ring)" begin
+    @timed_testset "Buffered subscriber (ring)" begin
         c = Zenoh.Config(; str = """{connect: { endpoints: ["tcp/localhost:19148"]}}""")
         s = open(c)
         sub = nothing
@@ -508,7 +509,7 @@ try
         end
     end
 
-    @testset "Get/Reply" begin
+    @timed_testset "Get/Reply" begin
         c = Zenoh.Config(; str = """{connect: { endpoints: ["tcp/localhost:19148"]}}""")
         s = open(c)
 
@@ -550,7 +551,7 @@ try
         end
     end
 
-    @testset "Liveliness token + buffered subscriber" begin
+    @timed_testset "Liveliness token + buffered subscriber" begin
         c = Zenoh.Config(; str = """{connect: { endpoints: ["tcp/localhost:19148"]}}""")
         s = open(c)
         sub = nothing
@@ -581,7 +582,7 @@ try
         end
     end
 
-    @testset "Liveliness callback subscriber" begin
+    @timed_testset "Liveliness callback subscriber" begin
         c = Zenoh.Config(; str = """{connect: { endpoints: ["tcp/localhost:19148"]}}""")
         s = open(c)
         sub = nothing
@@ -604,7 +605,7 @@ try
         end
     end
 
-    @testset "Liveliness history replay" begin
+    @timed_testset "Liveliness history replay" begin
         # history=true should replay existing tokens to a late subscriber.
         c = Zenoh.Config(; str = """{connect: { endpoints: ["tcp/localhost:19148"]}}""")
         s = open(c)
@@ -627,7 +628,7 @@ try
         end
     end
 
-    @testset "Locality" begin
+    @timed_testset "Locality" begin
         @test Zenoh.Locality(:any).v           == Zenoh.LibZenohC.Z_LOCALITY_ANY
         @test Zenoh.Locality(:session_local).v == Zenoh.LibZenohC.Z_LOCALITY_SESSION_LOCAL
         @test Zenoh.Locality(:remote).v        == Zenoh.LibZenohC.Z_LOCALITY_REMOTE
@@ -642,7 +643,7 @@ try
         @test occursin(":remote", sprint(show, Zenoh.Localities.REMOTE))
     end
 
-    @testset "Queryable (channel) round-trip" begin
+    @timed_testset "Queryable (channel) round-trip" begin
         c = Zenoh.Config(; str = """{connect: { endpoints: ["tcp/localhost:19148"]}}""")
         s = open(c)
         qh = nothing
@@ -689,7 +690,7 @@ try
         end
     end
 
-    @testset "Queryable (callback) round-trip" begin
+    @timed_testset "Queryable (callback) round-trip" begin
         c = Zenoh.Config(; str = """{connect: { endpoints: ["tcp/localhost:19148"]}}""")
         s = open(c)
         q = nothing
@@ -716,7 +717,7 @@ try
         end
     end
 
-    @testset "Queryable accessors (payload + attachment + encoding)" begin
+    @timed_testset "Queryable accessors (payload + attachment + encoding)" begin
         c = Zenoh.Config(; str = """{connect: { endpoints: ["tcp/localhost:19148"]}}""")
         s = open(c)
         qh = nothing
@@ -766,7 +767,7 @@ try
         end
     end
 
-    @testset "Queryable reply_err" begin
+    @timed_testset "Queryable reply_err" begin
         c = Zenoh.Config(; str = """{connect: { endpoints: ["tcp/localhost:19148"]}}""")
         s = open(c)
         q = nothing
@@ -792,7 +793,7 @@ try
         end
     end
 
-    @testset "Queryable reply_del" begin
+    @timed_testset "Queryable reply_del" begin
         c = Zenoh.Config(; str = """{connect: { endpoints: ["tcp/localhost:19148"]}}""")
         s = open(c)
         q = nothing
@@ -814,7 +815,7 @@ try
         end
     end
 
-    @testset "Queryable tryrecv! + close before any query" begin
+    @timed_testset "Queryable tryrecv! + close before any query" begin
         c = Zenoh.Config(; str = """{connect: { endpoints: ["tcp/localhost:19148"]}}""")
         s = open(c)
         qh = nothing
@@ -829,7 +830,7 @@ try
         end
     end
 
-    @testset "liveliness_get snapshot" begin
+    @timed_testset "liveliness_get snapshot" begin
         c = Zenoh.Config(; str = """{connect: { endpoints: ["tcp/localhost:19148"]}}""")
         s = open(c)
         tok = nothing
