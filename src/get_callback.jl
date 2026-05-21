@@ -9,26 +9,9 @@
 
 # Shared callback-get lifecycle. `call_fn(closure) -> rtc` performs
 # whichever C entrypoint (`z_get` / `z_liveliness_get`) consumes the
-# closure. The consume task is spawned before the C call so it's
-# already waiting when libzenohc starts delivering replies. On error
-# the closure's drop callback fires regardless (libzenohc owns it),
-# so we always wait for the task before destroying the ctx.
-function _callback_get(call_fn::F, f::Function;
-        should_close_on_error::Bool=true) where F
-    ctx, async_cond, closure = _setup_callback(Val(:reply))
-
-    task = Threads.@spawn consume(f, Reply, ctx, async_cond, should_close_on_error)
-
-    rtc = GC.@preserve ctx call_fn(closure)
-
-    # Whether rtc is Z_OK or not, libzenohc has either delivered every
-    # reply or already invoked the drop callback (which flips closing
-    # → wakes the consumer). Either way, wait then destroy.
-    wait(task)
-    _teardown_callback(Val(:reply), ctx, async_cond)
-    rtc == LibZenohC.Z_OK || _handle_result(rtc)
-    return nothing
-end
+# closure. Thin shim over `_callback_one_shot` in `closure_kinds.jl`.
+_callback_get(call_fn::F, f::Function; kwargs...) where F =
+    _callback_one_shot(call_fn, Val(:reply), Reply, f; kwargs...)
 
 """
     get(f, s::Session, k::Keyexpr, parameters=""; kwargs...)

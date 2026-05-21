@@ -442,6 +442,9 @@ include("get_callback.jl")
 include("queryable.jl")
 include("liveliness.jl")
 include("matching.jl")
+include("scout.jl")
+
+export scout, Hello, whatami_string
 
 function setup_logging()
     _handle_result(LibZenohC.zc_init_log_from_env_or("info"))

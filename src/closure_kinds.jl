@@ -47,24 +47,48 @@ function _try_recv end
     @closure_kind :tag
     @closure_kind :tag :owned
     @closure_kind :tag :pod
+    @closure_kind :tag :owned channels=false
 
 Generate the per-kind closure plumbing for libzenohc family `tag`
-(`sample`, `reply`, `query`, `matching_status`, …). Shape defaults to
-`:owned`; pass `:pod` for value-type payloads with no clone/drop and
-no channel handlers. See file header for the full expansion.
+(`sample`, `reply`, `query`, `matching_status`, `hello`, …). Shape
+defaults to `:owned`; pass `:pod` for value-type payloads with no
+clone/drop and no channel handlers. See file header for the full
+expansion.
+
+For `:owned` kinds with no native FIFO/ring channel handlers in
+libzenohc (e.g. `:hello`), pass `channels=false` to suppress the
+channel-handler methods — they reference `z_{fifo,ring}_*_<tag>_t`
+type names that Julia resolves at parse time, so they cannot be
+emitted as dead code. `:pod` kinds always skip channels.
 
 Naming follows libzenohc convention exactly:
 `:owned` →  `z_owned_<tag>_t`, `z_<tag>_clone`, `z_closure_<tag>`,
             `z_fifo_channel_<tag>_new`, `z_fifo_handler_<tag>_recv`, …
 `:pod`   →  `z_<tag>_t`, `z_closure_<tag>` (no clone/drop, no channels).
 """
-macro closure_kind(tag_expr, shape_expr=:(:owned))
+macro closure_kind(tag_expr, args...)
     tag = tag_expr isa QuoteNode ? tag_expr.value : tag_expr
     tag isa Symbol || throw(ArgumentError(
         "@closure_kind expects a literal symbol tag, got $(tag_expr)"))
-    shape = shape_expr isa QuoteNode ? shape_expr.value : shape_expr
-    shape isa Symbol || throw(ArgumentError(
-        "@closure_kind shape must be a literal symbol, got $(shape_expr)"))
+
+    shape = :owned
+    channels = true
+    channels_seen = false
+    for a in args
+        if a isa QuoteNode && a.value isa Symbol
+            shape = a.value
+        elseif a isa Expr && a.head === :(=) && a.args[1] === :channels
+            channels = a.args[2]::Bool
+            channels_seen = true
+        else
+            throw(ArgumentError(
+                "unexpected @closure_kind arg: $(a) (want a :shape literal or channels=true|false)"))
+        end
+    end
+    if shape === :pod && channels_seen && channels
+        throw(ArgumentError("@closure_kind :pod does not support channels=true"))
+    end
+    shape === :pod && (channels = false)
 
     closure_owned_t = Symbol("z_owned_closure_",  tag, "_t")
     closure_install = Symbol("z_closure_",        tag)
@@ -86,19 +110,62 @@ macro closure_kind(tag_expr, shape_expr=:(:owned))
         item_clone_fp  = Symbol("_CLONE_FP_", upper)
         item_drop_fp   = Symbol("_DROP_FP_",  upper)
 
-        fifo_owned  = Symbol("z_owned_fifo_handler_",  tag, "_t")
-        fifo_loaned = Symbol("z_loaned_fifo_handler_", tag, "_t")
-        fifo_new    = Symbol("z_fifo_channel_",        tag, "_new")
-        fifo_recv   = Symbol("z_fifo_handler_",        tag, "_recv")
-        fifo_try    = Symbol("z_fifo_handler_",        tag, "_try_recv")
-        fifo_drop   = Symbol("z_fifo_handler_",        tag, "_drop")
+        channel_block = if channels
+            fifo_owned  = Symbol("z_owned_fifo_handler_",  tag, "_t")
+            fifo_loaned = Symbol("z_loaned_fifo_handler_", tag, "_t")
+            fifo_new    = Symbol("z_fifo_channel_",        tag, "_new")
+            fifo_recv   = Symbol("z_fifo_handler_",        tag, "_recv")
+            fifo_try    = Symbol("z_fifo_handler_",        tag, "_try_recv")
+            fifo_drop   = Symbol("z_fifo_handler_",        tag, "_drop")
 
-        ring_owned  = Symbol("z_owned_ring_handler_",  tag, "_t")
-        ring_loaned = Symbol("z_loaned_ring_handler_", tag, "_t")
-        ring_new    = Symbol("z_ring_channel_",        tag, "_new")
-        ring_recv   = Symbol("z_ring_handler_",        tag, "_recv")
-        ring_try    = Symbol("z_ring_handler_",        tag, "_try_recv")
-        ring_drop   = Symbol("z_ring_handler_",        tag, "_drop")
+            ring_owned  = Symbol("z_owned_ring_handler_",  tag, "_t")
+            ring_loaned = Symbol("z_loaned_ring_handler_", tag, "_t")
+            ring_new    = Symbol("z_ring_channel_",        tag, "_new")
+            ring_recv   = Symbol("z_ring_handler_",        tag, "_recv")
+            ring_try    = Symbol("z_ring_handler_",        tag, "_try_recv")
+            ring_drop   = Symbol("z_ring_handler_",        tag, "_drop")
+
+            quote
+                function _new_channel(::$val_t, ::Val{:fifo},
+                        closure::Ref{LibZenohC.$closure_owned_t},
+                        capacity::Integer)
+                    h = Ref{LibZenohC.$fifo_owned}()
+                    LibZenohC.$fifo_new(closure, h, Csize_t(capacity))
+                    finalizer(x -> LibZenohC.$fifo_drop(_move(x)), h)
+                    return h
+                end
+                function _new_channel(::$val_t, ::Val{:ring},
+                        closure::Ref{LibZenohC.$closure_owned_t},
+                        capacity::Integer)
+                    h = Ref{LibZenohC.$ring_owned}()
+                    LibZenohC.$ring_new(closure, h, Csize_t(capacity))
+                    finalizer(x -> LibZenohC.$ring_drop(_move(x)), h)
+                    return h
+                end
+
+                @inline _recv(::$val_t, ::Val{:fifo},
+                        h::Ptr{LibZenohC.$fifo_loaned},
+                        o::Ptr{LibZenohC.$owned_t}) =
+                    @threadcall(($(QuoteNode(fifo_recv)), LibZenohC.libzenohc),
+                        LibZenohC.z_result_t,
+                        (Ptr{LibZenohC.$fifo_loaned}, Ptr{LibZenohC.$owned_t}),
+                        h, o)
+                @inline _recv(::$val_t, ::Val{:ring},
+                        h::Ptr{LibZenohC.$ring_loaned},
+                        o::Ptr{LibZenohC.$owned_t}) =
+                    @threadcall(($(QuoteNode(ring_recv)), LibZenohC.libzenohc),
+                        LibZenohC.z_result_t,
+                        (Ptr{LibZenohC.$ring_loaned}, Ptr{LibZenohC.$owned_t}),
+                        h, o)
+
+                @inline _try_recv(::$val_t, ::Val{:fifo}, h, o) =
+                    LibZenohC.$fifo_try(h, o)
+                @inline _try_recv(::$val_t, ::Val{:ring}, h, o) =
+                    LibZenohC.$ring_try(h, o)
+            end
+        else
+            quote end
+        end
 
         return esc(quote
             const $call_cb_ref   = Ref{Ptr{Cvoid}}(C_NULL)
@@ -142,42 +209,7 @@ macro closure_kind(tag_expr, shape_expr=:(:owned))
                     $item_drop_fp[], LibZenohC.$moved_t)
             end
 
-            function _new_channel(::$val_t, ::Val{:fifo},
-                    closure::Ref{LibZenohC.$closure_owned_t},
-                    capacity::Integer)
-                h = Ref{LibZenohC.$fifo_owned}()
-                LibZenohC.$fifo_new(closure, h, Csize_t(capacity))
-                finalizer(x -> LibZenohC.$fifo_drop(_move(x)), h)
-                return h
-            end
-            function _new_channel(::$val_t, ::Val{:ring},
-                    closure::Ref{LibZenohC.$closure_owned_t},
-                    capacity::Integer)
-                h = Ref{LibZenohC.$ring_owned}()
-                LibZenohC.$ring_new(closure, h, Csize_t(capacity))
-                finalizer(x -> LibZenohC.$ring_drop(_move(x)), h)
-                return h
-            end
-
-            @inline _recv(::$val_t, ::Val{:fifo},
-                    h::Ptr{LibZenohC.$fifo_loaned},
-                    o::Ptr{LibZenohC.$owned_t}) =
-                @threadcall(($(QuoteNode(fifo_recv)), LibZenohC.libzenohc),
-                    LibZenohC.z_result_t,
-                    (Ptr{LibZenohC.$fifo_loaned}, Ptr{LibZenohC.$owned_t}),
-                    h, o)
-            @inline _recv(::$val_t, ::Val{:ring},
-                    h::Ptr{LibZenohC.$ring_loaned},
-                    o::Ptr{LibZenohC.$owned_t}) =
-                @threadcall(($(QuoteNode(ring_recv)), LibZenohC.libzenohc),
-                    LibZenohC.z_result_t,
-                    (Ptr{LibZenohC.$ring_loaned}, Ptr{LibZenohC.$owned_t}),
-                    h, o)
-
-            @inline _try_recv(::$val_t, ::Val{:fifo}, h, o) =
-                LibZenohC.$fifo_try(h, o)
-            @inline _try_recv(::$val_t, ::Val{:ring}, h, o) =
-                LibZenohC.$ring_try(h, o)
+            $channel_block
         end)
     elseif shape === :pod
         item_t = Symbol("z_", tag, "_t")
@@ -237,9 +269,36 @@ function _setup_callback(kind::Val)
     return ctx, async_cond, closure
 end
 
+# ── Shared one-shot callback driver ─────────────────────────────────────
+#
+# Wraps a C entrypoint that consumes a closure and delivers a finite
+# series of items, then drops the closure. The consume task is spawned
+# before the C call so it's already waiting when libzenohc starts
+# delivering items. On error the closure's drop callback fires regardless
+# (libzenohc owns it), so we always wait for the task before destroying
+# the ctx. Used by `_callback_get` (replies) and the callback form of
+# `scout` (hellos).
+#
+# `call_fn` is first so `do` syntax composes: `_callback_one_shot(kind,
+# wrap, f; …) do closure … end` passes the lambda as `call_fn`.
+function _callback_one_shot(call_fn::F, kind::Val, wrap, f::Function;
+        should_close_on_error::Bool=true) where F
+    ctx, async_cond, closure = _setup_callback(kind)
+
+    task = Threads.@spawn consume(f, wrap, ctx, async_cond, should_close_on_error)
+
+    rtc = GC.@preserve ctx call_fn(closure)
+
+    wait(task)
+    _teardown_callback(kind, ctx, async_cond)
+    rtc == LibZenohC.Z_OK || _handle_result(rtc)
+    return nothing
+end
+
 # ── Standard kinds ──────────────────────────────────────────────────────
 
 @closure_kind :sample
 @closure_kind :reply
 @closure_kind :query
 @closure_kind :matching_status :pod
+@closure_kind :hello :owned channels=false
