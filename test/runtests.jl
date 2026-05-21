@@ -865,6 +865,58 @@ try
             close(s)
         end
     end
+
+    @timed_testset "MatchingListener + matching_status" begin
+        # Two sessions through the same router: pub on s1, sub on s2.
+        c1 = Zenoh.Config(; str = """{connect: { endpoints: ["tcp/localhost:19148"]}}""")
+        c2 = Zenoh.Config(; str = """{connect: { endpoints: ["tcp/localhost:19148"]}}""")
+        s1 = open(c1)
+        s2 = open(c2)
+        pub = nothing
+        ml  = nothing
+        sub = nothing
+        try
+            k = Zenoh.Keyexpr("test/matching/listener")
+            pub = Zenoh.Publisher(s1, k)
+
+            # Buffered channel for the transitions. The poll
+            # (matching_status) is the authoritative state check; the
+            # event stream is verified separately because libzenohc has
+            # been observed to occasionally emit spurious settling events
+            # near declare time on some platforms.
+            events = Channel{Bool}(16)
+            ml = Zenoh.MatchingListener(pub) do matching
+                put!(events, matching)
+            end
+
+            # No subscribers yet — poll reports false.
+            @test Zenoh.matching_status(pub) == false
+
+            # Subscriber arrives → poll flips to true and a `true` event
+            # must appear in the event stream.
+            sub = open((_) -> nothing, s2, k)
+            sleep(0.2)
+            @test Zenoh.matching_status(pub) == true
+            arrivals = Bool[]
+            while isready(events); push!(arrivals, take!(events)); end
+            @test true in arrivals
+
+            # Subscriber leaves → poll flips back and a `false` event
+            # must appear.
+            close(sub); sub = nothing
+            sleep(0.2)
+            @test Zenoh.matching_status(pub) == false
+            departures = Bool[]
+            while isready(events); push!(departures, take!(events)); end
+            @test false in departures
+        finally
+            !isnothing(sub) && close(sub)
+            !isnothing(ml)  && close(ml)
+            !isnothing(pub) && close(pub)
+            close(s2)
+            close(s1)
+        end
+    end
 finally
     kill(router)
 end

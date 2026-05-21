@@ -1,18 +1,31 @@
 # Per-kind plumbing for Zenoh closure families.
 #
 # libzenohc's closure ABI is identical across `sample`, `reply`, `query`,
-# `hello`, `matching_status`, … only the underlying owned/loaned/moved
-# type names change. `@closure_kind :tag` stamps out:
+# `hello`, `matching_status`, … only the underlying type names change.
+# Two payload shapes are supported:
+#
+#   • `:owned` (default) — payload is a refcounted `z_owned_<tag>_t`
+#     accessed via `z_loaned_<tag>_t`. clone/drop fps come from cglobal'd
+#     `z_<tag>_clone` / `z_<tag>_drop`. Native FIFO/ring channel handlers
+#     (`z_{fifo,ring}_channel_<tag>_new`, …) are wired through too.
+#   • `:pod` — payload is a plain `z_<tag>_t` value type with no
+#     lifecycle (matching_status, …). No clone/drop, no channel handlers
+#     — those C entrypoints simply don't exist for POD payloads.
+#
+# `@closure_kind :tag [:shape]` stamps out:
 #
 #   • foreign-thread call/drop trampolines that delegate to the generic
-#     `call_body!` / `drop_body!` in `callback.jl`
+#     `call_body!` / `call_body_pod!` / `drop_body!` in `callback.jl`
 #   • module-level `Ref{Ptr{Cvoid}}` slots for the trampoline `@cfunction`
-#     pointers and the `z_<tag>_clone` / `z_<tag>_drop` `cglobal` lookups
-#   • an init hook (registered via `_register_init!`) that populates the
-#     four slots in `__init__` — `@cfunction` / `cglobal` cannot be
+#     pointers (and, for `:owned`, the `z_<tag>_clone` / `z_<tag>_drop`
+#     `cglobal` lookups)
+#   • an init hook (registered via `_register_init!`) that populates
+#     the slots in `__init__` — `@cfunction` / `cglobal` cannot be
 #     evaluated at module top level because they bake JIT / loader
 #     addresses into the precompile image
 #   • per-kind method bodies for the generic dispatch hooks below
+#     (channel hooks `_new_channel` / `_recv` / `_try_recv` only for
+#     `:owned` kinds)
 #
 # Adding a new kind to the binding is one macro line (plus a `Sample` /
 # `Reply`-style wrapper type in its own file if the data needs one).
@@ -32,131 +45,180 @@ function _try_recv end
 
 """
     @closure_kind :tag
+    @closure_kind :tag :owned
+    @closure_kind :tag :pod
 
-Generate the per-kind closure / channel plumbing for libzenohc family
-`tag` (`sample`, `reply`, `query`, …). See file header for the list of
-generated bindings. Naming follows libzenohc convention exactly:
-`z_owned_<tag>_t`, `z_<tag>_clone`, `z_closure_<tag>`,
-`z_fifo_channel_<tag>_new`, `z_fifo_handler_<tag>_recv`, etc.
+Generate the per-kind closure plumbing for libzenohc family `tag`
+(`sample`, `reply`, `query`, `matching_status`, …). Shape defaults to
+`:owned`; pass `:pod` for value-type payloads with no clone/drop and
+no channel handlers. See file header for the full expansion.
+
+Naming follows libzenohc convention exactly:
+`:owned` →  `z_owned_<tag>_t`, `z_<tag>_clone`, `z_closure_<tag>`,
+            `z_fifo_channel_<tag>_new`, `z_fifo_handler_<tag>_recv`, …
+`:pod`   →  `z_<tag>_t`, `z_closure_<tag>` (no clone/drop, no channels).
 """
-macro closure_kind(tag_expr)
+macro closure_kind(tag_expr, shape_expr=:(:owned))
     tag = tag_expr isa QuoteNode ? tag_expr.value : tag_expr
     tag isa Symbol || throw(ArgumentError(
-        "@closure_kind expects a literal symbol, got $(tag_expr)"))
+        "@closure_kind expects a literal symbol tag, got $(tag_expr)"))
+    shape = shape_expr isa QuoteNode ? shape_expr.value : shape_expr
+    shape isa Symbol || throw(ArgumentError(
+        "@closure_kind shape must be a literal symbol, got $(shape_expr)"))
 
-    # libzenohc type / function names derived from the tag.
-    loaned_t        = Symbol("z_loaned_",         tag, "_t")
-    owned_t         = Symbol("z_owned_",          tag, "_t")
-    moved_t         = Symbol("z_moved_",          tag, "_t")
-    item_clone_sym  = Symbol("z_",                tag, "_clone")
-    item_drop_sym   = Symbol("z_",                tag, "_drop")
     closure_owned_t = Symbol("z_owned_closure_",  tag, "_t")
     closure_install = Symbol("z_closure_",        tag)
 
-    fifo_owned  = Symbol("z_owned_fifo_handler_",  tag, "_t")
-    fifo_loaned = Symbol("z_loaned_fifo_handler_", tag, "_t")
-    fifo_new    = Symbol("z_fifo_channel_",        tag, "_new")
-    fifo_recv   = Symbol("z_fifo_handler_",        tag, "_recv")
-    fifo_try    = Symbol("z_fifo_handler_",        tag, "_try_recv")
-    fifo_drop   = Symbol("z_fifo_handler_",        tag, "_drop")
-
-    ring_owned  = Symbol("z_owned_ring_handler_",  tag, "_t")
-    ring_loaned = Symbol("z_loaned_ring_handler_", tag, "_t")
-    ring_new    = Symbol("z_ring_channel_",        tag, "_new")
-    ring_recv   = Symbol("z_ring_handler_",        tag, "_recv")
-    ring_try    = Symbol("z_ring_handler_",        tag, "_try_recv")
-    ring_drop   = Symbol("z_ring_handler_",        tag, "_drop")
-
-    # Module-level slot + trampoline function names (unique per tag).
     upper = uppercase(string(tag))
-    call_cb_ref   = Symbol("_CALL_CB_",   upper)
-    drop_cb_ref   = Symbol("_DROP_CB_",   upper)
-    item_clone_fp = Symbol("_CLONE_FP_",  upper)
-    item_drop_fp  = Symbol("_DROP_FP_",   upper)
-    call_tramp    = Symbol("_call_tramp_", tag)
-    drop_tramp    = Symbol("_drop_tramp_", tag)
+    call_cb_ref = Symbol("_CALL_CB_",   upper)
+    drop_cb_ref = Symbol("_DROP_CB_",   upper)
+    call_tramp  = Symbol("_call_tramp_", tag)
+    drop_tramp  = Symbol("_drop_tramp_", tag)
 
     val_t = :(Val{$(QuoteNode(tag))})
 
-    return esc(quote
-        const $call_cb_ref   = Ref{Ptr{Cvoid}}(C_NULL)
-        const $drop_cb_ref   = Ref{Ptr{Cvoid}}(C_NULL)
-        const $item_clone_fp = Ref{Ptr{Cvoid}}(C_NULL)
-        const $item_drop_fp  = Ref{Ptr{Cvoid}}(C_NULL)
+    if shape === :owned
+        loaned_t       = Symbol("z_loaned_", tag, "_t")
+        owned_t        = Symbol("z_owned_",  tag, "_t")
+        moved_t        = Symbol("z_moved_",  tag, "_t")
+        item_clone_sym = Symbol("z_", tag, "_clone")
+        item_drop_sym  = Symbol("z_", tag, "_drop")
+        item_clone_fp  = Symbol("_CLONE_FP_", upper)
+        item_drop_fp   = Symbol("_DROP_FP_",  upper)
 
-        function $call_tramp(item::Ptr{LibZenohC.$loaned_t},
-                ctx::Ptr{Cvoid})
-            call_body!(item, ctx, $item_clone_fp[], $item_drop_fp[],
-                LibZenohC.$owned_t, LibZenohC.$moved_t)
-        end
-        function $drop_tramp(ctx::Ptr{Cvoid})
-            drop_body!(ctx, LibZenohC.$owned_t)
-        end
+        fifo_owned  = Symbol("z_owned_fifo_handler_",  tag, "_t")
+        fifo_loaned = Symbol("z_loaned_fifo_handler_", tag, "_t")
+        fifo_new    = Symbol("z_fifo_channel_",        tag, "_new")
+        fifo_recv   = Symbol("z_fifo_handler_",        tag, "_recv")
+        fifo_try    = Symbol("z_fifo_handler_",        tag, "_try_recv")
+        fifo_drop   = Symbol("z_fifo_handler_",        tag, "_drop")
 
-        _register_init!() do
-            $call_cb_ref[] = @cfunction($call_tramp, Cvoid,
-                (Ptr{LibZenohC.$loaned_t}, Ptr{Cvoid}))
-            $drop_cb_ref[] = @cfunction($drop_tramp, Cvoid, (Ptr{Cvoid},))
-            $item_clone_fp[] = cglobal(
-                ($(QuoteNode(item_clone_sym)), LibZenohC.libzenohc))
-            $item_drop_fp[]  = cglobal(
-                ($(QuoteNode(item_drop_sym)),  LibZenohC.libzenohc))
-        end
+        ring_owned  = Symbol("z_owned_ring_handler_",  tag, "_t")
+        ring_loaned = Symbol("z_loaned_ring_handler_", tag, "_t")
+        ring_new    = Symbol("z_ring_channel_",        tag, "_new")
+        ring_recv   = Symbol("z_ring_handler_",        tag, "_recv")
+        ring_try    = Symbol("z_ring_handler_",        tag, "_try_recv")
+        ring_drop   = Symbol("z_ring_handler_",        tag, "_drop")
 
-        _make_callback_ctx(::$val_t) = CallbackCtx{LibZenohC.$owned_t}()
-        _make_closure_ref(::$val_t)  = Ref{LibZenohC.$closure_owned_t}()
+        return esc(quote
+            const $call_cb_ref   = Ref{Ptr{Cvoid}}(C_NULL)
+            const $drop_cb_ref   = Ref{Ptr{Cvoid}}(C_NULL)
+            const $item_clone_fp = Ref{Ptr{Cvoid}}(C_NULL)
+            const $item_drop_fp  = Ref{Ptr{Cvoid}}(C_NULL)
 
-        function _install_closure!(::$val_t,
-                closure::Ref{LibZenohC.$closure_owned_t},
-                ctx::CallbackCtx{LibZenohC.$owned_t})
-            LibZenohC.$closure_install(closure,
-                $call_cb_ref[], $drop_cb_ref[], ctx_p(ctx))
-        end
+            function $call_tramp(item::Ptr{LibZenohC.$loaned_t},
+                    ctx::Ptr{Cvoid})
+                call_body!(item, ctx, $item_clone_fp[], $item_drop_fp[],
+                    LibZenohC.$owned_t, LibZenohC.$moved_t)
+            end
+            function $drop_tramp(ctx::Ptr{Cvoid})
+                drop_body!(ctx, LibZenohC.$owned_t)
+            end
 
-        function _teardown_callback(::$val_t,
-                ctx::CallbackCtx{LibZenohC.$owned_t},
-                async_cond::Base.AsyncCondition)
-            destroy_ctx!(ctx, async_cond,
-                $item_drop_fp[], LibZenohC.$moved_t)
-        end
+            _register_init!() do
+                $call_cb_ref[] = @cfunction($call_tramp, Cvoid,
+                    (Ptr{LibZenohC.$loaned_t}, Ptr{Cvoid}))
+                $drop_cb_ref[] = @cfunction($drop_tramp, Cvoid, (Ptr{Cvoid},))
+                $item_clone_fp[] = cglobal(
+                    ($(QuoteNode(item_clone_sym)), LibZenohC.libzenohc))
+                $item_drop_fp[]  = cglobal(
+                    ($(QuoteNode(item_drop_sym)),  LibZenohC.libzenohc))
+            end
 
-        function _new_channel(::$val_t, ::Val{:fifo},
-                closure::Ref{LibZenohC.$closure_owned_t},
-                capacity::Integer)
-            h = Ref{LibZenohC.$fifo_owned}()
-            LibZenohC.$fifo_new(closure, h, Csize_t(capacity))
-            finalizer(x -> LibZenohC.$fifo_drop(_move(x)), h)
-            return h
-        end
-        function _new_channel(::$val_t, ::Val{:ring},
-                closure::Ref{LibZenohC.$closure_owned_t},
-                capacity::Integer)
-            h = Ref{LibZenohC.$ring_owned}()
-            LibZenohC.$ring_new(closure, h, Csize_t(capacity))
-            finalizer(x -> LibZenohC.$ring_drop(_move(x)), h)
-            return h
-        end
+            _make_callback_ctx(::$val_t) = CallbackCtx{LibZenohC.$owned_t}()
+            _make_closure_ref(::$val_t)  = Ref{LibZenohC.$closure_owned_t}()
 
-        @inline _recv(::$val_t, ::Val{:fifo},
-                h::Ptr{LibZenohC.$fifo_loaned},
-                o::Ptr{LibZenohC.$owned_t}) =
-            @threadcall(($(QuoteNode(fifo_recv)), LibZenohC.libzenohc),
-                LibZenohC.z_result_t,
-                (Ptr{LibZenohC.$fifo_loaned}, Ptr{LibZenohC.$owned_t}),
-                h, o)
-        @inline _recv(::$val_t, ::Val{:ring},
-                h::Ptr{LibZenohC.$ring_loaned},
-                o::Ptr{LibZenohC.$owned_t}) =
-            @threadcall(($(QuoteNode(ring_recv)), LibZenohC.libzenohc),
-                LibZenohC.z_result_t,
-                (Ptr{LibZenohC.$ring_loaned}, Ptr{LibZenohC.$owned_t}),
-                h, o)
+            function _install_closure!(::$val_t,
+                    closure::Ref{LibZenohC.$closure_owned_t},
+                    ctx::CallbackCtx{LibZenohC.$owned_t})
+                LibZenohC.$closure_install(closure,
+                    $call_cb_ref[], $drop_cb_ref[], ctx_p(ctx))
+            end
 
-        @inline _try_recv(::$val_t, ::Val{:fifo}, h, o) =
-            LibZenohC.$fifo_try(h, o)
-        @inline _try_recv(::$val_t, ::Val{:ring}, h, o) =
-            LibZenohC.$ring_try(h, o)
-    end)
+            function _teardown_callback(::$val_t,
+                    ctx::CallbackCtx{LibZenohC.$owned_t},
+                    async_cond::Base.AsyncCondition)
+                destroy_ctx!(ctx, async_cond,
+                    $item_drop_fp[], LibZenohC.$moved_t)
+            end
+
+            function _new_channel(::$val_t, ::Val{:fifo},
+                    closure::Ref{LibZenohC.$closure_owned_t},
+                    capacity::Integer)
+                h = Ref{LibZenohC.$fifo_owned}()
+                LibZenohC.$fifo_new(closure, h, Csize_t(capacity))
+                finalizer(x -> LibZenohC.$fifo_drop(_move(x)), h)
+                return h
+            end
+            function _new_channel(::$val_t, ::Val{:ring},
+                    closure::Ref{LibZenohC.$closure_owned_t},
+                    capacity::Integer)
+                h = Ref{LibZenohC.$ring_owned}()
+                LibZenohC.$ring_new(closure, h, Csize_t(capacity))
+                finalizer(x -> LibZenohC.$ring_drop(_move(x)), h)
+                return h
+            end
+
+            @inline _recv(::$val_t, ::Val{:fifo},
+                    h::Ptr{LibZenohC.$fifo_loaned},
+                    o::Ptr{LibZenohC.$owned_t}) =
+                @threadcall(($(QuoteNode(fifo_recv)), LibZenohC.libzenohc),
+                    LibZenohC.z_result_t,
+                    (Ptr{LibZenohC.$fifo_loaned}, Ptr{LibZenohC.$owned_t}),
+                    h, o)
+            @inline _recv(::$val_t, ::Val{:ring},
+                    h::Ptr{LibZenohC.$ring_loaned},
+                    o::Ptr{LibZenohC.$owned_t}) =
+                @threadcall(($(QuoteNode(ring_recv)), LibZenohC.libzenohc),
+                    LibZenohC.z_result_t,
+                    (Ptr{LibZenohC.$ring_loaned}, Ptr{LibZenohC.$owned_t}),
+                    h, o)
+
+            @inline _try_recv(::$val_t, ::Val{:fifo}, h, o) =
+                LibZenohC.$fifo_try(h, o)
+            @inline _try_recv(::$val_t, ::Val{:ring}, h, o) =
+                LibZenohC.$ring_try(h, o)
+        end)
+    elseif shape === :pod
+        item_t = Symbol("z_", tag, "_t")
+        return esc(quote
+            const $call_cb_ref = Ref{Ptr{Cvoid}}(C_NULL)
+            const $drop_cb_ref = Ref{Ptr{Cvoid}}(C_NULL)
+
+            function $call_tramp(item::Ptr{LibZenohC.$item_t},
+                    ctx::Ptr{Cvoid})
+                call_body_pod!(item, ctx, LibZenohC.$item_t)
+            end
+            function $drop_tramp(ctx::Ptr{Cvoid})
+                drop_body!(ctx, LibZenohC.$item_t)
+            end
+
+            _register_init!() do
+                $call_cb_ref[] = @cfunction($call_tramp, Cvoid,
+                    (Ptr{LibZenohC.$item_t}, Ptr{Cvoid}))
+                $drop_cb_ref[] = @cfunction($drop_tramp, Cvoid, (Ptr{Cvoid},))
+            end
+
+            _make_callback_ctx(::$val_t) = CallbackCtx{LibZenohC.$item_t}()
+            _make_closure_ref(::$val_t)  = Ref{LibZenohC.$closure_owned_t}()
+
+            function _install_closure!(::$val_t,
+                    closure::Ref{LibZenohC.$closure_owned_t},
+                    ctx::CallbackCtx{LibZenohC.$item_t})
+                LibZenohC.$closure_install(closure,
+                    $call_cb_ref[], $drop_cb_ref[], ctx_p(ctx))
+            end
+
+            function _teardown_callback(::$val_t,
+                    ctx::CallbackCtx{LibZenohC.$item_t},
+                    async_cond::Base.AsyncCondition)
+                destroy_ctx_pod!(ctx, async_cond)
+            end
+        end)
+    else
+        throw(ArgumentError(
+            "@closure_kind shape must be :owned or :pod, got :$(shape)"))
+    end
 end
 
 # ── Shared callback lifecycle helper ────────────────────────────────────
@@ -180,3 +242,4 @@ end
 @closure_kind :sample
 @closure_kind :reply
 @closure_kind :query
+@closure_kind :matching_status :pod
