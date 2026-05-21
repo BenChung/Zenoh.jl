@@ -627,6 +627,208 @@ try
         end
     end
 
+    @testset "Locality" begin
+        @test Zenoh.Locality(:any).v           == Zenoh.LibZenohC.Z_LOCALITY_ANY
+        @test Zenoh.Locality(:session_local).v == Zenoh.LibZenohC.Z_LOCALITY_SESSION_LOCAL
+        @test Zenoh.Locality(:remote).v        == Zenoh.LibZenohC.Z_LOCALITY_REMOTE
+        @test Zenoh.Locality(:default).v       == Zenoh.LibZenohC.z_locality_default()
+        @test_throws MethodError Zenoh.Locality(:bogus)
+
+        @test Zenoh.Locality(:any) == Zenoh.Localities.ANY
+        @test Zenoh.Localities.SESSION_LOCAL == Zenoh.Locality(:session_local)
+        @test Zenoh.Localities.REMOTE.v == Zenoh.LibZenohC.Z_LOCALITY_REMOTE
+
+        @test hash(Zenoh.Locality(:remote)) == hash(Zenoh.Localities.REMOTE)
+        @test occursin(":remote", sprint(show, Zenoh.Localities.REMOTE))
+    end
+
+    @testset "Queryable (channel) round-trip" begin
+        c = Zenoh.Config(; str = """{connect: { endpoints: ["tcp/localhost:19148"]}}""")
+        s = open(c)
+        qh = nothing
+        srv = nothing
+        try
+            test_key = Zenoh.Keyexpr("test/queryable/channel")
+            qh = Zenoh.Queryable(s, test_key; channel=:fifo, capacity=8,
+                                 complete=true, allowed_origin=Zenoh.Localities.ANY)
+
+            seen_params = Channel{String}(4)
+            seen_keyexpr = Channel{String}(4)
+            srv = @async begin
+                for query in qh
+                    put!(seen_keyexpr, Zenoh.keyexpr(query))
+                    put!(seen_params, Zenoh.parameters(query))
+                    Zenoh.reply(query, "pong";
+                        encoding=Zenoh.Encodings.TEXT_PLAIN)
+                end
+            end
+
+            # Give the router a moment to learn about the queryable.
+            sleep(0.2)
+
+            # Routing through the router can duplicate the query reply
+            # path (one from the local queryable + one routed back), so
+            # we filter for ok replies and assert at least one.
+            replies = collect(Zenoh.get(s, test_key, "k1=v1&k2=v2";
+                timeout_ms=2000))
+            ok_replies = filter(Zenoh.is_ok, replies)
+            @test length(ok_replies) >= 1
+            smp = Zenoh.sample(ok_replies[1])
+            @test Zenoh.keyexpr(smp) == "test/queryable/channel"
+            open(Zenoh.payload(smp), Val(:read)) do io
+                @test read(io, String) == "pong"
+            end
+            @test Zenoh.encoding(smp) == Zenoh.Encodings.TEXT_PLAIN
+
+            @test take!(seen_keyexpr) == "test/queryable/channel"
+            @test take!(seen_params)  == "k1=v1&k2=v2"
+        finally
+            !isnothing(qh) && close(qh)
+            !isnothing(srv) && wait(srv)
+            close(s)
+        end
+    end
+
+    @testset "Queryable (callback) round-trip" begin
+        c = Zenoh.Config(; str = """{connect: { endpoints: ["tcp/localhost:19148"]}}""")
+        s = open(c)
+        q = nothing
+        try
+            test_key = Zenoh.Keyexpr("test/queryable/callback")
+            served = Channel{String}(4)
+            q = Zenoh.Queryable(s, test_key) do query
+                put!(served, Zenoh.parameters(query))
+                Zenoh.reply(query, "callback-pong")
+            end
+            sleep(0.2)
+
+            replies = collect(Zenoh.get(s, test_key, "x=1"; timeout_ms=2000))
+            ok_replies = filter(Zenoh.is_ok, replies)
+            @test length(ok_replies) >= 1
+            smp = Zenoh.sample(ok_replies[1])
+            open(Zenoh.payload(smp), Val(:read)) do io
+                @test read(io, String) == "callback-pong"
+            end
+            @test take!(served) == "x=1"
+        finally
+            !isnothing(q) && close(q)
+            close(s)
+        end
+    end
+
+    @testset "Queryable accessors (payload + attachment + encoding)" begin
+        c = Zenoh.Config(; str = """{connect: { endpoints: ["tcp/localhost:19148"]}}""")
+        s = open(c)
+        qh = nothing
+        srv = nothing
+        try
+            test_key = Zenoh.Keyexpr("test/queryable/accessors")
+            qh = Zenoh.Queryable(s, test_key; channel=:fifo, capacity=4)
+
+            # Capacity > 1 because router routing may deliver the query
+            # through both local and remote paths.
+            seen_payload = Channel{String}(4)
+            seen_attach  = Channel{String}(4)
+            seen_enc     = Channel{Zenoh.Encoding}(4)
+            srv = @async begin
+                for query in qh
+                    p = Zenoh.payload(query)
+                    open(p, Val(:read)) do io
+                        put!(seen_payload, read(io, String))
+                    end
+                    a = Zenoh.attachment(query)
+                    if isnothing(a)
+                        put!(seen_attach, "<none>")
+                    else
+                        open(a, Val(:read)) do io
+                            put!(seen_attach, read(io, String))
+                        end
+                    end
+                    e = Zenoh.encoding(query)
+                    put!(seen_enc, isnothing(e) ? Zenoh.Encoding("") : e)
+                    Zenoh.reply(query, "ack")
+                end
+            end
+            sleep(0.2)
+
+            collect(Zenoh.get(s, test_key; timeout_ms=2000,
+                payload="req-payload",
+                encoding=Zenoh.Encodings.APPLICATION_JSON,
+                attachment="req-meta"))
+
+            @test take!(seen_payload) == "req-payload"
+            @test take!(seen_attach)  == "req-meta"
+            @test take!(seen_enc)     == Zenoh.Encodings.APPLICATION_JSON
+        finally
+            !isnothing(qh) && close(qh)
+            !isnothing(srv) && wait(srv)
+            close(s)
+        end
+    end
+
+    @testset "Queryable reply_err" begin
+        c = Zenoh.Config(; str = """{connect: { endpoints: ["tcp/localhost:19148"]}}""")
+        s = open(c)
+        q = nothing
+        try
+            test_key = Zenoh.Keyexpr("test/queryable/err")
+            q = Zenoh.Queryable(s, test_key) do query
+                Zenoh.reply_err(query, "boom";
+                    encoding=Zenoh.Encodings.TEXT_PLAIN)
+            end
+            sleep(0.2)
+
+            replies = collect(Zenoh.get(s, test_key; timeout_ms=2000))
+            err_replies = filter(r -> !Zenoh.is_ok(r), replies)
+            @test length(err_replies) >= 1
+            r = err_replies[1]
+            open(Zenoh.error_payload(r), Val(:read)) do io
+                @test read(io, String) == "boom"
+            end
+            @test Zenoh.error_encoding(r) == Zenoh.Encodings.TEXT_PLAIN
+        finally
+            !isnothing(q) && close(q)
+            close(s)
+        end
+    end
+
+    @testset "Queryable reply_del" begin
+        c = Zenoh.Config(; str = """{connect: { endpoints: ["tcp/localhost:19148"]}}""")
+        s = open(c)
+        q = nothing
+        try
+            test_key = Zenoh.Keyexpr("test/queryable/del")
+            q = Zenoh.Queryable(s, test_key) do query
+                Zenoh.reply_del(query)
+            end
+            sleep(0.2)
+
+            replies = collect(Zenoh.get(s, test_key; timeout_ms=2000))
+            ok_replies = filter(Zenoh.is_ok, replies)
+            @test length(ok_replies) >= 1
+            smp = Zenoh.sample(ok_replies[1])
+            @test Zenoh.kind(smp) == Zenoh.LibZenohC.Z_SAMPLE_KIND_DELETE
+        finally
+            !isnothing(q) && close(q)
+            close(s)
+        end
+    end
+
+    @testset "Queryable tryrecv! + close before any query" begin
+        c = Zenoh.Config(; str = """{connect: { endpoints: ["tcp/localhost:19148"]}}""")
+        s = open(c)
+        qh = nothing
+        try
+            qh = Zenoh.Queryable(s, Zenoh.Keyexpr("test/queryable/idle");
+                channel=:ring, capacity=2)
+            # No query in flight → tryrecv! returns nothing (doesn't block).
+            @test Zenoh.tryrecv!(qh) === nothing
+        finally
+            !isnothing(qh) && close(qh)
+            close(s)
+        end
+    end
+
     @testset "liveliness_get snapshot" begin
         c = Zenoh.Config(; str = """{connect: { endpoints: ["tcp/localhost:19148"]}}""")
         s = open(c)

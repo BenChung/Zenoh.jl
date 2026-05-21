@@ -15,6 +15,7 @@ function _string(r::Ref{LibZenohC.z_owned_string_t})
 end
 
 include("encoding.jl")
+include("locality.jl")
 
 const _refs_in_flight = Dict{UInt64, Ref}()
 const _refptr = Ref{UInt64}(0)
@@ -438,6 +439,7 @@ end
 
 include("subscriber.jl")
 include("get_callback.jl")
+include("queryable.jl")
 include("liveliness.jl")
 
 function setup_logging()

@@ -179,3 +179,4 @@ end
 
 @closure_kind :sample
 @closure_kind :reply
+@closure_kind :query
