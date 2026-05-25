@@ -259,6 +259,12 @@ struct Keyexpr
         finalizer(k -> LibZenohC.z_keyexpr_drop(_move(k)), k)
         return res
     end
+    # Wrap a z_owned_keyexpr_t that a C builder (z_keyexpr_concat/join, …)
+    # has already populated; just attach the drop finalizer.
+    function Keyexpr(k::Base.RefValue{LibZenohC.z_owned_keyexpr_t}, ::Val{:owned})
+        finalizer(k -> LibZenohC.z_keyexpr_drop(_move(k)), k)
+        return new(k)
+    end
 end
 
 """
@@ -278,6 +284,9 @@ macro kexpr_str(s, flags="")
 end
 
 export Keyexpr, @kexpr_str
+export includes, intersects, concat, canonize, is_canon
+
+include("keyexpr.jl")
 
 struct Sample{S <: Union{Base.RefValue{LibZenohC.z_owned_sample_t},
                          Ptr{LibZenohC.z_loaned_sample_t}}}

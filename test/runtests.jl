@@ -78,6 +78,48 @@ try
         @test_throws ArgumentError @macroexpand kexpr"whatever"x
     end
 
+    @timed_testset "Keyexpr utilities" begin
+        a = Zenoh.Keyexpr("a/b/c")
+        b = Zenoh.Keyexpr("a/b/c")
+        c = Zenoh.Keyexpr("a/b/d")
+
+        # String conversion / show
+        @test String(a) == "a/b/c"
+        @test string(a) == "a/b/c"
+        @test sprint(show, a) == "Keyexpr(\"a/b/c\")"
+        @test sprint(print, a) == "a/b/c"
+
+        # Equality + hash consistency
+        @test a == b
+        @test a != c
+        @test hash(a) == hash(b)
+
+        # includes / intersects with wildcards
+        star = Zenoh.Keyexpr("a/*/c")
+        dstar = Zenoh.Keyexpr("a/**")
+        @test Zenoh.includes(dstar, a)
+        @test !Zenoh.includes(a, dstar)
+        @test Zenoh.includes(star, a)
+        @test Zenoh.intersects(star, a)
+        @test Zenoh.intersects(dstar, c)
+        # disjoint
+        @test !Zenoh.intersects(Zenoh.Keyexpr("x/y"), a)
+
+        # concat — raw suffix, no separator inserted
+        @test String(Zenoh.concat(a, "/d")) == "a/b/c/d"
+        # bad suffix → ZenohError
+        @test_throws Zenoh.ZenohError Zenoh.concat(a, "//bad")
+
+        # join — keyexpr-with-separator
+        @test String(join(a, Zenoh.Keyexpr("d/e"))) == "a/b/c/d/e"
+
+        # canonize / is_canon
+        @test Zenoh.canonize("a/**/**/b") == "a/**/b"
+        @test Zenoh.is_canon("a/b/c")
+        @test !Zenoh.is_canon("a/**/**/b")
+        @test_throws Zenoh.ZenohError Zenoh.canonize("")
+    end
+
     @timed_testset "ZBytes iteration" begin
         # Covers the iterate(::ZBytes) path, which must loan the underlying
         # z_owned_bytes_t before calling z_bytes_get_slice_iterator.
