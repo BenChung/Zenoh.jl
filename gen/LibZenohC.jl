@@ -3,9 +3,13 @@ module LibZenohC
 using libzenohc_jll
 export libzenohc_jll
 
-using CEnum
+using CEnum: CEnum, @cenum
 
 INT8_MIN = typemin(Int8)
+
+struct z_alloc_alignment_t
+    pow::UInt8
+end
 
 struct z_owned_bytes_t
     data::NTuple{40, UInt8}
@@ -27,6 +31,14 @@ function Base.setproperty!(x::Ptr{z_owned_bytes_t}, f::Symbol, v)
     unsafe_store!(getproperty(x, f), v)
 end
 
+function Base.propertynames(x::z_owned_bytes_t, private::Bool = false)
+    (:_0, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
+end
+
 struct z_loaned_bytes_t
     data::NTuple{40, UInt8}
 end
@@ -45,6 +57,14 @@ end
 
 function Base.setproperty!(x::Ptr{z_loaned_bytes_t}, f::Symbol, v)
     unsafe_store!(getproperty(x, f), v)
+end
+
+function Base.propertynames(x::z_loaned_bytes_t, private::Bool = false)
+    (:_0, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
 end
 
 function z_bytes_loan(this_)
@@ -71,6 +91,14 @@ function Base.setproperty!(x::Ptr{z_owned_bytes_writer_t}, f::Symbol, v)
     unsafe_store!(getproperty(x, f), v)
 end
 
+function Base.propertynames(x::z_owned_bytes_writer_t, private::Bool = false)
+    (:_0, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
+end
+
 struct z_loaned_bytes_writer_t
     data::NTuple{64, UInt8}
 end
@@ -91,8 +119,76 @@ function Base.setproperty!(x::Ptr{z_loaned_bytes_writer_t}, f::Symbol, v)
     unsafe_store!(getproperty(x, f), v)
 end
 
+function Base.propertynames(x::z_loaned_bytes_writer_t, private::Bool = false)
+    (:_0, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
+end
+
 function z_bytes_writer_loan(this_)
     ccall((:z_bytes_writer_loan, libzenohc), Ptr{z_loaned_bytes_writer_t}, (Ptr{z_owned_bytes_writer_t},), this_)
+end
+
+struct z_owned_cancellation_token_t
+    data::NTuple{24, UInt8}
+end
+
+function Base.getproperty(x::Ptr{z_owned_cancellation_token_t}, f::Symbol)
+    f === :_0 && return Ptr{NTuple{24, UInt8}}(x + 0)
+    return getfield(x, f)
+end
+
+function Base.getproperty(x::z_owned_cancellation_token_t, f::Symbol)
+    r = Ref{z_owned_cancellation_token_t}(x)
+    ptr = Base.unsafe_convert(Ptr{z_owned_cancellation_token_t}, r)
+    fptr = getproperty(ptr, f)
+    GC.@preserve r unsafe_load(fptr)
+end
+
+function Base.setproperty!(x::Ptr{z_owned_cancellation_token_t}, f::Symbol, v)
+    unsafe_store!(getproperty(x, f), v)
+end
+
+function Base.propertynames(x::z_owned_cancellation_token_t, private::Bool = false)
+    (:_0, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
+end
+
+struct z_loaned_cancellation_token_t
+    data::NTuple{24, UInt8}
+end
+
+function Base.getproperty(x::Ptr{z_loaned_cancellation_token_t}, f::Symbol)
+    f === :_0 && return Ptr{NTuple{24, UInt8}}(x + 0)
+    return getfield(x, f)
+end
+
+function Base.getproperty(x::z_loaned_cancellation_token_t, f::Symbol)
+    r = Ref{z_loaned_cancellation_token_t}(x)
+    ptr = Base.unsafe_convert(Ptr{z_loaned_cancellation_token_t}, r)
+    fptr = getproperty(ptr, f)
+    GC.@preserve r unsafe_load(fptr)
+end
+
+function Base.setproperty!(x::Ptr{z_loaned_cancellation_token_t}, f::Symbol, v)
+    unsafe_store!(getproperty(x, f), v)
+end
+
+function Base.propertynames(x::z_loaned_cancellation_token_t, private::Bool = false)
+    (:_0, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
+end
+
+function z_cancellation_token_loan(this_)
+    ccall((:z_cancellation_token_loan, libzenohc), Ptr{z_loaned_cancellation_token_t}, (Ptr{z_owned_cancellation_token_t},), this_)
 end
 
 struct z_owned_closure_hello_t
@@ -109,6 +205,38 @@ end
 
 function z_closure_hello_loan(closure)
     ccall((:z_closure_hello_loan, libzenohc), Ptr{z_loaned_closure_hello_t}, (Ptr{z_owned_closure_hello_t},), closure)
+end
+
+struct z_owned_closure_link_event_t
+    _context::Ptr{Cvoid}
+    _call::Ptr{Cvoid}
+    _drop::Ptr{Cvoid}
+end
+
+struct z_loaned_closure_link_event_t
+    _0::Csize_t
+    _1::Csize_t
+    _2::Csize_t
+end
+
+function z_closure_link_event_loan(closure)
+    ccall((:z_closure_link_event_loan, libzenohc), Ptr{z_loaned_closure_link_event_t}, (Ptr{z_owned_closure_link_event_t},), closure)
+end
+
+struct z_owned_closure_link_t
+    _context::Ptr{Cvoid}
+    _call::Ptr{Cvoid}
+    _drop::Ptr{Cvoid}
+end
+
+struct z_loaned_closure_link_t
+    _0::Csize_t
+    _1::Csize_t
+    _2::Csize_t
+end
+
+function z_closure_link_loan(closure)
+    ccall((:z_closure_link_loan, libzenohc), Ptr{z_loaned_closure_link_t}, (Ptr{z_owned_closure_link_t},), closure)
 end
 
 struct z_owned_closure_matching_status_t
@@ -175,6 +303,38 @@ function z_closure_sample_loan(closure)
     ccall((:z_closure_sample_loan, libzenohc), Ptr{z_loaned_closure_sample_t}, (Ptr{z_owned_closure_sample_t},), closure)
 end
 
+struct z_owned_closure_transport_event_t
+    _context::Ptr{Cvoid}
+    _call::Ptr{Cvoid}
+    _drop::Ptr{Cvoid}
+end
+
+struct z_loaned_closure_transport_event_t
+    _0::Csize_t
+    _1::Csize_t
+    _2::Csize_t
+end
+
+function z_closure_transport_event_loan(closure)
+    ccall((:z_closure_transport_event_loan, libzenohc), Ptr{z_loaned_closure_transport_event_t}, (Ptr{z_owned_closure_transport_event_t},), closure)
+end
+
+struct z_owned_closure_transport_t
+    _context::Ptr{Cvoid}
+    _call::Ptr{Cvoid}
+    _drop::Ptr{Cvoid}
+end
+
+struct z_loaned_closure_transport_t
+    _0::Csize_t
+    _1::Csize_t
+    _2::Csize_t
+end
+
+function z_closure_transport_loan(closure)
+    ccall((:z_closure_transport_loan, libzenohc), Ptr{z_loaned_closure_transport_t}, (Ptr{z_owned_closure_transport_t},), closure)
+end
+
 struct z_owned_closure_zid_t
     _context::Ptr{Cvoid}
     _call::Ptr{Cvoid}
@@ -211,6 +371,14 @@ function Base.setproperty!(x::Ptr{z_owned_condvar_t}, f::Symbol, v)
     unsafe_store!(getproperty(x, f), v)
 end
 
+function Base.propertynames(x::z_owned_condvar_t, private::Bool = false)
+    (:_0, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
+end
+
 struct z_loaned_condvar_t
     data::NTuple{4, UInt8}
 end
@@ -229,6 +397,14 @@ end
 
 function Base.setproperty!(x::Ptr{z_loaned_condvar_t}, f::Symbol, v)
     unsafe_store!(getproperty(x, f), v)
+end
+
+function Base.propertynames(x::z_loaned_condvar_t, private::Bool = false)
+    (:_0, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
 end
 
 function z_condvar_loan(this_)
@@ -255,6 +431,14 @@ function Base.setproperty!(x::Ptr{z_owned_config_t}, f::Symbol, v)
     unsafe_store!(getproperty(x, f), v)
 end
 
+function Base.propertynames(x::z_owned_config_t, private::Bool = false)
+    (:_0, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
+end
+
 struct z_loaned_config_t
     data::NTuple{2040, UInt8}
 end
@@ -273,6 +457,14 @@ end
 
 function Base.setproperty!(x::Ptr{z_loaned_config_t}, f::Symbol, v)
     unsafe_store!(getproperty(x, f), v)
+end
+
+function Base.propertynames(x::z_loaned_config_t, private::Bool = false)
+    (:_0, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
 end
 
 function z_config_loan(this_)
@@ -299,6 +491,14 @@ function Base.setproperty!(x::Ptr{z_owned_encoding_t}, f::Symbol, v)
     unsafe_store!(getproperty(x, f), v)
 end
 
+function Base.propertynames(x::z_owned_encoding_t, private::Bool = false)
+    (:_0, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
+end
+
 struct z_loaned_encoding_t
     data::NTuple{48, UInt8}
 end
@@ -317,6 +517,14 @@ end
 
 function Base.setproperty!(x::Ptr{z_loaned_encoding_t}, f::Symbol, v)
     unsafe_store!(getproperty(x, f), v)
+end
+
+function Base.propertynames(x::z_loaned_encoding_t, private::Bool = false)
+    (:_0, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
 end
 
 function z_encoding_loan(this_)
@@ -343,6 +551,14 @@ function Base.setproperty!(x::Ptr{z_owned_fifo_handler_query_t}, f::Symbol, v)
     unsafe_store!(getproperty(x, f), v)
 end
 
+function Base.propertynames(x::z_owned_fifo_handler_query_t, private::Bool = false)
+    (:_0, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
+end
+
 struct z_loaned_fifo_handler_query_t
     data::NTuple{8, UInt8}
 end
@@ -361,6 +577,14 @@ end
 
 function Base.setproperty!(x::Ptr{z_loaned_fifo_handler_query_t}, f::Symbol, v)
     unsafe_store!(getproperty(x, f), v)
+end
+
+function Base.propertynames(x::z_loaned_fifo_handler_query_t, private::Bool = false)
+    (:_0, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
 end
 
 function z_fifo_handler_query_loan(this_)
@@ -387,6 +611,14 @@ function Base.setproperty!(x::Ptr{z_owned_fifo_handler_reply_t}, f::Symbol, v)
     unsafe_store!(getproperty(x, f), v)
 end
 
+function Base.propertynames(x::z_owned_fifo_handler_reply_t, private::Bool = false)
+    (:_0, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
+end
+
 struct z_loaned_fifo_handler_reply_t
     data::NTuple{8, UInt8}
 end
@@ -405,6 +637,14 @@ end
 
 function Base.setproperty!(x::Ptr{z_loaned_fifo_handler_reply_t}, f::Symbol, v)
     unsafe_store!(getproperty(x, f), v)
+end
+
+function Base.propertynames(x::z_loaned_fifo_handler_reply_t, private::Bool = false)
+    (:_0, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
 end
 
 function z_fifo_handler_reply_loan(this_)
@@ -431,6 +671,14 @@ function Base.setproperty!(x::Ptr{z_owned_fifo_handler_sample_t}, f::Symbol, v)
     unsafe_store!(getproperty(x, f), v)
 end
 
+function Base.propertynames(x::z_owned_fifo_handler_sample_t, private::Bool = false)
+    (:_0, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
+end
+
 struct z_loaned_fifo_handler_sample_t
     data::NTuple{8, UInt8}
 end
@@ -449,6 +697,14 @@ end
 
 function Base.setproperty!(x::Ptr{z_loaned_fifo_handler_sample_t}, f::Symbol, v)
     unsafe_store!(getproperty(x, f), v)
+end
+
+function Base.propertynames(x::z_loaned_fifo_handler_sample_t, private::Bool = false)
+    (:_0, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
 end
 
 function z_fifo_handler_sample_loan(this_)
@@ -475,6 +731,14 @@ function Base.setproperty!(x::Ptr{z_owned_hello_t}, f::Symbol, v)
     unsafe_store!(getproperty(x, f), v)
 end
 
+function Base.propertynames(x::z_owned_hello_t, private::Bool = false)
+    (:_0, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
+end
+
 struct z_loaned_hello_t
     data::NTuple{48, UInt8}
 end
@@ -493,6 +757,14 @@ end
 
 function Base.setproperty!(x::Ptr{z_loaned_hello_t}, f::Symbol, v)
     unsafe_store!(getproperty(x, f), v)
+end
+
+function Base.propertynames(x::z_loaned_hello_t, private::Bool = false)
+    (:_0, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
 end
 
 function z_hello_loan(this_)
@@ -519,6 +791,14 @@ function Base.setproperty!(x::Ptr{z_owned_keyexpr_t}, f::Symbol, v)
     unsafe_store!(getproperty(x, f), v)
 end
 
+function Base.propertynames(x::z_owned_keyexpr_t, private::Bool = false)
+    (:_0, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
+end
+
 struct z_loaned_keyexpr_t
     data::NTuple{32, UInt8}
 end
@@ -539,8 +819,196 @@ function Base.setproperty!(x::Ptr{z_loaned_keyexpr_t}, f::Symbol, v)
     unsafe_store!(getproperty(x, f), v)
 end
 
+function Base.propertynames(x::z_loaned_keyexpr_t, private::Bool = false)
+    (:_0, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
+end
+
 function z_keyexpr_loan(this_)
     ccall((:z_keyexpr_loan, libzenohc), Ptr{z_loaned_keyexpr_t}, (Ptr{z_owned_keyexpr_t},), this_)
+end
+
+struct z_owned_link_event_t
+    data::NTuple{152, UInt8}
+end
+
+function Base.getproperty(x::Ptr{z_owned_link_event_t}, f::Symbol)
+    f === :_0 && return Ptr{NTuple{152, UInt8}}(x + 0)
+    return getfield(x, f)
+end
+
+function Base.getproperty(x::z_owned_link_event_t, f::Symbol)
+    r = Ref{z_owned_link_event_t}(x)
+    ptr = Base.unsafe_convert(Ptr{z_owned_link_event_t}, r)
+    fptr = getproperty(ptr, f)
+    GC.@preserve r unsafe_load(fptr)
+end
+
+function Base.setproperty!(x::Ptr{z_owned_link_event_t}, f::Symbol, v)
+    unsafe_store!(getproperty(x, f), v)
+end
+
+function Base.propertynames(x::z_owned_link_event_t, private::Bool = false)
+    (:_0, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
+end
+
+struct z_loaned_link_event_t
+    data::NTuple{152, UInt8}
+end
+
+function Base.getproperty(x::Ptr{z_loaned_link_event_t}, f::Symbol)
+    f === :_0 && return Ptr{NTuple{152, UInt8}}(x + 0)
+    return getfield(x, f)
+end
+
+function Base.getproperty(x::z_loaned_link_event_t, f::Symbol)
+    r = Ref{z_loaned_link_event_t}(x)
+    ptr = Base.unsafe_convert(Ptr{z_loaned_link_event_t}, r)
+    fptr = getproperty(ptr, f)
+    GC.@preserve r unsafe_load(fptr)
+end
+
+function Base.setproperty!(x::Ptr{z_loaned_link_event_t}, f::Symbol, v)
+    unsafe_store!(getproperty(x, f), v)
+end
+
+function Base.propertynames(x::z_loaned_link_event_t, private::Bool = false)
+    (:_0, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
+end
+
+function z_link_event_loan(this_)
+    ccall((:z_link_event_loan, libzenohc), Ptr{z_loaned_link_event_t}, (Ptr{z_owned_link_event_t},), this_)
+end
+
+struct z_owned_link_events_listener_t
+    data::NTuple{24, UInt8}
+end
+
+function Base.getproperty(x::Ptr{z_owned_link_events_listener_t}, f::Symbol)
+    f === :_0 && return Ptr{NTuple{24, UInt8}}(x + 0)
+    return getfield(x, f)
+end
+
+function Base.getproperty(x::z_owned_link_events_listener_t, f::Symbol)
+    r = Ref{z_owned_link_events_listener_t}(x)
+    ptr = Base.unsafe_convert(Ptr{z_owned_link_events_listener_t}, r)
+    fptr = getproperty(ptr, f)
+    GC.@preserve r unsafe_load(fptr)
+end
+
+function Base.setproperty!(x::Ptr{z_owned_link_events_listener_t}, f::Symbol, v)
+    unsafe_store!(getproperty(x, f), v)
+end
+
+function Base.propertynames(x::z_owned_link_events_listener_t, private::Bool = false)
+    (:_0, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
+end
+
+struct z_loaned_link_events_listener_t
+    data::NTuple{24, UInt8}
+end
+
+function Base.getproperty(x::Ptr{z_loaned_link_events_listener_t}, f::Symbol)
+    f === :_0 && return Ptr{NTuple{24, UInt8}}(x + 0)
+    return getfield(x, f)
+end
+
+function Base.getproperty(x::z_loaned_link_events_listener_t, f::Symbol)
+    r = Ref{z_loaned_link_events_listener_t}(x)
+    ptr = Base.unsafe_convert(Ptr{z_loaned_link_events_listener_t}, r)
+    fptr = getproperty(ptr, f)
+    GC.@preserve r unsafe_load(fptr)
+end
+
+function Base.setproperty!(x::Ptr{z_loaned_link_events_listener_t}, f::Symbol, v)
+    unsafe_store!(getproperty(x, f), v)
+end
+
+function Base.propertynames(x::z_loaned_link_events_listener_t, private::Bool = false)
+    (:_0, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
+end
+
+function z_link_events_listener_loan(this_)
+    ccall((:z_link_events_listener_loan, libzenohc), Ptr{z_loaned_link_events_listener_t}, (Ptr{z_owned_link_events_listener_t},), this_)
+end
+
+struct z_owned_link_t
+    data::NTuple{144, UInt8}
+end
+
+function Base.getproperty(x::Ptr{z_owned_link_t}, f::Symbol)
+    f === :_0 && return Ptr{NTuple{144, UInt8}}(x + 0)
+    return getfield(x, f)
+end
+
+function Base.getproperty(x::z_owned_link_t, f::Symbol)
+    r = Ref{z_owned_link_t}(x)
+    ptr = Base.unsafe_convert(Ptr{z_owned_link_t}, r)
+    fptr = getproperty(ptr, f)
+    GC.@preserve r unsafe_load(fptr)
+end
+
+function Base.setproperty!(x::Ptr{z_owned_link_t}, f::Symbol, v)
+    unsafe_store!(getproperty(x, f), v)
+end
+
+function Base.propertynames(x::z_owned_link_t, private::Bool = false)
+    (:_0, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
+end
+
+struct z_loaned_link_t
+    data::NTuple{144, UInt8}
+end
+
+function Base.getproperty(x::Ptr{z_loaned_link_t}, f::Symbol)
+    f === :_0 && return Ptr{NTuple{144, UInt8}}(x + 0)
+    return getfield(x, f)
+end
+
+function Base.getproperty(x::z_loaned_link_t, f::Symbol)
+    r = Ref{z_loaned_link_t}(x)
+    ptr = Base.unsafe_convert(Ptr{z_loaned_link_t}, r)
+    fptr = getproperty(ptr, f)
+    GC.@preserve r unsafe_load(fptr)
+end
+
+function Base.setproperty!(x::Ptr{z_loaned_link_t}, f::Symbol, v)
+    unsafe_store!(getproperty(x, f), v)
+end
+
+function Base.propertynames(x::z_loaned_link_t, private::Bool = false)
+    (:_0, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
+end
+
+function z_link_loan(this_)
+    ccall((:z_link_loan, libzenohc), Ptr{z_loaned_link_t}, (Ptr{z_owned_link_t},), this_)
 end
 
 struct z_owned_liveliness_token_t
@@ -563,6 +1031,14 @@ function Base.setproperty!(x::Ptr{z_owned_liveliness_token_t}, f::Symbol, v)
     unsafe_store!(getproperty(x, f), v)
 end
 
+function Base.propertynames(x::z_owned_liveliness_token_t, private::Bool = false)
+    (:_0, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
+end
+
 struct z_loaned_liveliness_token_t
     data::NTuple{16, UInt8}
 end
@@ -583,8 +1059,196 @@ function Base.setproperty!(x::Ptr{z_loaned_liveliness_token_t}, f::Symbol, v)
     unsafe_store!(getproperty(x, f), v)
 end
 
+function Base.propertynames(x::z_loaned_liveliness_token_t, private::Bool = false)
+    (:_0, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
+end
+
 function z_liveliness_token_loan(this_)
     ccall((:z_liveliness_token_loan, libzenohc), Ptr{z_loaned_liveliness_token_t}, (Ptr{z_owned_liveliness_token_t},), this_)
+end
+
+struct z_owned_memory_layout_t
+    data::NTuple{16, UInt8}
+end
+
+function Base.getproperty(x::Ptr{z_owned_memory_layout_t}, f::Symbol)
+    f === :_0 && return Ptr{NTuple{16, UInt8}}(x + 0)
+    return getfield(x, f)
+end
+
+function Base.getproperty(x::z_owned_memory_layout_t, f::Symbol)
+    r = Ref{z_owned_memory_layout_t}(x)
+    ptr = Base.unsafe_convert(Ptr{z_owned_memory_layout_t}, r)
+    fptr = getproperty(ptr, f)
+    GC.@preserve r unsafe_load(fptr)
+end
+
+function Base.setproperty!(x::Ptr{z_owned_memory_layout_t}, f::Symbol, v)
+    unsafe_store!(getproperty(x, f), v)
+end
+
+function Base.propertynames(x::z_owned_memory_layout_t, private::Bool = false)
+    (:_0, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
+end
+
+struct z_loaned_memory_layout_t
+    data::NTuple{16, UInt8}
+end
+
+function Base.getproperty(x::Ptr{z_loaned_memory_layout_t}, f::Symbol)
+    f === :_0 && return Ptr{NTuple{16, UInt8}}(x + 0)
+    return getfield(x, f)
+end
+
+function Base.getproperty(x::z_loaned_memory_layout_t, f::Symbol)
+    r = Ref{z_loaned_memory_layout_t}(x)
+    ptr = Base.unsafe_convert(Ptr{z_loaned_memory_layout_t}, r)
+    fptr = getproperty(ptr, f)
+    GC.@preserve r unsafe_load(fptr)
+end
+
+function Base.setproperty!(x::Ptr{z_loaned_memory_layout_t}, f::Symbol, v)
+    unsafe_store!(getproperty(x, f), v)
+end
+
+function Base.propertynames(x::z_loaned_memory_layout_t, private::Bool = false)
+    (:_0, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
+end
+
+function z_memory_layout_loan(this_)
+    ccall((:z_memory_layout_loan, libzenohc), Ptr{z_loaned_memory_layout_t}, (Ptr{z_owned_memory_layout_t},), this_)
+end
+
+struct z_owned_precomputed_layout_t
+    data::NTuple{40, UInt8}
+end
+
+function Base.getproperty(x::Ptr{z_owned_precomputed_layout_t}, f::Symbol)
+    f === :_0 && return Ptr{NTuple{40, UInt8}}(x + 0)
+    return getfield(x, f)
+end
+
+function Base.getproperty(x::z_owned_precomputed_layout_t, f::Symbol)
+    r = Ref{z_owned_precomputed_layout_t}(x)
+    ptr = Base.unsafe_convert(Ptr{z_owned_precomputed_layout_t}, r)
+    fptr = getproperty(ptr, f)
+    GC.@preserve r unsafe_load(fptr)
+end
+
+function Base.setproperty!(x::Ptr{z_owned_precomputed_layout_t}, f::Symbol, v)
+    unsafe_store!(getproperty(x, f), v)
+end
+
+function Base.propertynames(x::z_owned_precomputed_layout_t, private::Bool = false)
+    (:_0, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
+end
+
+struct z_loaned_precomputed_layout_t
+    data::NTuple{40, UInt8}
+end
+
+function Base.getproperty(x::Ptr{z_loaned_precomputed_layout_t}, f::Symbol)
+    f === :_0 && return Ptr{NTuple{40, UInt8}}(x + 0)
+    return getfield(x, f)
+end
+
+function Base.getproperty(x::z_loaned_precomputed_layout_t, f::Symbol)
+    r = Ref{z_loaned_precomputed_layout_t}(x)
+    ptr = Base.unsafe_convert(Ptr{z_loaned_precomputed_layout_t}, r)
+    fptr = getproperty(ptr, f)
+    GC.@preserve r unsafe_load(fptr)
+end
+
+function Base.setproperty!(x::Ptr{z_loaned_precomputed_layout_t}, f::Symbol, v)
+    unsafe_store!(getproperty(x, f), v)
+end
+
+function Base.propertynames(x::z_loaned_precomputed_layout_t, private::Bool = false)
+    (:_0, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
+end
+
+function z_precomputed_layout_loan(this_)
+    ccall((:z_precomputed_layout_loan, libzenohc), Ptr{z_loaned_precomputed_layout_t}, (Ptr{z_owned_precomputed_layout_t},), this_)
+end
+
+struct z_owned_ptr_in_segment_t
+    data::NTuple{24, UInt8}
+end
+
+function Base.getproperty(x::Ptr{z_owned_ptr_in_segment_t}, f::Symbol)
+    f === :_0 && return Ptr{NTuple{24, UInt8}}(x + 0)
+    return getfield(x, f)
+end
+
+function Base.getproperty(x::z_owned_ptr_in_segment_t, f::Symbol)
+    r = Ref{z_owned_ptr_in_segment_t}(x)
+    ptr = Base.unsafe_convert(Ptr{z_owned_ptr_in_segment_t}, r)
+    fptr = getproperty(ptr, f)
+    GC.@preserve r unsafe_load(fptr)
+end
+
+function Base.setproperty!(x::Ptr{z_owned_ptr_in_segment_t}, f::Symbol, v)
+    unsafe_store!(getproperty(x, f), v)
+end
+
+function Base.propertynames(x::z_owned_ptr_in_segment_t, private::Bool = false)
+    (:_0, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
+end
+
+struct z_loaned_ptr_in_segment_t
+    data::NTuple{24, UInt8}
+end
+
+function Base.getproperty(x::Ptr{z_loaned_ptr_in_segment_t}, f::Symbol)
+    f === :_0 && return Ptr{NTuple{24, UInt8}}(x + 0)
+    return getfield(x, f)
+end
+
+function Base.getproperty(x::z_loaned_ptr_in_segment_t, f::Symbol)
+    r = Ref{z_loaned_ptr_in_segment_t}(x)
+    ptr = Base.unsafe_convert(Ptr{z_loaned_ptr_in_segment_t}, r)
+    fptr = getproperty(ptr, f)
+    GC.@preserve r unsafe_load(fptr)
+end
+
+function Base.setproperty!(x::Ptr{z_loaned_ptr_in_segment_t}, f::Symbol, v)
+    unsafe_store!(getproperty(x, f), v)
+end
+
+function Base.propertynames(x::z_loaned_ptr_in_segment_t, private::Bool = false)
+    (:_0, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
+end
+
+function z_ptr_in_segment_loan(this_)
+    ccall((:z_ptr_in_segment_loan, libzenohc), Ptr{z_loaned_ptr_in_segment_t}, (Ptr{z_owned_ptr_in_segment_t},), this_)
 end
 
 struct z_owned_publisher_t
@@ -607,6 +1271,14 @@ function Base.setproperty!(x::Ptr{z_owned_publisher_t}, f::Symbol, v)
     unsafe_store!(getproperty(x, f), v)
 end
 
+function Base.propertynames(x::z_owned_publisher_t, private::Bool = false)
+    (:_0, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
+end
+
 struct z_loaned_publisher_t
     data::NTuple{120, UInt8}
 end
@@ -625,6 +1297,14 @@ end
 
 function Base.setproperty!(x::Ptr{z_loaned_publisher_t}, f::Symbol, v)
     unsafe_store!(getproperty(x, f), v)
+end
+
+function Base.propertynames(x::z_loaned_publisher_t, private::Bool = false)
+    (:_0, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
 end
 
 function z_publisher_loan(this_)
@@ -651,6 +1331,14 @@ function Base.setproperty!(x::Ptr{z_owned_querier_t}, f::Symbol, v)
     unsafe_store!(getproperty(x, f), v)
 end
 
+function Base.propertynames(x::z_owned_querier_t, private::Bool = false)
+    (:_0, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
+end
+
 struct z_loaned_querier_t
     data::NTuple{88, UInt8}
 end
@@ -669,6 +1357,14 @@ end
 
 function Base.setproperty!(x::Ptr{z_loaned_querier_t}, f::Symbol, v)
     unsafe_store!(getproperty(x, f), v)
+end
+
+function Base.propertynames(x::z_loaned_querier_t, private::Bool = false)
+    (:_0, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
 end
 
 function z_querier_loan(this_)
@@ -695,6 +1391,14 @@ function Base.setproperty!(x::Ptr{z_owned_query_t}, f::Symbol, v)
     unsafe_store!(getproperty(x, f), v)
 end
 
+function Base.propertynames(x::z_owned_query_t, private::Bool = false)
+    (:_0, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
+end
+
 struct z_loaned_query_t
     data::NTuple{144, UInt8}
 end
@@ -713,6 +1417,14 @@ end
 
 function Base.setproperty!(x::Ptr{z_loaned_query_t}, f::Symbol, v)
     unsafe_store!(getproperty(x, f), v)
+end
+
+function Base.propertynames(x::z_loaned_query_t, private::Bool = false)
+    (:_0, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
 end
 
 function z_query_loan(this_)
@@ -739,6 +1451,14 @@ function Base.setproperty!(x::Ptr{z_owned_queryable_t}, f::Symbol, v)
     unsafe_store!(getproperty(x, f), v)
 end
 
+function Base.propertynames(x::z_owned_queryable_t, private::Bool = false)
+    (:_0, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
+end
+
 struct z_loaned_queryable_t
     data::NTuple{56, UInt8}
 end
@@ -757,6 +1477,14 @@ end
 
 function Base.setproperty!(x::Ptr{z_loaned_queryable_t}, f::Symbol, v)
     unsafe_store!(getproperty(x, f), v)
+end
+
+function Base.propertynames(x::z_loaned_queryable_t, private::Bool = false)
+    (:_0, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
 end
 
 function z_queryable_loan(this_)
@@ -783,6 +1511,14 @@ function Base.setproperty!(x::Ptr{z_owned_reply_err_t}, f::Symbol, v)
     unsafe_store!(getproperty(x, f), v)
 end
 
+function Base.propertynames(x::z_owned_reply_err_t, private::Bool = false)
+    (:_0, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
+end
+
 struct z_loaned_reply_err_t
     data::NTuple{88, UInt8}
 end
@@ -803,16 +1539,24 @@ function Base.setproperty!(x::Ptr{z_loaned_reply_err_t}, f::Symbol, v)
     unsafe_store!(getproperty(x, f), v)
 end
 
+function Base.propertynames(x::z_loaned_reply_err_t, private::Bool = false)
+    (:_0, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
+end
+
 function z_reply_err_loan(this_)
     ccall((:z_reply_err_loan, libzenohc), Ptr{z_loaned_reply_err_t}, (Ptr{z_owned_reply_err_t},), this_)
 end
 
 struct z_owned_reply_t
-    data::NTuple{200, UInt8}
+    data::NTuple{248, UInt8}
 end
 
 function Base.getproperty(x::Ptr{z_owned_reply_t}, f::Symbol)
-    f === :_0 && return Ptr{NTuple{200, UInt8}}(x + 0)
+    f === :_0 && return Ptr{NTuple{248, UInt8}}(x + 0)
     return getfield(x, f)
 end
 
@@ -827,12 +1571,20 @@ function Base.setproperty!(x::Ptr{z_owned_reply_t}, f::Symbol, v)
     unsafe_store!(getproperty(x, f), v)
 end
 
+function Base.propertynames(x::z_owned_reply_t, private::Bool = false)
+    (:_0, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
+end
+
 struct z_loaned_reply_t
-    data::NTuple{200, UInt8}
+    data::NTuple{248, UInt8}
 end
 
 function Base.getproperty(x::Ptr{z_loaned_reply_t}, f::Symbol)
-    f === :_0 && return Ptr{NTuple{200, UInt8}}(x + 0)
+    f === :_0 && return Ptr{NTuple{248, UInt8}}(x + 0)
     return getfield(x, f)
 end
 
@@ -845,6 +1597,14 @@ end
 
 function Base.setproperty!(x::Ptr{z_loaned_reply_t}, f::Symbol, v)
     unsafe_store!(getproperty(x, f), v)
+end
+
+function Base.propertynames(x::z_loaned_reply_t, private::Bool = false)
+    (:_0, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
 end
 
 function z_reply_loan(this_)
@@ -871,6 +1631,14 @@ function Base.setproperty!(x::Ptr{z_owned_ring_handler_query_t}, f::Symbol, v)
     unsafe_store!(getproperty(x, f), v)
 end
 
+function Base.propertynames(x::z_owned_ring_handler_query_t, private::Bool = false)
+    (:_0, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
+end
+
 struct z_loaned_ring_handler_query_t
     data::NTuple{8, UInt8}
 end
@@ -889,6 +1657,14 @@ end
 
 function Base.setproperty!(x::Ptr{z_loaned_ring_handler_query_t}, f::Symbol, v)
     unsafe_store!(getproperty(x, f), v)
+end
+
+function Base.propertynames(x::z_loaned_ring_handler_query_t, private::Bool = false)
+    (:_0, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
 end
 
 function z_ring_handler_query_loan(this_)
@@ -915,6 +1691,14 @@ function Base.setproperty!(x::Ptr{z_owned_ring_handler_reply_t}, f::Symbol, v)
     unsafe_store!(getproperty(x, f), v)
 end
 
+function Base.propertynames(x::z_owned_ring_handler_reply_t, private::Bool = false)
+    (:_0, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
+end
+
 struct z_loaned_ring_handler_reply_t
     data::NTuple{8, UInt8}
 end
@@ -933,6 +1717,14 @@ end
 
 function Base.setproperty!(x::Ptr{z_loaned_ring_handler_reply_t}, f::Symbol, v)
     unsafe_store!(getproperty(x, f), v)
+end
+
+function Base.propertynames(x::z_loaned_ring_handler_reply_t, private::Bool = false)
+    (:_0, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
 end
 
 function z_ring_handler_reply_loan(this_)
@@ -959,6 +1751,14 @@ function Base.setproperty!(x::Ptr{z_owned_ring_handler_sample_t}, f::Symbol, v)
     unsafe_store!(getproperty(x, f), v)
 end
 
+function Base.propertynames(x::z_owned_ring_handler_sample_t, private::Bool = false)
+    (:_0, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
+end
+
 struct z_loaned_ring_handler_sample_t
     data::NTuple{8, UInt8}
 end
@@ -979,16 +1779,24 @@ function Base.setproperty!(x::Ptr{z_loaned_ring_handler_sample_t}, f::Symbol, v)
     unsafe_store!(getproperty(x, f), v)
 end
 
+function Base.propertynames(x::z_loaned_ring_handler_sample_t, private::Bool = false)
+    (:_0, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
+end
+
 function z_ring_handler_sample_loan(this_)
     ccall((:z_ring_handler_sample_loan, libzenohc), Ptr{z_loaned_ring_handler_sample_t}, (Ptr{z_owned_ring_handler_sample_t},), this_)
 end
 
 struct z_owned_sample_t
-    data::NTuple{200, UInt8}
+    data::NTuple{224, UInt8}
 end
 
 function Base.getproperty(x::Ptr{z_owned_sample_t}, f::Symbol)
-    f === :_0 && return Ptr{NTuple{200, UInt8}}(x + 0)
+    f === :_0 && return Ptr{NTuple{224, UInt8}}(x + 0)
     return getfield(x, f)
 end
 
@@ -1003,12 +1811,20 @@ function Base.setproperty!(x::Ptr{z_owned_sample_t}, f::Symbol, v)
     unsafe_store!(getproperty(x, f), v)
 end
 
+function Base.propertynames(x::z_owned_sample_t, private::Bool = false)
+    (:_0, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
+end
+
 struct z_loaned_sample_t
-    data::NTuple{200, UInt8}
+    data::NTuple{224, UInt8}
 end
 
 function Base.getproperty(x::Ptr{z_loaned_sample_t}, f::Symbol)
-    f === :_0 && return Ptr{NTuple{200, UInt8}}(x + 0)
+    f === :_0 && return Ptr{NTuple{224, UInt8}}(x + 0)
     return getfield(x, f)
 end
 
@@ -1021,6 +1837,14 @@ end
 
 function Base.setproperty!(x::Ptr{z_loaned_sample_t}, f::Symbol, v)
     unsafe_store!(getproperty(x, f), v)
+end
+
+function Base.propertynames(x::z_loaned_sample_t, private::Bool = false)
+    (:_0, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
 end
 
 function z_sample_loan(this_)
@@ -1047,6 +1871,14 @@ function Base.setproperty!(x::Ptr{z_owned_session_t}, f::Symbol, v)
     unsafe_store!(getproperty(x, f), v)
 end
 
+function Base.propertynames(x::z_owned_session_t, private::Bool = false)
+    (:_0, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
+end
+
 struct z_loaned_session_t
     data::NTuple{8, UInt8}
 end
@@ -1067,8 +1899,316 @@ function Base.setproperty!(x::Ptr{z_loaned_session_t}, f::Symbol, v)
     unsafe_store!(getproperty(x, f), v)
 end
 
+function Base.propertynames(x::z_loaned_session_t, private::Bool = false)
+    (:_0, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
+end
+
 function z_session_loan(this_)
     ccall((:z_session_loan, libzenohc), Ptr{z_loaned_session_t}, (Ptr{z_owned_session_t},), this_)
+end
+
+struct z_owned_shared_shm_provider_t
+    data::NTuple{104, UInt8}
+end
+
+function Base.getproperty(x::Ptr{z_owned_shared_shm_provider_t}, f::Symbol)
+    f === :_0 && return Ptr{NTuple{104, UInt8}}(x + 0)
+    return getfield(x, f)
+end
+
+function Base.getproperty(x::z_owned_shared_shm_provider_t, f::Symbol)
+    r = Ref{z_owned_shared_shm_provider_t}(x)
+    ptr = Base.unsafe_convert(Ptr{z_owned_shared_shm_provider_t}, r)
+    fptr = getproperty(ptr, f)
+    GC.@preserve r unsafe_load(fptr)
+end
+
+function Base.setproperty!(x::Ptr{z_owned_shared_shm_provider_t}, f::Symbol, v)
+    unsafe_store!(getproperty(x, f), v)
+end
+
+function Base.propertynames(x::z_owned_shared_shm_provider_t, private::Bool = false)
+    (:_0, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
+end
+
+struct z_loaned_shared_shm_provider_t
+    data::NTuple{104, UInt8}
+end
+
+function Base.getproperty(x::Ptr{z_loaned_shared_shm_provider_t}, f::Symbol)
+    f === :_0 && return Ptr{NTuple{104, UInt8}}(x + 0)
+    return getfield(x, f)
+end
+
+function Base.getproperty(x::z_loaned_shared_shm_provider_t, f::Symbol)
+    r = Ref{z_loaned_shared_shm_provider_t}(x)
+    ptr = Base.unsafe_convert(Ptr{z_loaned_shared_shm_provider_t}, r)
+    fptr = getproperty(ptr, f)
+    GC.@preserve r unsafe_load(fptr)
+end
+
+function Base.setproperty!(x::Ptr{z_loaned_shared_shm_provider_t}, f::Symbol, v)
+    unsafe_store!(getproperty(x, f), v)
+end
+
+function Base.propertynames(x::z_loaned_shared_shm_provider_t, private::Bool = false)
+    (:_0, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
+end
+
+function z_shared_shm_provider_loan(this_)
+    ccall((:z_shared_shm_provider_loan, libzenohc), Ptr{z_loaned_shared_shm_provider_t}, (Ptr{z_owned_shared_shm_provider_t},), this_)
+end
+
+struct z_owned_shm_client_storage_t
+    data::NTuple{8, UInt8}
+end
+
+function Base.getproperty(x::Ptr{z_owned_shm_client_storage_t}, f::Symbol)
+    f === :_0 && return Ptr{NTuple{8, UInt8}}(x + 0)
+    return getfield(x, f)
+end
+
+function Base.getproperty(x::z_owned_shm_client_storage_t, f::Symbol)
+    r = Ref{z_owned_shm_client_storage_t}(x)
+    ptr = Base.unsafe_convert(Ptr{z_owned_shm_client_storage_t}, r)
+    fptr = getproperty(ptr, f)
+    GC.@preserve r unsafe_load(fptr)
+end
+
+function Base.setproperty!(x::Ptr{z_owned_shm_client_storage_t}, f::Symbol, v)
+    unsafe_store!(getproperty(x, f), v)
+end
+
+function Base.propertynames(x::z_owned_shm_client_storage_t, private::Bool = false)
+    (:_0, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
+end
+
+struct z_loaned_shm_client_storage_t
+    data::NTuple{8, UInt8}
+end
+
+function Base.getproperty(x::Ptr{z_loaned_shm_client_storage_t}, f::Symbol)
+    f === :_0 && return Ptr{NTuple{8, UInt8}}(x + 0)
+    return getfield(x, f)
+end
+
+function Base.getproperty(x::z_loaned_shm_client_storage_t, f::Symbol)
+    r = Ref{z_loaned_shm_client_storage_t}(x)
+    ptr = Base.unsafe_convert(Ptr{z_loaned_shm_client_storage_t}, r)
+    fptr = getproperty(ptr, f)
+    GC.@preserve r unsafe_load(fptr)
+end
+
+function Base.setproperty!(x::Ptr{z_loaned_shm_client_storage_t}, f::Symbol, v)
+    unsafe_store!(getproperty(x, f), v)
+end
+
+function Base.propertynames(x::z_loaned_shm_client_storage_t, private::Bool = false)
+    (:_0, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
+end
+
+function z_shm_client_storage_loan(this_)
+    ccall((:z_shm_client_storage_loan, libzenohc), Ptr{z_loaned_shm_client_storage_t}, (Ptr{z_owned_shm_client_storage_t},), this_)
+end
+
+struct z_owned_shm_t
+    data::NTuple{80, UInt8}
+end
+
+function Base.getproperty(x::Ptr{z_owned_shm_t}, f::Symbol)
+    f === :_0 && return Ptr{NTuple{80, UInt8}}(x + 0)
+    return getfield(x, f)
+end
+
+function Base.getproperty(x::z_owned_shm_t, f::Symbol)
+    r = Ref{z_owned_shm_t}(x)
+    ptr = Base.unsafe_convert(Ptr{z_owned_shm_t}, r)
+    fptr = getproperty(ptr, f)
+    GC.@preserve r unsafe_load(fptr)
+end
+
+function Base.setproperty!(x::Ptr{z_owned_shm_t}, f::Symbol, v)
+    unsafe_store!(getproperty(x, f), v)
+end
+
+function Base.propertynames(x::z_owned_shm_t, private::Bool = false)
+    (:_0, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
+end
+
+struct z_loaned_shm_t
+    data::NTuple{80, UInt8}
+end
+
+function Base.getproperty(x::Ptr{z_loaned_shm_t}, f::Symbol)
+    f === :_0 && return Ptr{NTuple{80, UInt8}}(x + 0)
+    return getfield(x, f)
+end
+
+function Base.getproperty(x::z_loaned_shm_t, f::Symbol)
+    r = Ref{z_loaned_shm_t}(x)
+    ptr = Base.unsafe_convert(Ptr{z_loaned_shm_t}, r)
+    fptr = getproperty(ptr, f)
+    GC.@preserve r unsafe_load(fptr)
+end
+
+function Base.setproperty!(x::Ptr{z_loaned_shm_t}, f::Symbol, v)
+    unsafe_store!(getproperty(x, f), v)
+end
+
+function Base.propertynames(x::z_loaned_shm_t, private::Bool = false)
+    (:_0, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
+end
+
+function z_shm_loan(this_)
+    ccall((:z_shm_loan, libzenohc), Ptr{z_loaned_shm_t}, (Ptr{z_owned_shm_t},), this_)
+end
+
+struct z_owned_shm_mut_t
+    data::NTuple{80, UInt8}
+end
+
+function Base.getproperty(x::Ptr{z_owned_shm_mut_t}, f::Symbol)
+    f === :_0 && return Ptr{NTuple{80, UInt8}}(x + 0)
+    return getfield(x, f)
+end
+
+function Base.getproperty(x::z_owned_shm_mut_t, f::Symbol)
+    r = Ref{z_owned_shm_mut_t}(x)
+    ptr = Base.unsafe_convert(Ptr{z_owned_shm_mut_t}, r)
+    fptr = getproperty(ptr, f)
+    GC.@preserve r unsafe_load(fptr)
+end
+
+function Base.setproperty!(x::Ptr{z_owned_shm_mut_t}, f::Symbol, v)
+    unsafe_store!(getproperty(x, f), v)
+end
+
+function Base.propertynames(x::z_owned_shm_mut_t, private::Bool = false)
+    (:_0, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
+end
+
+struct z_loaned_shm_mut_t
+    data::NTuple{80, UInt8}
+end
+
+function Base.getproperty(x::Ptr{z_loaned_shm_mut_t}, f::Symbol)
+    f === :_0 && return Ptr{NTuple{80, UInt8}}(x + 0)
+    return getfield(x, f)
+end
+
+function Base.getproperty(x::z_loaned_shm_mut_t, f::Symbol)
+    r = Ref{z_loaned_shm_mut_t}(x)
+    ptr = Base.unsafe_convert(Ptr{z_loaned_shm_mut_t}, r)
+    fptr = getproperty(ptr, f)
+    GC.@preserve r unsafe_load(fptr)
+end
+
+function Base.setproperty!(x::Ptr{z_loaned_shm_mut_t}, f::Symbol, v)
+    unsafe_store!(getproperty(x, f), v)
+end
+
+function Base.propertynames(x::z_loaned_shm_mut_t, private::Bool = false)
+    (:_0, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
+end
+
+function z_shm_mut_loan(this_)
+    ccall((:z_shm_mut_loan, libzenohc), Ptr{z_loaned_shm_mut_t}, (Ptr{z_owned_shm_mut_t},), this_)
+end
+
+struct z_owned_shm_provider_t
+    data::NTuple{104, UInt8}
+end
+
+function Base.getproperty(x::Ptr{z_owned_shm_provider_t}, f::Symbol)
+    f === :_0 && return Ptr{NTuple{104, UInt8}}(x + 0)
+    return getfield(x, f)
+end
+
+function Base.getproperty(x::z_owned_shm_provider_t, f::Symbol)
+    r = Ref{z_owned_shm_provider_t}(x)
+    ptr = Base.unsafe_convert(Ptr{z_owned_shm_provider_t}, r)
+    fptr = getproperty(ptr, f)
+    GC.@preserve r unsafe_load(fptr)
+end
+
+function Base.setproperty!(x::Ptr{z_owned_shm_provider_t}, f::Symbol, v)
+    unsafe_store!(getproperty(x, f), v)
+end
+
+function Base.propertynames(x::z_owned_shm_provider_t, private::Bool = false)
+    (:_0, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
+end
+
+struct z_loaned_shm_provider_t
+    data::NTuple{104, UInt8}
+end
+
+function Base.getproperty(x::Ptr{z_loaned_shm_provider_t}, f::Symbol)
+    f === :_0 && return Ptr{NTuple{104, UInt8}}(x + 0)
+    return getfield(x, f)
+end
+
+function Base.getproperty(x::z_loaned_shm_provider_t, f::Symbol)
+    r = Ref{z_loaned_shm_provider_t}(x)
+    ptr = Base.unsafe_convert(Ptr{z_loaned_shm_provider_t}, r)
+    fptr = getproperty(ptr, f)
+    GC.@preserve r unsafe_load(fptr)
+end
+
+function Base.setproperty!(x::Ptr{z_loaned_shm_provider_t}, f::Symbol, v)
+    unsafe_store!(getproperty(x, f), v)
+end
+
+function Base.propertynames(x::z_loaned_shm_provider_t, private::Bool = false)
+    (:_0, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
+end
+
+function z_shm_provider_loan(this_)
+    ccall((:z_shm_provider_loan, libzenohc), Ptr{z_loaned_shm_provider_t}, (Ptr{z_owned_shm_provider_t},), this_)
 end
 
 struct z_owned_slice_t
@@ -1091,6 +2231,14 @@ function Base.setproperty!(x::Ptr{z_owned_slice_t}, f::Symbol, v)
     unsafe_store!(getproperty(x, f), v)
 end
 
+function Base.propertynames(x::z_owned_slice_t, private::Bool = false)
+    (:_0, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
+end
+
 struct z_loaned_slice_t
     data::NTuple{32, UInt8}
 end
@@ -1109,6 +2257,14 @@ end
 
 function Base.setproperty!(x::Ptr{z_loaned_slice_t}, f::Symbol, v)
     unsafe_store!(getproperty(x, f), v)
+end
+
+function Base.propertynames(x::z_loaned_slice_t, private::Bool = false)
+    (:_0, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
 end
 
 function z_slice_loan(this_)
@@ -1135,6 +2291,14 @@ function Base.setproperty!(x::Ptr{z_owned_string_array_t}, f::Symbol, v)
     unsafe_store!(getproperty(x, f), v)
 end
 
+function Base.propertynames(x::z_owned_string_array_t, private::Bool = false)
+    (:_0, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
+end
+
 struct z_loaned_string_array_t
     data::NTuple{24, UInt8}
 end
@@ -1153,6 +2317,14 @@ end
 
 function Base.setproperty!(x::Ptr{z_loaned_string_array_t}, f::Symbol, v)
     unsafe_store!(getproperty(x, f), v)
+end
+
+function Base.propertynames(x::z_loaned_string_array_t, private::Bool = false)
+    (:_0, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
 end
 
 function z_string_array_loan(this_)
@@ -1179,6 +2351,14 @@ function Base.setproperty!(x::Ptr{z_owned_string_t}, f::Symbol, v)
     unsafe_store!(getproperty(x, f), v)
 end
 
+function Base.propertynames(x::z_owned_string_t, private::Bool = false)
+    (:_0, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
+end
+
 struct z_loaned_string_t
     data::NTuple{32, UInt8}
 end
@@ -1197,6 +2377,14 @@ end
 
 function Base.setproperty!(x::Ptr{z_loaned_string_t}, f::Symbol, v)
     unsafe_store!(getproperty(x, f), v)
+end
+
+function Base.propertynames(x::z_loaned_string_t, private::Bool = false)
+    (:_0, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
 end
 
 function z_string_loan(this_)
@@ -1223,6 +2411,14 @@ function Base.setproperty!(x::Ptr{z_owned_subscriber_t}, f::Symbol, v)
     unsafe_store!(getproperty(x, f), v)
 end
 
+function Base.propertynames(x::z_owned_subscriber_t, private::Bool = false)
+    (:_0, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
+end
+
 struct z_loaned_subscriber_t
     data::NTuple{56, UInt8}
 end
@@ -1243,8 +2439,196 @@ function Base.setproperty!(x::Ptr{z_loaned_subscriber_t}, f::Symbol, v)
     unsafe_store!(getproperty(x, f), v)
 end
 
+function Base.propertynames(x::z_loaned_subscriber_t, private::Bool = false)
+    (:_0, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
+end
+
 function z_subscriber_loan(this_)
     ccall((:z_subscriber_loan, libzenohc), Ptr{z_loaned_subscriber_t}, (Ptr{z_owned_subscriber_t},), this_)
+end
+
+struct z_owned_transport_event_t
+    data::NTuple{21, UInt8}
+end
+
+function Base.getproperty(x::Ptr{z_owned_transport_event_t}, f::Symbol)
+    f === :_0 && return Ptr{NTuple{21, UInt8}}(x + 0)
+    return getfield(x, f)
+end
+
+function Base.getproperty(x::z_owned_transport_event_t, f::Symbol)
+    r = Ref{z_owned_transport_event_t}(x)
+    ptr = Base.unsafe_convert(Ptr{z_owned_transport_event_t}, r)
+    fptr = getproperty(ptr, f)
+    GC.@preserve r unsafe_load(fptr)
+end
+
+function Base.setproperty!(x::Ptr{z_owned_transport_event_t}, f::Symbol, v)
+    unsafe_store!(getproperty(x, f), v)
+end
+
+function Base.propertynames(x::z_owned_transport_event_t, private::Bool = false)
+    (:_0, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
+end
+
+struct z_loaned_transport_event_t
+    data::NTuple{21, UInt8}
+end
+
+function Base.getproperty(x::Ptr{z_loaned_transport_event_t}, f::Symbol)
+    f === :_0 && return Ptr{NTuple{21, UInt8}}(x + 0)
+    return getfield(x, f)
+end
+
+function Base.getproperty(x::z_loaned_transport_event_t, f::Symbol)
+    r = Ref{z_loaned_transport_event_t}(x)
+    ptr = Base.unsafe_convert(Ptr{z_loaned_transport_event_t}, r)
+    fptr = getproperty(ptr, f)
+    GC.@preserve r unsafe_load(fptr)
+end
+
+function Base.setproperty!(x::Ptr{z_loaned_transport_event_t}, f::Symbol, v)
+    unsafe_store!(getproperty(x, f), v)
+end
+
+function Base.propertynames(x::z_loaned_transport_event_t, private::Bool = false)
+    (:_0, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
+end
+
+function z_transport_event_loan(this_)
+    ccall((:z_transport_event_loan, libzenohc), Ptr{z_loaned_transport_event_t}, (Ptr{z_owned_transport_event_t},), this_)
+end
+
+struct z_owned_transport_events_listener_t
+    data::NTuple{24, UInt8}
+end
+
+function Base.getproperty(x::Ptr{z_owned_transport_events_listener_t}, f::Symbol)
+    f === :_0 && return Ptr{NTuple{24, UInt8}}(x + 0)
+    return getfield(x, f)
+end
+
+function Base.getproperty(x::z_owned_transport_events_listener_t, f::Symbol)
+    r = Ref{z_owned_transport_events_listener_t}(x)
+    ptr = Base.unsafe_convert(Ptr{z_owned_transport_events_listener_t}, r)
+    fptr = getproperty(ptr, f)
+    GC.@preserve r unsafe_load(fptr)
+end
+
+function Base.setproperty!(x::Ptr{z_owned_transport_events_listener_t}, f::Symbol, v)
+    unsafe_store!(getproperty(x, f), v)
+end
+
+function Base.propertynames(x::z_owned_transport_events_listener_t, private::Bool = false)
+    (:_0, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
+end
+
+struct z_loaned_transport_events_listener_t
+    data::NTuple{24, UInt8}
+end
+
+function Base.getproperty(x::Ptr{z_loaned_transport_events_listener_t}, f::Symbol)
+    f === :_0 && return Ptr{NTuple{24, UInt8}}(x + 0)
+    return getfield(x, f)
+end
+
+function Base.getproperty(x::z_loaned_transport_events_listener_t, f::Symbol)
+    r = Ref{z_loaned_transport_events_listener_t}(x)
+    ptr = Base.unsafe_convert(Ptr{z_loaned_transport_events_listener_t}, r)
+    fptr = getproperty(ptr, f)
+    GC.@preserve r unsafe_load(fptr)
+end
+
+function Base.setproperty!(x::Ptr{z_loaned_transport_events_listener_t}, f::Symbol, v)
+    unsafe_store!(getproperty(x, f), v)
+end
+
+function Base.propertynames(x::z_loaned_transport_events_listener_t, private::Bool = false)
+    (:_0, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
+end
+
+function z_transport_events_listener_loan(this_)
+    ccall((:z_transport_events_listener_loan, libzenohc), Ptr{z_loaned_transport_events_listener_t}, (Ptr{z_owned_transport_events_listener_t},), this_)
+end
+
+struct z_owned_transport_t
+    data::NTuple{20, UInt8}
+end
+
+function Base.getproperty(x::Ptr{z_owned_transport_t}, f::Symbol)
+    f === :_0 && return Ptr{NTuple{20, UInt8}}(x + 0)
+    return getfield(x, f)
+end
+
+function Base.getproperty(x::z_owned_transport_t, f::Symbol)
+    r = Ref{z_owned_transport_t}(x)
+    ptr = Base.unsafe_convert(Ptr{z_owned_transport_t}, r)
+    fptr = getproperty(ptr, f)
+    GC.@preserve r unsafe_load(fptr)
+end
+
+function Base.setproperty!(x::Ptr{z_owned_transport_t}, f::Symbol, v)
+    unsafe_store!(getproperty(x, f), v)
+end
+
+function Base.propertynames(x::z_owned_transport_t, private::Bool = false)
+    (:_0, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
+end
+
+struct z_loaned_transport_t
+    data::NTuple{20, UInt8}
+end
+
+function Base.getproperty(x::Ptr{z_loaned_transport_t}, f::Symbol)
+    f === :_0 && return Ptr{NTuple{20, UInt8}}(x + 0)
+    return getfield(x, f)
+end
+
+function Base.getproperty(x::z_loaned_transport_t, f::Symbol)
+    r = Ref{z_loaned_transport_t}(x)
+    ptr = Base.unsafe_convert(Ptr{z_loaned_transport_t}, r)
+    fptr = getproperty(ptr, f)
+    GC.@preserve r unsafe_load(fptr)
+end
+
+function Base.setproperty!(x::Ptr{z_loaned_transport_t}, f::Symbol, v)
+    unsafe_store!(getproperty(x, f), v)
+end
+
+function Base.propertynames(x::z_loaned_transport_t, private::Bool = false)
+    (:_0, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
+end
+
+function z_transport_loan(this_)
+    ccall((:z_transport_loan, libzenohc), Ptr{z_loaned_transport_t}, (Ptr{z_owned_transport_t},), this_)
 end
 
 struct z_view_keyexpr_t
@@ -1265,6 +2649,14 @@ end
 
 function Base.setproperty!(x::Ptr{z_view_keyexpr_t}, f::Symbol, v)
     unsafe_store!(getproperty(x, f), v)
+end
+
+function Base.propertynames(x::z_view_keyexpr_t, private::Bool = false)
+    (:_0, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
 end
 
 function z_view_keyexpr_loan(this_)
@@ -1291,6 +2683,14 @@ function Base.setproperty!(x::Ptr{z_view_slice_t}, f::Symbol, v)
     unsafe_store!(getproperty(x, f), v)
 end
 
+function Base.propertynames(x::z_view_slice_t, private::Bool = false)
+    (:_0, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
+end
+
 function z_view_slice_loan(this_)
     ccall((:z_view_slice_loan, libzenohc), Ptr{z_loaned_slice_t}, (Ptr{z_view_slice_t},), this_)
 end
@@ -1315,6 +2715,14 @@ function Base.setproperty!(x::Ptr{z_view_string_t}, f::Symbol, v)
     unsafe_store!(getproperty(x, f), v)
 end
 
+function Base.propertynames(x::z_view_string_t, private::Bool = false)
+    (:_0, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
+end
+
 function z_view_string_loan(this_)
     ccall((:z_view_string_loan, libzenohc), Ptr{z_loaned_string_t}, (Ptr{z_view_string_t},), this_)
 end
@@ -1333,6 +2741,322 @@ end
 
 function zc_closure_log_loan(closure)
     ccall((:zc_closure_log_loan, libzenohc), Ptr{zc_loaned_closure_log_t}, (Ptr{zc_owned_closure_log_t},), closure)
+end
+
+struct zc_owned_shm_client_list_t
+    data::NTuple{24, UInt8}
+end
+
+function Base.getproperty(x::Ptr{zc_owned_shm_client_list_t}, f::Symbol)
+    f === :_0 && return Ptr{NTuple{24, UInt8}}(x + 0)
+    return getfield(x, f)
+end
+
+function Base.getproperty(x::zc_owned_shm_client_list_t, f::Symbol)
+    r = Ref{zc_owned_shm_client_list_t}(x)
+    ptr = Base.unsafe_convert(Ptr{zc_owned_shm_client_list_t}, r)
+    fptr = getproperty(ptr, f)
+    GC.@preserve r unsafe_load(fptr)
+end
+
+function Base.setproperty!(x::Ptr{zc_owned_shm_client_list_t}, f::Symbol, v)
+    unsafe_store!(getproperty(x, f), v)
+end
+
+function Base.propertynames(x::zc_owned_shm_client_list_t, private::Bool = false)
+    (:_0, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
+end
+
+struct zc_loaned_shm_client_list_t
+    data::NTuple{24, UInt8}
+end
+
+function Base.getproperty(x::Ptr{zc_loaned_shm_client_list_t}, f::Symbol)
+    f === :_0 && return Ptr{NTuple{24, UInt8}}(x + 0)
+    return getfield(x, f)
+end
+
+function Base.getproperty(x::zc_loaned_shm_client_list_t, f::Symbol)
+    r = Ref{zc_loaned_shm_client_list_t}(x)
+    ptr = Base.unsafe_convert(Ptr{zc_loaned_shm_client_list_t}, r)
+    fptr = getproperty(ptr, f)
+    GC.@preserve r unsafe_load(fptr)
+end
+
+function Base.setproperty!(x::Ptr{zc_loaned_shm_client_list_t}, f::Symbol, v)
+    unsafe_store!(getproperty(x, f), v)
+end
+
+function Base.propertynames(x::zc_loaned_shm_client_list_t, private::Bool = false)
+    (:_0, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
+end
+
+function zc_shm_client_list_loan(this_)
+    ccall((:zc_shm_client_list_loan, libzenohc), Ptr{zc_loaned_shm_client_list_t}, (Ptr{zc_owned_shm_client_list_t},), this_)
+end
+
+struct ze_owned_advanced_publisher_t
+    data::NTuple{248, UInt8}
+end
+
+function Base.getproperty(x::Ptr{ze_owned_advanced_publisher_t}, f::Symbol)
+    f === :_0 && return Ptr{NTuple{248, UInt8}}(x + 0)
+    return getfield(x, f)
+end
+
+function Base.getproperty(x::ze_owned_advanced_publisher_t, f::Symbol)
+    r = Ref{ze_owned_advanced_publisher_t}(x)
+    ptr = Base.unsafe_convert(Ptr{ze_owned_advanced_publisher_t}, r)
+    fptr = getproperty(ptr, f)
+    GC.@preserve r unsafe_load(fptr)
+end
+
+function Base.setproperty!(x::Ptr{ze_owned_advanced_publisher_t}, f::Symbol, v)
+    unsafe_store!(getproperty(x, f), v)
+end
+
+function Base.propertynames(x::ze_owned_advanced_publisher_t, private::Bool = false)
+    (:_0, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
+end
+
+struct ze_loaned_advanced_publisher_t
+    data::NTuple{248, UInt8}
+end
+
+function Base.getproperty(x::Ptr{ze_loaned_advanced_publisher_t}, f::Symbol)
+    f === :_0 && return Ptr{NTuple{248, UInt8}}(x + 0)
+    return getfield(x, f)
+end
+
+function Base.getproperty(x::ze_loaned_advanced_publisher_t, f::Symbol)
+    r = Ref{ze_loaned_advanced_publisher_t}(x)
+    ptr = Base.unsafe_convert(Ptr{ze_loaned_advanced_publisher_t}, r)
+    fptr = getproperty(ptr, f)
+    GC.@preserve r unsafe_load(fptr)
+end
+
+function Base.setproperty!(x::Ptr{ze_loaned_advanced_publisher_t}, f::Symbol, v)
+    unsafe_store!(getproperty(x, f), v)
+end
+
+function Base.propertynames(x::ze_loaned_advanced_publisher_t, private::Bool = false)
+    (:_0, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
+end
+
+function ze_advanced_publisher_loan(this_)
+    ccall((:ze_advanced_publisher_loan, libzenohc), Ptr{ze_loaned_advanced_publisher_t}, (Ptr{ze_owned_advanced_publisher_t},), this_)
+end
+
+struct ze_owned_advanced_subscriber_t
+    data::NTuple{176, UInt8}
+end
+
+function Base.getproperty(x::Ptr{ze_owned_advanced_subscriber_t}, f::Symbol)
+    f === :_0 && return Ptr{NTuple{176, UInt8}}(x + 0)
+    return getfield(x, f)
+end
+
+function Base.getproperty(x::ze_owned_advanced_subscriber_t, f::Symbol)
+    r = Ref{ze_owned_advanced_subscriber_t}(x)
+    ptr = Base.unsafe_convert(Ptr{ze_owned_advanced_subscriber_t}, r)
+    fptr = getproperty(ptr, f)
+    GC.@preserve r unsafe_load(fptr)
+end
+
+function Base.setproperty!(x::Ptr{ze_owned_advanced_subscriber_t}, f::Symbol, v)
+    unsafe_store!(getproperty(x, f), v)
+end
+
+function Base.propertynames(x::ze_owned_advanced_subscriber_t, private::Bool = false)
+    (:_0, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
+end
+
+struct ze_loaned_advanced_subscriber_t
+    data::NTuple{176, UInt8}
+end
+
+function Base.getproperty(x::Ptr{ze_loaned_advanced_subscriber_t}, f::Symbol)
+    f === :_0 && return Ptr{NTuple{176, UInt8}}(x + 0)
+    return getfield(x, f)
+end
+
+function Base.getproperty(x::ze_loaned_advanced_subscriber_t, f::Symbol)
+    r = Ref{ze_loaned_advanced_subscriber_t}(x)
+    ptr = Base.unsafe_convert(Ptr{ze_loaned_advanced_subscriber_t}, r)
+    fptr = getproperty(ptr, f)
+    GC.@preserve r unsafe_load(fptr)
+end
+
+function Base.setproperty!(x::Ptr{ze_loaned_advanced_subscriber_t}, f::Symbol, v)
+    unsafe_store!(getproperty(x, f), v)
+end
+
+function Base.propertynames(x::ze_loaned_advanced_subscriber_t, private::Bool = false)
+    (:_0, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
+end
+
+function ze_advanced_subscriber_loan(this_)
+    ccall((:ze_advanced_subscriber_loan, libzenohc), Ptr{ze_loaned_advanced_subscriber_t}, (Ptr{ze_owned_advanced_subscriber_t},), this_)
+end
+
+struct ze_owned_closure_miss_t
+    _context::Ptr{Cvoid}
+    _call::Ptr{Cvoid}
+    _drop::Ptr{Cvoid}
+end
+
+struct ze_loaned_closure_miss_t
+    _0::Csize_t
+    _1::Csize_t
+    _2::Csize_t
+end
+
+function ze_closure_miss_loan(closure)
+    ccall((:ze_closure_miss_loan, libzenohc), Ptr{ze_loaned_closure_miss_t}, (Ptr{ze_owned_closure_miss_t},), closure)
+end
+
+struct ze_owned_publication_cache_t
+    data::NTuple{144, UInt8}
+end
+
+function Base.getproperty(x::Ptr{ze_owned_publication_cache_t}, f::Symbol)
+    f === :_0 && return Ptr{NTuple{144, UInt8}}(x + 0)
+    return getfield(x, f)
+end
+
+function Base.getproperty(x::ze_owned_publication_cache_t, f::Symbol)
+    r = Ref{ze_owned_publication_cache_t}(x)
+    ptr = Base.unsafe_convert(Ptr{ze_owned_publication_cache_t}, r)
+    fptr = getproperty(ptr, f)
+    GC.@preserve r unsafe_load(fptr)
+end
+
+function Base.setproperty!(x::Ptr{ze_owned_publication_cache_t}, f::Symbol, v)
+    unsafe_store!(getproperty(x, f), v)
+end
+
+function Base.propertynames(x::ze_owned_publication_cache_t, private::Bool = false)
+    (:_0, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
+end
+
+struct ze_loaned_publication_cache_t
+    data::NTuple{144, UInt8}
+end
+
+function Base.getproperty(x::Ptr{ze_loaned_publication_cache_t}, f::Symbol)
+    f === :_0 && return Ptr{NTuple{144, UInt8}}(x + 0)
+    return getfield(x, f)
+end
+
+function Base.getproperty(x::ze_loaned_publication_cache_t, f::Symbol)
+    r = Ref{ze_loaned_publication_cache_t}(x)
+    ptr = Base.unsafe_convert(Ptr{ze_loaned_publication_cache_t}, r)
+    fptr = getproperty(ptr, f)
+    GC.@preserve r unsafe_load(fptr)
+end
+
+function Base.setproperty!(x::Ptr{ze_loaned_publication_cache_t}, f::Symbol, v)
+    unsafe_store!(getproperty(x, f), v)
+end
+
+function Base.propertynames(x::ze_loaned_publication_cache_t, private::Bool = false)
+    (:_0, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
+end
+
+function ze_publication_cache_loan(this_)
+    ccall((:ze_publication_cache_loan, libzenohc), Ptr{ze_loaned_publication_cache_t}, (Ptr{ze_owned_publication_cache_t},), this_)
+end
+
+struct ze_owned_querying_subscriber_t
+    data::NTuple{104, UInt8}
+end
+
+function Base.getproperty(x::Ptr{ze_owned_querying_subscriber_t}, f::Symbol)
+    f === :_0 && return Ptr{NTuple{104, UInt8}}(x + 0)
+    return getfield(x, f)
+end
+
+function Base.getproperty(x::ze_owned_querying_subscriber_t, f::Symbol)
+    r = Ref{ze_owned_querying_subscriber_t}(x)
+    ptr = Base.unsafe_convert(Ptr{ze_owned_querying_subscriber_t}, r)
+    fptr = getproperty(ptr, f)
+    GC.@preserve r unsafe_load(fptr)
+end
+
+function Base.setproperty!(x::Ptr{ze_owned_querying_subscriber_t}, f::Symbol, v)
+    unsafe_store!(getproperty(x, f), v)
+end
+
+function Base.propertynames(x::ze_owned_querying_subscriber_t, private::Bool = false)
+    (:_0, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
+end
+
+struct ze_loaned_querying_subscriber_t
+    data::NTuple{104, UInt8}
+end
+
+function Base.getproperty(x::Ptr{ze_loaned_querying_subscriber_t}, f::Symbol)
+    f === :_0 && return Ptr{NTuple{104, UInt8}}(x + 0)
+    return getfield(x, f)
+end
+
+function Base.getproperty(x::ze_loaned_querying_subscriber_t, f::Symbol)
+    r = Ref{ze_loaned_querying_subscriber_t}(x)
+    ptr = Base.unsafe_convert(Ptr{ze_loaned_querying_subscriber_t}, r)
+    fptr = getproperty(ptr, f)
+    GC.@preserve r unsafe_load(fptr)
+end
+
+function Base.setproperty!(x::Ptr{ze_loaned_querying_subscriber_t}, f::Symbol, v)
+    unsafe_store!(getproperty(x, f), v)
+end
+
+function Base.propertynames(x::ze_loaned_querying_subscriber_t, private::Bool = false)
+    (:_0, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
+end
+
+function ze_querying_subscriber_loan(this_)
+    ccall((:ze_querying_subscriber_loan, libzenohc), Ptr{ze_loaned_querying_subscriber_t}, (Ptr{ze_owned_querying_subscriber_t},), this_)
 end
 
 struct ze_owned_serializer_t
@@ -1355,6 +3079,14 @@ function Base.setproperty!(x::Ptr{ze_owned_serializer_t}, f::Symbol, v)
     unsafe_store!(getproperty(x, f), v)
 end
 
+function Base.propertynames(x::ze_owned_serializer_t, private::Bool = false)
+    (:_0, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
+end
+
 struct ze_loaned_serializer_t
     data::NTuple{64, UInt8}
 end
@@ -1375,6 +3107,14 @@ function Base.setproperty!(x::Ptr{ze_loaned_serializer_t}, f::Symbol, v)
     unsafe_store!(getproperty(x, f), v)
 end
 
+function Base.propertynames(x::ze_loaned_serializer_t, private::Bool = false)
+    (:_0, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
+end
+
 function ze_serializer_loan(this_)
     ccall((:ze_serializer_loan, libzenohc), Ptr{ze_loaned_serializer_t}, (Ptr{ze_owned_serializer_t},), this_)
 end
@@ -1387,8 +3127,16 @@ function z_bytes_writer_loan_mut(this_)
     ccall((:z_bytes_writer_loan_mut, libzenohc), Ptr{z_loaned_bytes_writer_t}, (Ptr{z_owned_bytes_writer_t},), this_)
 end
 
+function z_cancellation_token_loan_mut(this_)
+    ccall((:z_cancellation_token_loan_mut, libzenohc), Ptr{z_loaned_cancellation_token_t}, (Ptr{z_owned_cancellation_token_t},), this_)
+end
+
 function z_closure_hello_loan_mut(closure)
     ccall((:z_closure_hello_loan_mut, libzenohc), Ptr{z_loaned_closure_hello_t}, (Ptr{z_owned_closure_hello_t},), closure)
+end
+
+function z_closure_link_loan_mut(closure)
+    ccall((:z_closure_link_loan_mut, libzenohc), Ptr{z_loaned_closure_link_t}, (Ptr{z_owned_closure_link_t},), closure)
 end
 
 function z_closure_query_loan_mut(closure)
@@ -1401,6 +3149,10 @@ end
 
 function z_closure_sample_loan_mut(closure)
     ccall((:z_closure_sample_loan_mut, libzenohc), Ptr{z_loaned_closure_sample_t}, (Ptr{z_owned_closure_sample_t},), closure)
+end
+
+function z_closure_transport_loan_mut(closure)
+    ccall((:z_closure_transport_loan_mut, libzenohc), Ptr{z_loaned_closure_transport_t}, (Ptr{z_owned_closure_transport_t},), closure)
 end
 
 function z_condvar_loan_mut(this_)
@@ -1417,6 +3169,14 @@ end
 
 function z_hello_loan_mut(this_)
     ccall((:z_hello_loan_mut, libzenohc), Ptr{z_loaned_hello_t}, (Ptr{z_owned_hello_t},), this_)
+end
+
+function z_link_event_loan_mut(this_)
+    ccall((:z_link_event_loan_mut, libzenohc), Ptr{z_loaned_link_event_t}, (Ptr{z_owned_link_event_t},), this_)
+end
+
+function z_link_loan_mut(this_)
+    ccall((:z_link_loan_mut, libzenohc), Ptr{z_loaned_link_t}, (Ptr{z_owned_link_t},), this_)
 end
 
 struct z_owned_mutex_t
@@ -1439,6 +3199,14 @@ function Base.setproperty!(x::Ptr{z_owned_mutex_t}, f::Symbol, v)
     unsafe_store!(getproperty(x, f), v)
 end
 
+function Base.propertynames(x::z_owned_mutex_t, private::Bool = false)
+    (:_0, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
+end
+
 struct z_loaned_mutex_t
     data::NTuple{24, UInt8}
 end
@@ -1457,6 +3225,14 @@ end
 
 function Base.setproperty!(x::Ptr{z_loaned_mutex_t}, f::Symbol, v)
     unsafe_store!(getproperty(x, f), v)
+end
+
+function Base.propertynames(x::z_loaned_mutex_t, private::Bool = false)
+    (:_0, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
 end
 
 function z_mutex_loan_mut(this_)
@@ -1491,8 +3267,32 @@ function z_session_loan_mut(this_)
     ccall((:z_session_loan_mut, libzenohc), Ptr{z_loaned_session_t}, (Ptr{z_owned_session_t},), this_)
 end
 
+function z_shm_loan_mut(this_)
+    ccall((:z_shm_loan_mut, libzenohc), Ptr{z_loaned_shm_t}, (Ptr{z_owned_shm_t},), this_)
+end
+
+function z_shm_mut_loan_mut(this_)
+    ccall((:z_shm_mut_loan_mut, libzenohc), Ptr{z_loaned_shm_mut_t}, (Ptr{z_owned_shm_mut_t},), this_)
+end
+
 function z_string_array_loan_mut(this_)
     ccall((:z_string_array_loan_mut, libzenohc), Ptr{z_loaned_string_array_t}, (Ptr{z_owned_string_array_t},), this_)
+end
+
+function z_transport_event_loan_mut(this_)
+    ccall((:z_transport_event_loan_mut, libzenohc), Ptr{z_loaned_transport_event_t}, (Ptr{z_owned_transport_event_t},), this_)
+end
+
+function z_transport_loan_mut(this_)
+    ccall((:z_transport_loan_mut, libzenohc), Ptr{z_loaned_transport_t}, (Ptr{z_owned_transport_t},), this_)
+end
+
+function zc_shm_client_list_loan_mut(this_)
+    ccall((:zc_shm_client_list_loan_mut, libzenohc), Ptr{zc_loaned_shm_client_list_t}, (Ptr{zc_owned_shm_client_list_t},), this_)
+end
+
+function ze_advanced_publisher_loan_mut(this_)
+    ccall((:ze_advanced_publisher_loan_mut, libzenohc), Ptr{ze_loaned_advanced_publisher_t}, (Ptr{ze_owned_advanced_publisher_t},), this_)
 end
 
 function ze_serializer_loan_mut(this_)
@@ -1519,6 +3319,14 @@ function Base.setproperty!(x::Ptr{z_moved_bytes_t}, f::Symbol, v)
     unsafe_store!(getproperty(x, f), v)
 end
 
+function Base.propertynames(x::z_moved_bytes_t, private::Bool = false)
+    (:_this, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
+end
+
 function z_bytes_drop(this_)
     ccall((:z_bytes_drop, libzenohc), Cvoid, (Ptr{z_moved_bytes_t},), this_)
 end
@@ -1543,8 +3351,108 @@ function Base.setproperty!(x::Ptr{z_moved_bytes_writer_t}, f::Symbol, v)
     unsafe_store!(getproperty(x, f), v)
 end
 
+function Base.propertynames(x::z_moved_bytes_writer_t, private::Bool = false)
+    (:_this, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
+end
+
 function z_bytes_writer_drop(this_)
     ccall((:z_bytes_writer_drop, libzenohc), Cvoid, (Ptr{z_moved_bytes_writer_t},), this_)
+end
+
+struct z_moved_cancellation_token_t
+    data::NTuple{24, UInt8}
+end
+
+function Base.getproperty(x::Ptr{z_moved_cancellation_token_t}, f::Symbol)
+    f === :_this && return Ptr{z_owned_cancellation_token_t}(x + 0)
+    return getfield(x, f)
+end
+
+function Base.getproperty(x::z_moved_cancellation_token_t, f::Symbol)
+    r = Ref{z_moved_cancellation_token_t}(x)
+    ptr = Base.unsafe_convert(Ptr{z_moved_cancellation_token_t}, r)
+    fptr = getproperty(ptr, f)
+    GC.@preserve r unsafe_load(fptr)
+end
+
+function Base.setproperty!(x::Ptr{z_moved_cancellation_token_t}, f::Symbol, v)
+    unsafe_store!(getproperty(x, f), v)
+end
+
+function Base.propertynames(x::z_moved_cancellation_token_t, private::Bool = false)
+    (:_this, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
+end
+
+function z_cancellation_token_drop(this_)
+    ccall((:z_cancellation_token_drop, libzenohc), Cvoid, (Ptr{z_moved_cancellation_token_t},), this_)
+end
+
+struct z_owned_chunk_alloc_result_t
+    data::NTuple{48, UInt8}
+end
+
+function Base.getproperty(x::Ptr{z_owned_chunk_alloc_result_t}, f::Symbol)
+    f === :_0 && return Ptr{NTuple{48, UInt8}}(x + 0)
+    return getfield(x, f)
+end
+
+function Base.getproperty(x::z_owned_chunk_alloc_result_t, f::Symbol)
+    r = Ref{z_owned_chunk_alloc_result_t}(x)
+    ptr = Base.unsafe_convert(Ptr{z_owned_chunk_alloc_result_t}, r)
+    fptr = getproperty(ptr, f)
+    GC.@preserve r unsafe_load(fptr)
+end
+
+function Base.setproperty!(x::Ptr{z_owned_chunk_alloc_result_t}, f::Symbol, v)
+    unsafe_store!(getproperty(x, f), v)
+end
+
+function Base.propertynames(x::z_owned_chunk_alloc_result_t, private::Bool = false)
+    (:_0, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
+end
+
+struct z_moved_chunk_alloc_result_t
+    data::NTuple{48, UInt8}
+end
+
+function Base.getproperty(x::Ptr{z_moved_chunk_alloc_result_t}, f::Symbol)
+    f === :_this && return Ptr{z_owned_chunk_alloc_result_t}(x + 0)
+    return getfield(x, f)
+end
+
+function Base.getproperty(x::z_moved_chunk_alloc_result_t, f::Symbol)
+    r = Ref{z_moved_chunk_alloc_result_t}(x)
+    ptr = Base.unsafe_convert(Ptr{z_moved_chunk_alloc_result_t}, r)
+    fptr = getproperty(ptr, f)
+    GC.@preserve r unsafe_load(fptr)
+end
+
+function Base.setproperty!(x::Ptr{z_moved_chunk_alloc_result_t}, f::Symbol, v)
+    unsafe_store!(getproperty(x, f), v)
+end
+
+function Base.propertynames(x::z_moved_chunk_alloc_result_t, private::Bool = false)
+    (:_this, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
+end
+
+function z_chunk_alloc_result_drop(this_)
+    ccall((:z_chunk_alloc_result_drop, libzenohc), Cvoid, (Ptr{z_moved_chunk_alloc_result_t},), this_)
 end
 
 struct z_moved_closure_hello_t
@@ -1553,6 +3461,22 @@ end
 
 function z_closure_hello_drop(this_)
     ccall((:z_closure_hello_drop, libzenohc), Cvoid, (Ptr{z_moved_closure_hello_t},), this_)
+end
+
+struct z_moved_closure_link_t
+    _this::z_owned_closure_link_t
+end
+
+function z_closure_link_drop(closure_)
+    ccall((:z_closure_link_drop, libzenohc), Cvoid, (Ptr{z_moved_closure_link_t},), closure_)
+end
+
+struct z_moved_closure_link_event_t
+    _this::z_owned_closure_link_event_t
+end
+
+function z_closure_link_event_drop(closure_)
+    ccall((:z_closure_link_event_drop, libzenohc), Cvoid, (Ptr{z_moved_closure_link_event_t},), closure_)
 end
 
 struct z_moved_closure_matching_status_t
@@ -1587,6 +3511,22 @@ function z_closure_sample_drop(closure_)
     ccall((:z_closure_sample_drop, libzenohc), Cvoid, (Ptr{z_moved_closure_sample_t},), closure_)
 end
 
+struct z_moved_closure_transport_t
+    _this::z_owned_closure_transport_t
+end
+
+function z_closure_transport_drop(closure_)
+    ccall((:z_closure_transport_drop, libzenohc), Cvoid, (Ptr{z_moved_closure_transport_t},), closure_)
+end
+
+struct z_moved_closure_transport_event_t
+    _this::z_owned_closure_transport_event_t
+end
+
+function z_closure_transport_event_drop(closure_)
+    ccall((:z_closure_transport_event_drop, libzenohc), Cvoid, (Ptr{z_moved_closure_transport_event_t},), closure_)
+end
+
 struct z_moved_closure_zid_t
     _this::z_owned_closure_zid_t
 end
@@ -1615,6 +3555,14 @@ function Base.setproperty!(x::Ptr{z_moved_condvar_t}, f::Symbol, v)
     unsafe_store!(getproperty(x, f), v)
 end
 
+function Base.propertynames(x::z_moved_condvar_t, private::Bool = false)
+    (:_this, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
+end
+
 function z_condvar_drop(this_)
     ccall((:z_condvar_drop, libzenohc), Cvoid, (Ptr{z_moved_condvar_t},), this_)
 end
@@ -1637,6 +3585,14 @@ end
 
 function Base.setproperty!(x::Ptr{z_moved_config_t}, f::Symbol, v)
     unsafe_store!(getproperty(x, f), v)
+end
+
+function Base.propertynames(x::z_moved_config_t, private::Bool = false)
+    (:_this, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
 end
 
 function z_config_drop(this_)
@@ -1663,6 +3619,14 @@ function Base.setproperty!(x::Ptr{z_moved_encoding_t}, f::Symbol, v)
     unsafe_store!(getproperty(x, f), v)
 end
 
+function Base.propertynames(x::z_moved_encoding_t, private::Bool = false)
+    (:_this, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
+end
+
 function z_encoding_drop(this_)
     ccall((:z_encoding_drop, libzenohc), Cvoid, (Ptr{z_moved_encoding_t},), this_)
 end
@@ -1685,6 +3649,14 @@ end
 
 function Base.setproperty!(x::Ptr{z_moved_fifo_handler_query_t}, f::Symbol, v)
     unsafe_store!(getproperty(x, f), v)
+end
+
+function Base.propertynames(x::z_moved_fifo_handler_query_t, private::Bool = false)
+    (:_this, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
 end
 
 function z_fifo_handler_query_drop(this_)
@@ -1711,6 +3683,14 @@ function Base.setproperty!(x::Ptr{z_moved_fifo_handler_reply_t}, f::Symbol, v)
     unsafe_store!(getproperty(x, f), v)
 end
 
+function Base.propertynames(x::z_moved_fifo_handler_reply_t, private::Bool = false)
+    (:_this, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
+end
+
 function z_fifo_handler_reply_drop(this_)
     ccall((:z_fifo_handler_reply_drop, libzenohc), Cvoid, (Ptr{z_moved_fifo_handler_reply_t},), this_)
 end
@@ -1733,6 +3713,14 @@ end
 
 function Base.setproperty!(x::Ptr{z_moved_fifo_handler_sample_t}, f::Symbol, v)
     unsafe_store!(getproperty(x, f), v)
+end
+
+function Base.propertynames(x::z_moved_fifo_handler_sample_t, private::Bool = false)
+    (:_this, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
 end
 
 function z_fifo_handler_sample_drop(this_)
@@ -1759,6 +3747,14 @@ function Base.setproperty!(x::Ptr{z_moved_hello_t}, f::Symbol, v)
     unsafe_store!(getproperty(x, f), v)
 end
 
+function Base.propertynames(x::z_moved_hello_t, private::Bool = false)
+    (:_this, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
+end
+
 function z_hello_drop(this_)
     ccall((:z_hello_drop, libzenohc), Cvoid, (Ptr{z_moved_hello_t},), this_)
 end
@@ -1783,8 +3779,112 @@ function Base.setproperty!(x::Ptr{z_moved_keyexpr_t}, f::Symbol, v)
     unsafe_store!(getproperty(x, f), v)
 end
 
+function Base.propertynames(x::z_moved_keyexpr_t, private::Bool = false)
+    (:_this, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
+end
+
 function z_keyexpr_drop(this_)
     ccall((:z_keyexpr_drop, libzenohc), Cvoid, (Ptr{z_moved_keyexpr_t},), this_)
+end
+
+struct z_moved_link_t
+    data::NTuple{144, UInt8}
+end
+
+function Base.getproperty(x::Ptr{z_moved_link_t}, f::Symbol)
+    f === :_this && return Ptr{z_owned_link_t}(x + 0)
+    return getfield(x, f)
+end
+
+function Base.getproperty(x::z_moved_link_t, f::Symbol)
+    r = Ref{z_moved_link_t}(x)
+    ptr = Base.unsafe_convert(Ptr{z_moved_link_t}, r)
+    fptr = getproperty(ptr, f)
+    GC.@preserve r unsafe_load(fptr)
+end
+
+function Base.setproperty!(x::Ptr{z_moved_link_t}, f::Symbol, v)
+    unsafe_store!(getproperty(x, f), v)
+end
+
+function Base.propertynames(x::z_moved_link_t, private::Bool = false)
+    (:_this, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
+end
+
+function z_link_drop(this_)
+    ccall((:z_link_drop, libzenohc), Cvoid, (Ptr{z_moved_link_t},), this_)
+end
+
+struct z_moved_link_event_t
+    data::NTuple{152, UInt8}
+end
+
+function Base.getproperty(x::Ptr{z_moved_link_event_t}, f::Symbol)
+    f === :_this && return Ptr{z_owned_link_event_t}(x + 0)
+    return getfield(x, f)
+end
+
+function Base.getproperty(x::z_moved_link_event_t, f::Symbol)
+    r = Ref{z_moved_link_event_t}(x)
+    ptr = Base.unsafe_convert(Ptr{z_moved_link_event_t}, r)
+    fptr = getproperty(ptr, f)
+    GC.@preserve r unsafe_load(fptr)
+end
+
+function Base.setproperty!(x::Ptr{z_moved_link_event_t}, f::Symbol, v)
+    unsafe_store!(getproperty(x, f), v)
+end
+
+function Base.propertynames(x::z_moved_link_event_t, private::Bool = false)
+    (:_this, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
+end
+
+function z_link_event_drop(this_)
+    ccall((:z_link_event_drop, libzenohc), Cvoid, (Ptr{z_moved_link_event_t},), this_)
+end
+
+struct z_moved_link_events_listener_t
+    data::NTuple{24, UInt8}
+end
+
+function Base.getproperty(x::Ptr{z_moved_link_events_listener_t}, f::Symbol)
+    f === :_this && return Ptr{z_owned_link_events_listener_t}(x + 0)
+    return getfield(x, f)
+end
+
+function Base.getproperty(x::z_moved_link_events_listener_t, f::Symbol)
+    r = Ref{z_moved_link_events_listener_t}(x)
+    ptr = Base.unsafe_convert(Ptr{z_moved_link_events_listener_t}, r)
+    fptr = getproperty(ptr, f)
+    GC.@preserve r unsafe_load(fptr)
+end
+
+function Base.setproperty!(x::Ptr{z_moved_link_events_listener_t}, f::Symbol, v)
+    unsafe_store!(getproperty(x, f), v)
+end
+
+function Base.propertynames(x::z_moved_link_events_listener_t, private::Bool = false)
+    (:_this, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
+end
+
+function z_link_events_listener_drop(this_)
+    ccall((:z_link_events_listener_drop, libzenohc), Cvoid, (Ptr{z_moved_link_events_listener_t},), this_)
 end
 
 struct z_moved_liveliness_token_t
@@ -1805,6 +3905,14 @@ end
 
 function Base.setproperty!(x::Ptr{z_moved_liveliness_token_t}, f::Symbol, v)
     unsafe_store!(getproperty(x, f), v)
+end
+
+function Base.propertynames(x::z_moved_liveliness_token_t, private::Bool = false)
+    (:_this, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
 end
 
 function z_liveliness_token_drop(this_)
@@ -1831,6 +3939,14 @@ function Base.setproperty!(x::Ptr{z_owned_matching_listener_t}, f::Symbol, v)
     unsafe_store!(getproperty(x, f), v)
 end
 
+function Base.propertynames(x::z_owned_matching_listener_t, private::Bool = false)
+    (:_0, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
+end
+
 struct z_moved_matching_listener_t
     data::NTuple{32, UInt8}
 end
@@ -1851,8 +3967,48 @@ function Base.setproperty!(x::Ptr{z_moved_matching_listener_t}, f::Symbol, v)
     unsafe_store!(getproperty(x, f), v)
 end
 
+function Base.propertynames(x::z_moved_matching_listener_t, private::Bool = false)
+    (:_this, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
+end
+
 function z_matching_listener_drop(this_)
     ccall((:z_matching_listener_drop, libzenohc), Cvoid, (Ptr{z_moved_matching_listener_t},), this_)
+end
+
+struct z_moved_memory_layout_t
+    data::NTuple{16, UInt8}
+end
+
+function Base.getproperty(x::Ptr{z_moved_memory_layout_t}, f::Symbol)
+    f === :_this && return Ptr{z_owned_memory_layout_t}(x + 0)
+    return getfield(x, f)
+end
+
+function Base.getproperty(x::z_moved_memory_layout_t, f::Symbol)
+    r = Ref{z_moved_memory_layout_t}(x)
+    ptr = Base.unsafe_convert(Ptr{z_moved_memory_layout_t}, r)
+    fptr = getproperty(ptr, f)
+    GC.@preserve r unsafe_load(fptr)
+end
+
+function Base.setproperty!(x::Ptr{z_moved_memory_layout_t}, f::Symbol, v)
+    unsafe_store!(getproperty(x, f), v)
+end
+
+function Base.propertynames(x::z_moved_memory_layout_t, private::Bool = false)
+    (:_this, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
+end
+
+function z_memory_layout_drop(this_)
+    ccall((:z_memory_layout_drop, libzenohc), Cvoid, (Ptr{z_moved_memory_layout_t},), this_)
 end
 
 struct z_moved_mutex_t
@@ -1875,8 +4031,80 @@ function Base.setproperty!(x::Ptr{z_moved_mutex_t}, f::Symbol, v)
     unsafe_store!(getproperty(x, f), v)
 end
 
+function Base.propertynames(x::z_moved_mutex_t, private::Bool = false)
+    (:_this, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
+end
+
 function z_mutex_drop(this_)
     ccall((:z_mutex_drop, libzenohc), Cvoid, (Ptr{z_moved_mutex_t},), this_)
+end
+
+struct z_moved_precomputed_layout_t
+    data::NTuple{40, UInt8}
+end
+
+function Base.getproperty(x::Ptr{z_moved_precomputed_layout_t}, f::Symbol)
+    f === :_this && return Ptr{z_owned_precomputed_layout_t}(x + 0)
+    return getfield(x, f)
+end
+
+function Base.getproperty(x::z_moved_precomputed_layout_t, f::Symbol)
+    r = Ref{z_moved_precomputed_layout_t}(x)
+    ptr = Base.unsafe_convert(Ptr{z_moved_precomputed_layout_t}, r)
+    fptr = getproperty(ptr, f)
+    GC.@preserve r unsafe_load(fptr)
+end
+
+function Base.setproperty!(x::Ptr{z_moved_precomputed_layout_t}, f::Symbol, v)
+    unsafe_store!(getproperty(x, f), v)
+end
+
+function Base.propertynames(x::z_moved_precomputed_layout_t, private::Bool = false)
+    (:_this, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
+end
+
+function z_precomputed_layout_drop(this_)
+    ccall((:z_precomputed_layout_drop, libzenohc), Cvoid, (Ptr{z_moved_precomputed_layout_t},), this_)
+end
+
+struct z_moved_ptr_in_segment_t
+    data::NTuple{24, UInt8}
+end
+
+function Base.getproperty(x::Ptr{z_moved_ptr_in_segment_t}, f::Symbol)
+    f === :_this && return Ptr{z_owned_ptr_in_segment_t}(x + 0)
+    return getfield(x, f)
+end
+
+function Base.getproperty(x::z_moved_ptr_in_segment_t, f::Symbol)
+    r = Ref{z_moved_ptr_in_segment_t}(x)
+    ptr = Base.unsafe_convert(Ptr{z_moved_ptr_in_segment_t}, r)
+    fptr = getproperty(ptr, f)
+    GC.@preserve r unsafe_load(fptr)
+end
+
+function Base.setproperty!(x::Ptr{z_moved_ptr_in_segment_t}, f::Symbol, v)
+    unsafe_store!(getproperty(x, f), v)
+end
+
+function Base.propertynames(x::z_moved_ptr_in_segment_t, private::Bool = false)
+    (:_this, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
+end
+
+function z_ptr_in_segment_drop(this_)
+    ccall((:z_ptr_in_segment_drop, libzenohc), Cvoid, (Ptr{z_moved_ptr_in_segment_t},), this_)
 end
 
 struct z_moved_publisher_t
@@ -1897,6 +4125,14 @@ end
 
 function Base.setproperty!(x::Ptr{z_moved_publisher_t}, f::Symbol, v)
     unsafe_store!(getproperty(x, f), v)
+end
+
+function Base.propertynames(x::z_moved_publisher_t, private::Bool = false)
+    (:_this, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
 end
 
 function z_publisher_drop(this_)
@@ -1923,6 +4159,14 @@ function Base.setproperty!(x::Ptr{z_moved_querier_t}, f::Symbol, v)
     unsafe_store!(getproperty(x, f), v)
 end
 
+function Base.propertynames(x::z_moved_querier_t, private::Bool = false)
+    (:_this, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
+end
+
 function z_querier_drop(this_)
     ccall((:z_querier_drop, libzenohc), Cvoid, (Ptr{z_moved_querier_t},), this_)
 end
@@ -1945,6 +4189,14 @@ end
 
 function Base.setproperty!(x::Ptr{z_moved_query_t}, f::Symbol, v)
     unsafe_store!(getproperty(x, f), v)
+end
+
+function Base.propertynames(x::z_moved_query_t, private::Bool = false)
+    (:_this, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
 end
 
 function z_query_drop(this_)
@@ -1971,12 +4223,20 @@ function Base.setproperty!(x::Ptr{z_moved_queryable_t}, f::Symbol, v)
     unsafe_store!(getproperty(x, f), v)
 end
 
+function Base.propertynames(x::z_moved_queryable_t, private::Bool = false)
+    (:_this, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
+end
+
 function z_queryable_drop(this_)
     ccall((:z_queryable_drop, libzenohc), Cvoid, (Ptr{z_moved_queryable_t},), this_)
 end
 
 struct z_moved_reply_t
-    data::NTuple{200, UInt8}
+    data::NTuple{248, UInt8}
 end
 
 function Base.getproperty(x::Ptr{z_moved_reply_t}, f::Symbol)
@@ -1993,6 +4253,14 @@ end
 
 function Base.setproperty!(x::Ptr{z_moved_reply_t}, f::Symbol, v)
     unsafe_store!(getproperty(x, f), v)
+end
+
+function Base.propertynames(x::z_moved_reply_t, private::Bool = false)
+    (:_this, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
 end
 
 function z_reply_drop(this_)
@@ -2019,6 +4287,14 @@ function Base.setproperty!(x::Ptr{z_moved_reply_err_t}, f::Symbol, v)
     unsafe_store!(getproperty(x, f), v)
 end
 
+function Base.propertynames(x::z_moved_reply_err_t, private::Bool = false)
+    (:_this, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
+end
+
 function z_reply_err_drop(this_)
     ccall((:z_reply_err_drop, libzenohc), Cvoid, (Ptr{z_moved_reply_err_t},), this_)
 end
@@ -2041,6 +4317,14 @@ end
 
 function Base.setproperty!(x::Ptr{z_moved_ring_handler_query_t}, f::Symbol, v)
     unsafe_store!(getproperty(x, f), v)
+end
+
+function Base.propertynames(x::z_moved_ring_handler_query_t, private::Bool = false)
+    (:_this, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
 end
 
 function z_ring_handler_query_drop(this_)
@@ -2067,6 +4351,14 @@ function Base.setproperty!(x::Ptr{z_moved_ring_handler_reply_t}, f::Symbol, v)
     unsafe_store!(getproperty(x, f), v)
 end
 
+function Base.propertynames(x::z_moved_ring_handler_reply_t, private::Bool = false)
+    (:_this, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
+end
+
 function z_ring_handler_reply_drop(this_)
     ccall((:z_ring_handler_reply_drop, libzenohc), Cvoid, (Ptr{z_moved_ring_handler_reply_t},), this_)
 end
@@ -2091,12 +4383,20 @@ function Base.setproperty!(x::Ptr{z_moved_ring_handler_sample_t}, f::Symbol, v)
     unsafe_store!(getproperty(x, f), v)
 end
 
+function Base.propertynames(x::z_moved_ring_handler_sample_t, private::Bool = false)
+    (:_this, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
+end
+
 function z_ring_handler_sample_drop(this_)
     ccall((:z_ring_handler_sample_drop, libzenohc), Cvoid, (Ptr{z_moved_ring_handler_sample_t},), this_)
 end
 
 struct z_moved_sample_t
-    data::NTuple{200, UInt8}
+    data::NTuple{224, UInt8}
 end
 
 function Base.getproperty(x::Ptr{z_moved_sample_t}, f::Symbol)
@@ -2113,6 +4413,14 @@ end
 
 function Base.setproperty!(x::Ptr{z_moved_sample_t}, f::Symbol, v)
     unsafe_store!(getproperty(x, f), v)
+end
+
+function Base.propertynames(x::z_moved_sample_t, private::Bool = false)
+    (:_this, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
 end
 
 function z_sample_drop(this_)
@@ -2139,8 +4447,236 @@ function Base.setproperty!(x::Ptr{z_moved_session_t}, f::Symbol, v)
     unsafe_store!(getproperty(x, f), v)
 end
 
+function Base.propertynames(x::z_moved_session_t, private::Bool = false)
+    (:_this, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
+end
+
 function z_session_drop(this_)
     ccall((:z_session_drop, libzenohc), Cvoid, (Ptr{z_moved_session_t},), this_)
+end
+
+struct z_moved_shared_shm_provider_t
+    data::NTuple{104, UInt8}
+end
+
+function Base.getproperty(x::Ptr{z_moved_shared_shm_provider_t}, f::Symbol)
+    f === :_this && return Ptr{z_owned_shared_shm_provider_t}(x + 0)
+    return getfield(x, f)
+end
+
+function Base.getproperty(x::z_moved_shared_shm_provider_t, f::Symbol)
+    r = Ref{z_moved_shared_shm_provider_t}(x)
+    ptr = Base.unsafe_convert(Ptr{z_moved_shared_shm_provider_t}, r)
+    fptr = getproperty(ptr, f)
+    GC.@preserve r unsafe_load(fptr)
+end
+
+function Base.setproperty!(x::Ptr{z_moved_shared_shm_provider_t}, f::Symbol, v)
+    unsafe_store!(getproperty(x, f), v)
+end
+
+function Base.propertynames(x::z_moved_shared_shm_provider_t, private::Bool = false)
+    (:_this, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
+end
+
+function z_shared_shm_provider_drop(this_)
+    ccall((:z_shared_shm_provider_drop, libzenohc), Cvoid, (Ptr{z_moved_shared_shm_provider_t},), this_)
+end
+
+struct z_owned_shm_client_t
+    data::NTuple{16, UInt8}
+end
+
+function Base.getproperty(x::Ptr{z_owned_shm_client_t}, f::Symbol)
+    f === :_0 && return Ptr{NTuple{16, UInt8}}(x + 0)
+    return getfield(x, f)
+end
+
+function Base.getproperty(x::z_owned_shm_client_t, f::Symbol)
+    r = Ref{z_owned_shm_client_t}(x)
+    ptr = Base.unsafe_convert(Ptr{z_owned_shm_client_t}, r)
+    fptr = getproperty(ptr, f)
+    GC.@preserve r unsafe_load(fptr)
+end
+
+function Base.setproperty!(x::Ptr{z_owned_shm_client_t}, f::Symbol, v)
+    unsafe_store!(getproperty(x, f), v)
+end
+
+function Base.propertynames(x::z_owned_shm_client_t, private::Bool = false)
+    (:_0, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
+end
+
+struct z_moved_shm_client_t
+    data::NTuple{16, UInt8}
+end
+
+function Base.getproperty(x::Ptr{z_moved_shm_client_t}, f::Symbol)
+    f === :_this && return Ptr{z_owned_shm_client_t}(x + 0)
+    return getfield(x, f)
+end
+
+function Base.getproperty(x::z_moved_shm_client_t, f::Symbol)
+    r = Ref{z_moved_shm_client_t}(x)
+    ptr = Base.unsafe_convert(Ptr{z_moved_shm_client_t}, r)
+    fptr = getproperty(ptr, f)
+    GC.@preserve r unsafe_load(fptr)
+end
+
+function Base.setproperty!(x::Ptr{z_moved_shm_client_t}, f::Symbol, v)
+    unsafe_store!(getproperty(x, f), v)
+end
+
+function Base.propertynames(x::z_moved_shm_client_t, private::Bool = false)
+    (:_this, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
+end
+
+function z_shm_client_drop(this_)
+    ccall((:z_shm_client_drop, libzenohc), Cvoid, (Ptr{z_moved_shm_client_t},), this_)
+end
+
+struct z_moved_shm_client_storage_t
+    data::NTuple{8, UInt8}
+end
+
+function Base.getproperty(x::Ptr{z_moved_shm_client_storage_t}, f::Symbol)
+    f === :_this && return Ptr{z_owned_shm_client_storage_t}(x + 0)
+    return getfield(x, f)
+end
+
+function Base.getproperty(x::z_moved_shm_client_storage_t, f::Symbol)
+    r = Ref{z_moved_shm_client_storage_t}(x)
+    ptr = Base.unsafe_convert(Ptr{z_moved_shm_client_storage_t}, r)
+    fptr = getproperty(ptr, f)
+    GC.@preserve r unsafe_load(fptr)
+end
+
+function Base.setproperty!(x::Ptr{z_moved_shm_client_storage_t}, f::Symbol, v)
+    unsafe_store!(getproperty(x, f), v)
+end
+
+function Base.propertynames(x::z_moved_shm_client_storage_t, private::Bool = false)
+    (:_this, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
+end
+
+function z_shm_client_storage_drop(this_)
+    ccall((:z_shm_client_storage_drop, libzenohc), Cvoid, (Ptr{z_moved_shm_client_storage_t},), this_)
+end
+
+struct z_moved_shm_t
+    data::NTuple{80, UInt8}
+end
+
+function Base.getproperty(x::Ptr{z_moved_shm_t}, f::Symbol)
+    f === :_this && return Ptr{z_owned_shm_t}(x + 0)
+    return getfield(x, f)
+end
+
+function Base.getproperty(x::z_moved_shm_t, f::Symbol)
+    r = Ref{z_moved_shm_t}(x)
+    ptr = Base.unsafe_convert(Ptr{z_moved_shm_t}, r)
+    fptr = getproperty(ptr, f)
+    GC.@preserve r unsafe_load(fptr)
+end
+
+function Base.setproperty!(x::Ptr{z_moved_shm_t}, f::Symbol, v)
+    unsafe_store!(getproperty(x, f), v)
+end
+
+function Base.propertynames(x::z_moved_shm_t, private::Bool = false)
+    (:_this, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
+end
+
+function z_shm_drop(this_)
+    ccall((:z_shm_drop, libzenohc), Cvoid, (Ptr{z_moved_shm_t},), this_)
+end
+
+struct z_moved_shm_mut_t
+    data::NTuple{80, UInt8}
+end
+
+function Base.getproperty(x::Ptr{z_moved_shm_mut_t}, f::Symbol)
+    f === :_this && return Ptr{z_owned_shm_mut_t}(x + 0)
+    return getfield(x, f)
+end
+
+function Base.getproperty(x::z_moved_shm_mut_t, f::Symbol)
+    r = Ref{z_moved_shm_mut_t}(x)
+    ptr = Base.unsafe_convert(Ptr{z_moved_shm_mut_t}, r)
+    fptr = getproperty(ptr, f)
+    GC.@preserve r unsafe_load(fptr)
+end
+
+function Base.setproperty!(x::Ptr{z_moved_shm_mut_t}, f::Symbol, v)
+    unsafe_store!(getproperty(x, f), v)
+end
+
+function Base.propertynames(x::z_moved_shm_mut_t, private::Bool = false)
+    (:_this, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
+end
+
+function z_shm_mut_drop(this_)
+    ccall((:z_shm_mut_drop, libzenohc), Cvoid, (Ptr{z_moved_shm_mut_t},), this_)
+end
+
+struct z_moved_shm_provider_t
+    data::NTuple{104, UInt8}
+end
+
+function Base.getproperty(x::Ptr{z_moved_shm_provider_t}, f::Symbol)
+    f === :_this && return Ptr{z_owned_shm_provider_t}(x + 0)
+    return getfield(x, f)
+end
+
+function Base.getproperty(x::z_moved_shm_provider_t, f::Symbol)
+    r = Ref{z_moved_shm_provider_t}(x)
+    ptr = Base.unsafe_convert(Ptr{z_moved_shm_provider_t}, r)
+    fptr = getproperty(ptr, f)
+    GC.@preserve r unsafe_load(fptr)
+end
+
+function Base.setproperty!(x::Ptr{z_moved_shm_provider_t}, f::Symbol, v)
+    unsafe_store!(getproperty(x, f), v)
+end
+
+function Base.propertynames(x::z_moved_shm_provider_t, private::Bool = false)
+    (:_this, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
+end
+
+function z_shm_provider_drop(this_)
+    ccall((:z_shm_provider_drop, libzenohc), Cvoid, (Ptr{z_moved_shm_provider_t},), this_)
 end
 
 struct z_moved_slice_t
@@ -2161,6 +4697,14 @@ end
 
 function Base.setproperty!(x::Ptr{z_moved_slice_t}, f::Symbol, v)
     unsafe_store!(getproperty(x, f), v)
+end
+
+function Base.propertynames(x::z_moved_slice_t, private::Bool = false)
+    (:_this, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
 end
 
 function z_slice_drop(this_)
@@ -2187,6 +4731,14 @@ function Base.setproperty!(x::Ptr{z_moved_string_array_t}, f::Symbol, v)
     unsafe_store!(getproperty(x, f), v)
 end
 
+function Base.propertynames(x::z_moved_string_array_t, private::Bool = false)
+    (:_this, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
+end
+
 function z_string_array_drop(this_)
     ccall((:z_string_array_drop, libzenohc), Cvoid, (Ptr{z_moved_string_array_t},), this_)
 end
@@ -2209,6 +4761,14 @@ end
 
 function Base.setproperty!(x::Ptr{z_moved_string_t}, f::Symbol, v)
     unsafe_store!(getproperty(x, f), v)
+end
+
+function Base.propertynames(x::z_moved_string_t, private::Bool = false)
+    (:_this, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
 end
 
 function z_string_drop(this_)
@@ -2235,6 +4795,14 @@ function Base.setproperty!(x::Ptr{z_moved_subscriber_t}, f::Symbol, v)
     unsafe_store!(getproperty(x, f), v)
 end
 
+function Base.propertynames(x::z_moved_subscriber_t, private::Bool = false)
+    (:_this, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
+end
+
 function z_subscriber_drop(this_)
     ccall((:z_subscriber_drop, libzenohc), Cvoid, (Ptr{z_moved_subscriber_t},), this_)
 end
@@ -2259,6 +4827,14 @@ function Base.setproperty!(x::Ptr{z_owned_task_t}, f::Symbol, v)
     unsafe_store!(getproperty(x, f), v)
 end
 
+function Base.propertynames(x::z_owned_task_t, private::Bool = false)
+    (:_0, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
+end
+
 struct z_moved_task_t
     data::NTuple{24, UInt8}
 end
@@ -2279,8 +4855,112 @@ function Base.setproperty!(x::Ptr{z_moved_task_t}, f::Symbol, v)
     unsafe_store!(getproperty(x, f), v)
 end
 
+function Base.propertynames(x::z_moved_task_t, private::Bool = false)
+    (:_this, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
+end
+
 function z_task_drop(this_)
     ccall((:z_task_drop, libzenohc), Cvoid, (Ptr{z_moved_task_t},), this_)
+end
+
+struct z_moved_transport_t
+    data::NTuple{20, UInt8}
+end
+
+function Base.getproperty(x::Ptr{z_moved_transport_t}, f::Symbol)
+    f === :_this && return Ptr{z_owned_transport_t}(x + 0)
+    return getfield(x, f)
+end
+
+function Base.getproperty(x::z_moved_transport_t, f::Symbol)
+    r = Ref{z_moved_transport_t}(x)
+    ptr = Base.unsafe_convert(Ptr{z_moved_transport_t}, r)
+    fptr = getproperty(ptr, f)
+    GC.@preserve r unsafe_load(fptr)
+end
+
+function Base.setproperty!(x::Ptr{z_moved_transport_t}, f::Symbol, v)
+    unsafe_store!(getproperty(x, f), v)
+end
+
+function Base.propertynames(x::z_moved_transport_t, private::Bool = false)
+    (:_this, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
+end
+
+function z_transport_drop(this_)
+    ccall((:z_transport_drop, libzenohc), Cvoid, (Ptr{z_moved_transport_t},), this_)
+end
+
+struct z_moved_transport_event_t
+    data::NTuple{21, UInt8}
+end
+
+function Base.getproperty(x::Ptr{z_moved_transport_event_t}, f::Symbol)
+    f === :_this && return Ptr{z_owned_transport_event_t}(x + 0)
+    return getfield(x, f)
+end
+
+function Base.getproperty(x::z_moved_transport_event_t, f::Symbol)
+    r = Ref{z_moved_transport_event_t}(x)
+    ptr = Base.unsafe_convert(Ptr{z_moved_transport_event_t}, r)
+    fptr = getproperty(ptr, f)
+    GC.@preserve r unsafe_load(fptr)
+end
+
+function Base.setproperty!(x::Ptr{z_moved_transport_event_t}, f::Symbol, v)
+    unsafe_store!(getproperty(x, f), v)
+end
+
+function Base.propertynames(x::z_moved_transport_event_t, private::Bool = false)
+    (:_this, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
+end
+
+function z_transport_event_drop(this_)
+    ccall((:z_transport_event_drop, libzenohc), Cvoid, (Ptr{z_moved_transport_event_t},), this_)
+end
+
+struct z_moved_transport_events_listener_t
+    data::NTuple{24, UInt8}
+end
+
+function Base.getproperty(x::Ptr{z_moved_transport_events_listener_t}, f::Symbol)
+    f === :_this && return Ptr{z_owned_transport_events_listener_t}(x + 0)
+    return getfield(x, f)
+end
+
+function Base.getproperty(x::z_moved_transport_events_listener_t, f::Symbol)
+    r = Ref{z_moved_transport_events_listener_t}(x)
+    ptr = Base.unsafe_convert(Ptr{z_moved_transport_events_listener_t}, r)
+    fptr = getproperty(ptr, f)
+    GC.@preserve r unsafe_load(fptr)
+end
+
+function Base.setproperty!(x::Ptr{z_moved_transport_events_listener_t}, f::Symbol, v)
+    unsafe_store!(getproperty(x, f), v)
+end
+
+function Base.propertynames(x::z_moved_transport_events_listener_t, private::Bool = false)
+    (:_this, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
+end
+
+function z_transport_events_listener_drop(this_)
+    ccall((:z_transport_events_listener_drop, libzenohc), Cvoid, (Ptr{z_moved_transport_events_listener_t},), this_)
 end
 
 struct zc_moved_closure_log_t
@@ -2289,6 +4969,294 @@ end
 
 function zc_closure_log_drop(closure_)
     ccall((:zc_closure_log_drop, libzenohc), Cvoid, (Ptr{zc_moved_closure_log_t},), closure_)
+end
+
+struct zc_owned_concurrent_close_handle_t
+    data::NTuple{16, UInt8}
+end
+
+function Base.getproperty(x::Ptr{zc_owned_concurrent_close_handle_t}, f::Symbol)
+    f === :_0 && return Ptr{NTuple{16, UInt8}}(x + 0)
+    return getfield(x, f)
+end
+
+function Base.getproperty(x::zc_owned_concurrent_close_handle_t, f::Symbol)
+    r = Ref{zc_owned_concurrent_close_handle_t}(x)
+    ptr = Base.unsafe_convert(Ptr{zc_owned_concurrent_close_handle_t}, r)
+    fptr = getproperty(ptr, f)
+    GC.@preserve r unsafe_load(fptr)
+end
+
+function Base.setproperty!(x::Ptr{zc_owned_concurrent_close_handle_t}, f::Symbol, v)
+    unsafe_store!(getproperty(x, f), v)
+end
+
+function Base.propertynames(x::zc_owned_concurrent_close_handle_t, private::Bool = false)
+    (:_0, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
+end
+
+struct zc_moved_concurrent_close_handle_t
+    data::NTuple{16, UInt8}
+end
+
+function Base.getproperty(x::Ptr{zc_moved_concurrent_close_handle_t}, f::Symbol)
+    f === :_this && return Ptr{zc_owned_concurrent_close_handle_t}(x + 0)
+    return getfield(x, f)
+end
+
+function Base.getproperty(x::zc_moved_concurrent_close_handle_t, f::Symbol)
+    r = Ref{zc_moved_concurrent_close_handle_t}(x)
+    ptr = Base.unsafe_convert(Ptr{zc_moved_concurrent_close_handle_t}, r)
+    fptr = getproperty(ptr, f)
+    GC.@preserve r unsafe_load(fptr)
+end
+
+function Base.setproperty!(x::Ptr{zc_moved_concurrent_close_handle_t}, f::Symbol, v)
+    unsafe_store!(getproperty(x, f), v)
+end
+
+function Base.propertynames(x::zc_moved_concurrent_close_handle_t, private::Bool = false)
+    (:_this, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
+end
+
+function zc_concurrent_close_handle_drop(this_)
+    ccall((:zc_concurrent_close_handle_drop, libzenohc), Cvoid, (Ptr{zc_moved_concurrent_close_handle_t},), this_)
+end
+
+struct zc_moved_shm_client_list_t
+    data::NTuple{24, UInt8}
+end
+
+function Base.getproperty(x::Ptr{zc_moved_shm_client_list_t}, f::Symbol)
+    f === :_this && return Ptr{zc_owned_shm_client_list_t}(x + 0)
+    return getfield(x, f)
+end
+
+function Base.getproperty(x::zc_moved_shm_client_list_t, f::Symbol)
+    r = Ref{zc_moved_shm_client_list_t}(x)
+    ptr = Base.unsafe_convert(Ptr{zc_moved_shm_client_list_t}, r)
+    fptr = getproperty(ptr, f)
+    GC.@preserve r unsafe_load(fptr)
+end
+
+function Base.setproperty!(x::Ptr{zc_moved_shm_client_list_t}, f::Symbol, v)
+    unsafe_store!(getproperty(x, f), v)
+end
+
+function Base.propertynames(x::zc_moved_shm_client_list_t, private::Bool = false)
+    (:_this, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
+end
+
+function zc_shm_client_list_drop(this_)
+    ccall((:zc_shm_client_list_drop, libzenohc), Cvoid, (Ptr{zc_moved_shm_client_list_t},), this_)
+end
+
+struct ze_moved_advanced_publisher_t
+    data::NTuple{248, UInt8}
+end
+
+function Base.getproperty(x::Ptr{ze_moved_advanced_publisher_t}, f::Symbol)
+    f === :_this && return Ptr{ze_owned_advanced_publisher_t}(x + 0)
+    return getfield(x, f)
+end
+
+function Base.getproperty(x::ze_moved_advanced_publisher_t, f::Symbol)
+    r = Ref{ze_moved_advanced_publisher_t}(x)
+    ptr = Base.unsafe_convert(Ptr{ze_moved_advanced_publisher_t}, r)
+    fptr = getproperty(ptr, f)
+    GC.@preserve r unsafe_load(fptr)
+end
+
+function Base.setproperty!(x::Ptr{ze_moved_advanced_publisher_t}, f::Symbol, v)
+    unsafe_store!(getproperty(x, f), v)
+end
+
+function Base.propertynames(x::ze_moved_advanced_publisher_t, private::Bool = false)
+    (:_this, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
+end
+
+function ze_advanced_publisher_drop(this_)
+    ccall((:ze_advanced_publisher_drop, libzenohc), Cvoid, (Ptr{ze_moved_advanced_publisher_t},), this_)
+end
+
+struct ze_moved_advanced_subscriber_t
+    data::NTuple{176, UInt8}
+end
+
+function Base.getproperty(x::Ptr{ze_moved_advanced_subscriber_t}, f::Symbol)
+    f === :_this && return Ptr{ze_owned_advanced_subscriber_t}(x + 0)
+    return getfield(x, f)
+end
+
+function Base.getproperty(x::ze_moved_advanced_subscriber_t, f::Symbol)
+    r = Ref{ze_moved_advanced_subscriber_t}(x)
+    ptr = Base.unsafe_convert(Ptr{ze_moved_advanced_subscriber_t}, r)
+    fptr = getproperty(ptr, f)
+    GC.@preserve r unsafe_load(fptr)
+end
+
+function Base.setproperty!(x::Ptr{ze_moved_advanced_subscriber_t}, f::Symbol, v)
+    unsafe_store!(getproperty(x, f), v)
+end
+
+function Base.propertynames(x::ze_moved_advanced_subscriber_t, private::Bool = false)
+    (:_this, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
+end
+
+function ze_advanced_subscriber_drop(this_)
+    ccall((:ze_advanced_subscriber_drop, libzenohc), Cvoid, (Ptr{ze_moved_advanced_subscriber_t},), this_)
+end
+
+struct ze_moved_closure_miss_t
+    _this::ze_owned_closure_miss_t
+end
+
+function ze_closure_miss_drop(closure_)
+    ccall((:ze_closure_miss_drop, libzenohc), Cvoid, (Ptr{ze_moved_closure_miss_t},), closure_)
+end
+
+struct ze_moved_publication_cache_t
+    data::NTuple{144, UInt8}
+end
+
+function Base.getproperty(x::Ptr{ze_moved_publication_cache_t}, f::Symbol)
+    f === :_this && return Ptr{ze_owned_publication_cache_t}(x + 0)
+    return getfield(x, f)
+end
+
+function Base.getproperty(x::ze_moved_publication_cache_t, f::Symbol)
+    r = Ref{ze_moved_publication_cache_t}(x)
+    ptr = Base.unsafe_convert(Ptr{ze_moved_publication_cache_t}, r)
+    fptr = getproperty(ptr, f)
+    GC.@preserve r unsafe_load(fptr)
+end
+
+function Base.setproperty!(x::Ptr{ze_moved_publication_cache_t}, f::Symbol, v)
+    unsafe_store!(getproperty(x, f), v)
+end
+
+function Base.propertynames(x::ze_moved_publication_cache_t, private::Bool = false)
+    (:_this, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
+end
+
+function ze_publication_cache_drop(this_)
+    ccall((:ze_publication_cache_drop, libzenohc), Cvoid, (Ptr{ze_moved_publication_cache_t},), this_)
+end
+
+struct ze_moved_querying_subscriber_t
+    data::NTuple{104, UInt8}
+end
+
+function Base.getproperty(x::Ptr{ze_moved_querying_subscriber_t}, f::Symbol)
+    f === :_this && return Ptr{ze_owned_querying_subscriber_t}(x + 0)
+    return getfield(x, f)
+end
+
+function Base.getproperty(x::ze_moved_querying_subscriber_t, f::Symbol)
+    r = Ref{ze_moved_querying_subscriber_t}(x)
+    ptr = Base.unsafe_convert(Ptr{ze_moved_querying_subscriber_t}, r)
+    fptr = getproperty(ptr, f)
+    GC.@preserve r unsafe_load(fptr)
+end
+
+function Base.setproperty!(x::Ptr{ze_moved_querying_subscriber_t}, f::Symbol, v)
+    unsafe_store!(getproperty(x, f), v)
+end
+
+function Base.propertynames(x::ze_moved_querying_subscriber_t, private::Bool = false)
+    (:_this, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
+end
+
+function ze_querying_subscriber_drop(this_)
+    ccall((:ze_querying_subscriber_drop, libzenohc), Cvoid, (Ptr{ze_moved_querying_subscriber_t},), this_)
+end
+
+struct ze_owned_sample_miss_listener_t
+    data::NTuple{24, UInt8}
+end
+
+function Base.getproperty(x::Ptr{ze_owned_sample_miss_listener_t}, f::Symbol)
+    f === :_0 && return Ptr{NTuple{24, UInt8}}(x + 0)
+    return getfield(x, f)
+end
+
+function Base.getproperty(x::ze_owned_sample_miss_listener_t, f::Symbol)
+    r = Ref{ze_owned_sample_miss_listener_t}(x)
+    ptr = Base.unsafe_convert(Ptr{ze_owned_sample_miss_listener_t}, r)
+    fptr = getproperty(ptr, f)
+    GC.@preserve r unsafe_load(fptr)
+end
+
+function Base.setproperty!(x::Ptr{ze_owned_sample_miss_listener_t}, f::Symbol, v)
+    unsafe_store!(getproperty(x, f), v)
+end
+
+function Base.propertynames(x::ze_owned_sample_miss_listener_t, private::Bool = false)
+    (:_0, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
+end
+
+struct ze_moved_sample_miss_listener_t
+    data::NTuple{24, UInt8}
+end
+
+function Base.getproperty(x::Ptr{ze_moved_sample_miss_listener_t}, f::Symbol)
+    f === :_this && return Ptr{ze_owned_sample_miss_listener_t}(x + 0)
+    return getfield(x, f)
+end
+
+function Base.getproperty(x::ze_moved_sample_miss_listener_t, f::Symbol)
+    r = Ref{ze_moved_sample_miss_listener_t}(x)
+    ptr = Base.unsafe_convert(Ptr{ze_moved_sample_miss_listener_t}, r)
+    fptr = getproperty(ptr, f)
+    GC.@preserve r unsafe_load(fptr)
+end
+
+function Base.setproperty!(x::Ptr{ze_moved_sample_miss_listener_t}, f::Symbol, v)
+    unsafe_store!(getproperty(x, f), v)
+end
+
+function Base.propertynames(x::ze_moved_sample_miss_listener_t, private::Bool = false)
+    (:_this, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
+end
+
+function ze_sample_miss_listener_drop(this_)
+    ccall((:ze_sample_miss_listener_drop, libzenohc), Cvoid, (Ptr{ze_moved_sample_miss_listener_t},), this_)
 end
 
 struct ze_moved_serializer_t
@@ -2311,6 +5279,14 @@ function Base.setproperty!(x::Ptr{ze_moved_serializer_t}, f::Symbol, v)
     unsafe_store!(getproperty(x, f), v)
 end
 
+function Base.propertynames(x::ze_moved_serializer_t, private::Bool = false)
+    (:_this, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
+end
+
 function ze_serializer_drop(this_)
     ccall((:ze_serializer_drop, libzenohc), Cvoid, (Ptr{ze_moved_serializer_t},), this_)
 end
@@ -2323,8 +5299,24 @@ function z_bytes_writer_move(x)
     ccall((:z_bytes_writer_move, libzenohc), Ptr{z_moved_bytes_writer_t}, (Ptr{z_owned_bytes_writer_t},), x)
 end
 
+function z_cancellation_token_move(x)
+    ccall((:z_cancellation_token_move, libzenohc), Ptr{z_moved_cancellation_token_t}, (Ptr{z_owned_cancellation_token_t},), x)
+end
+
+function z_chunk_alloc_result_move(x)
+    ccall((:z_chunk_alloc_result_move, libzenohc), Ptr{z_moved_chunk_alloc_result_t}, (Ptr{z_owned_chunk_alloc_result_t},), x)
+end
+
 function z_closure_hello_move(x)
     ccall((:z_closure_hello_move, libzenohc), Ptr{z_moved_closure_hello_t}, (Ptr{z_owned_closure_hello_t},), x)
+end
+
+function z_closure_link_move(x)
+    ccall((:z_closure_link_move, libzenohc), Ptr{z_moved_closure_link_t}, (Ptr{z_owned_closure_link_t},), x)
+end
+
+function z_closure_link_event_move(x)
+    ccall((:z_closure_link_event_move, libzenohc), Ptr{z_moved_closure_link_event_t}, (Ptr{z_owned_closure_link_event_t},), x)
 end
 
 function z_closure_matching_status_move(x)
@@ -2341,6 +5333,14 @@ end
 
 function z_closure_sample_move(x)
     ccall((:z_closure_sample_move, libzenohc), Ptr{z_moved_closure_sample_t}, (Ptr{z_owned_closure_sample_t},), x)
+end
+
+function z_closure_transport_move(x)
+    ccall((:z_closure_transport_move, libzenohc), Ptr{z_moved_closure_transport_t}, (Ptr{z_owned_closure_transport_t},), x)
+end
+
+function z_closure_transport_event_move(x)
+    ccall((:z_closure_transport_event_move, libzenohc), Ptr{z_moved_closure_transport_event_t}, (Ptr{z_owned_closure_transport_event_t},), x)
 end
 
 function z_closure_zid_move(x)
@@ -2379,6 +5379,18 @@ function z_keyexpr_move(x)
     ccall((:z_keyexpr_move, libzenohc), Ptr{z_moved_keyexpr_t}, (Ptr{z_owned_keyexpr_t},), x)
 end
 
+function z_link_move(x)
+    ccall((:z_link_move, libzenohc), Ptr{z_moved_link_t}, (Ptr{z_owned_link_t},), x)
+end
+
+function z_link_event_move(x)
+    ccall((:z_link_event_move, libzenohc), Ptr{z_moved_link_event_t}, (Ptr{z_owned_link_event_t},), x)
+end
+
+function z_link_events_listener_move(x)
+    ccall((:z_link_events_listener_move, libzenohc), Ptr{z_moved_link_events_listener_t}, (Ptr{z_owned_link_events_listener_t},), x)
+end
+
 function z_liveliness_token_move(x)
     ccall((:z_liveliness_token_move, libzenohc), Ptr{z_moved_liveliness_token_t}, (Ptr{z_owned_liveliness_token_t},), x)
 end
@@ -2387,8 +5399,20 @@ function z_matching_listener_move(x)
     ccall((:z_matching_listener_move, libzenohc), Ptr{z_moved_matching_listener_t}, (Ptr{z_owned_matching_listener_t},), x)
 end
 
+function z_memory_layout_move(x)
+    ccall((:z_memory_layout_move, libzenohc), Ptr{z_moved_memory_layout_t}, (Ptr{z_owned_memory_layout_t},), x)
+end
+
 function z_mutex_move(x)
     ccall((:z_mutex_move, libzenohc), Ptr{z_moved_mutex_t}, (Ptr{z_owned_mutex_t},), x)
+end
+
+function z_precomputed_layout_move(x)
+    ccall((:z_precomputed_layout_move, libzenohc), Ptr{z_moved_precomputed_layout_t}, (Ptr{z_owned_precomputed_layout_t},), x)
+end
+
+function z_ptr_in_segment_move(x)
+    ccall((:z_ptr_in_segment_move, libzenohc), Ptr{z_moved_ptr_in_segment_t}, (Ptr{z_owned_ptr_in_segment_t},), x)
 end
 
 function z_publisher_move(x)
@@ -2435,6 +5459,30 @@ function z_session_move(x)
     ccall((:z_session_move, libzenohc), Ptr{z_moved_session_t}, (Ptr{z_owned_session_t},), x)
 end
 
+function z_shared_shm_provider_move(x)
+    ccall((:z_shared_shm_provider_move, libzenohc), Ptr{z_moved_shared_shm_provider_t}, (Ptr{z_owned_shared_shm_provider_t},), x)
+end
+
+function z_shm_client_move(x)
+    ccall((:z_shm_client_move, libzenohc), Ptr{z_moved_shm_client_t}, (Ptr{z_owned_shm_client_t},), x)
+end
+
+function z_shm_client_storage_move(x)
+    ccall((:z_shm_client_storage_move, libzenohc), Ptr{z_moved_shm_client_storage_t}, (Ptr{z_owned_shm_client_storage_t},), x)
+end
+
+function z_shm_move(x)
+    ccall((:z_shm_move, libzenohc), Ptr{z_moved_shm_t}, (Ptr{z_owned_shm_t},), x)
+end
+
+function z_shm_mut_move(x)
+    ccall((:z_shm_mut_move, libzenohc), Ptr{z_moved_shm_mut_t}, (Ptr{z_owned_shm_mut_t},), x)
+end
+
+function z_shm_provider_move(x)
+    ccall((:z_shm_provider_move, libzenohc), Ptr{z_moved_shm_provider_t}, (Ptr{z_owned_shm_provider_t},), x)
+end
+
 function z_slice_move(x)
     ccall((:z_slice_move, libzenohc), Ptr{z_moved_slice_t}, (Ptr{z_owned_slice_t},), x)
 end
@@ -2455,8 +5503,52 @@ function z_task_move(x)
     ccall((:z_task_move, libzenohc), Ptr{z_moved_task_t}, (Ptr{z_owned_task_t},), x)
 end
 
+function z_transport_move(x)
+    ccall((:z_transport_move, libzenohc), Ptr{z_moved_transport_t}, (Ptr{z_owned_transport_t},), x)
+end
+
+function z_transport_event_move(x)
+    ccall((:z_transport_event_move, libzenohc), Ptr{z_moved_transport_event_t}, (Ptr{z_owned_transport_event_t},), x)
+end
+
+function z_transport_events_listener_move(x)
+    ccall((:z_transport_events_listener_move, libzenohc), Ptr{z_moved_transport_events_listener_t}, (Ptr{z_owned_transport_events_listener_t},), x)
+end
+
 function zc_closure_log_move(x)
     ccall((:zc_closure_log_move, libzenohc), Ptr{zc_moved_closure_log_t}, (Ptr{zc_owned_closure_log_t},), x)
+end
+
+function zc_concurrent_close_handle_move(x)
+    ccall((:zc_concurrent_close_handle_move, libzenohc), Ptr{zc_moved_concurrent_close_handle_t}, (Ptr{zc_owned_concurrent_close_handle_t},), x)
+end
+
+function zc_shm_client_list_move(x)
+    ccall((:zc_shm_client_list_move, libzenohc), Ptr{zc_moved_shm_client_list_t}, (Ptr{zc_owned_shm_client_list_t},), x)
+end
+
+function ze_advanced_publisher_move(x)
+    ccall((:ze_advanced_publisher_move, libzenohc), Ptr{ze_moved_advanced_publisher_t}, (Ptr{ze_owned_advanced_publisher_t},), x)
+end
+
+function ze_advanced_subscriber_move(x)
+    ccall((:ze_advanced_subscriber_move, libzenohc), Ptr{ze_moved_advanced_subscriber_t}, (Ptr{ze_owned_advanced_subscriber_t},), x)
+end
+
+function ze_closure_miss_move(x)
+    ccall((:ze_closure_miss_move, libzenohc), Ptr{ze_moved_closure_miss_t}, (Ptr{ze_owned_closure_miss_t},), x)
+end
+
+function ze_publication_cache_move(x)
+    ccall((:ze_publication_cache_move, libzenohc), Ptr{ze_moved_publication_cache_t}, (Ptr{ze_owned_publication_cache_t},), x)
+end
+
+function ze_querying_subscriber_move(x)
+    ccall((:ze_querying_subscriber_move, libzenohc), Ptr{ze_moved_querying_subscriber_t}, (Ptr{ze_owned_querying_subscriber_t},), x)
+end
+
+function ze_sample_miss_listener_move(x)
+    ccall((:ze_sample_miss_listener_move, libzenohc), Ptr{ze_moved_sample_miss_listener_t}, (Ptr{ze_owned_sample_miss_listener_t},), x)
 end
 
 function ze_serializer_move(x)
@@ -2471,8 +5563,24 @@ function z_internal_bytes_writer_null(this_)
     ccall((:z_internal_bytes_writer_null, libzenohc), Cvoid, (Ptr{z_owned_bytes_writer_t},), this_)
 end
 
+function z_internal_cancellation_token_null(this_)
+    ccall((:z_internal_cancellation_token_null, libzenohc), Cvoid, (Ptr{z_owned_cancellation_token_t},), this_)
+end
+
+function z_internal_chunk_alloc_result_null(this_)
+    ccall((:z_internal_chunk_alloc_result_null, libzenohc), Cvoid, (Ptr{z_owned_chunk_alloc_result_t},), this_)
+end
+
 function z_internal_closure_hello_null(this_)
     ccall((:z_internal_closure_hello_null, libzenohc), Cvoid, (Ptr{z_owned_closure_hello_t},), this_)
+end
+
+function z_internal_closure_link_event_null(this_)
+    ccall((:z_internal_closure_link_event_null, libzenohc), Cvoid, (Ptr{z_owned_closure_link_event_t},), this_)
+end
+
+function z_internal_closure_link_null(this_)
+    ccall((:z_internal_closure_link_null, libzenohc), Cvoid, (Ptr{z_owned_closure_link_t},), this_)
 end
 
 function z_internal_closure_matching_status_null(this_)
@@ -2489,6 +5597,14 @@ end
 
 function z_internal_closure_sample_null(this_)
     ccall((:z_internal_closure_sample_null, libzenohc), Cvoid, (Ptr{z_owned_closure_sample_t},), this_)
+end
+
+function z_internal_closure_transport_event_null(this_)
+    ccall((:z_internal_closure_transport_event_null, libzenohc), Cvoid, (Ptr{z_owned_closure_transport_event_t},), this_)
+end
+
+function z_internal_closure_transport_null(this_)
+    ccall((:z_internal_closure_transport_null, libzenohc), Cvoid, (Ptr{z_owned_closure_transport_t},), this_)
 end
 
 function z_internal_closure_zid_null(this_)
@@ -2527,6 +5643,18 @@ function z_internal_keyexpr_null(this_)
     ccall((:z_internal_keyexpr_null, libzenohc), Cvoid, (Ptr{z_owned_keyexpr_t},), this_)
 end
 
+function z_internal_link_event_null(this_)
+    ccall((:z_internal_link_event_null, libzenohc), Cvoid, (Ptr{z_owned_link_event_t},), this_)
+end
+
+function z_internal_link_events_listener_null(this_)
+    ccall((:z_internal_link_events_listener_null, libzenohc), Cvoid, (Ptr{z_owned_link_events_listener_t},), this_)
+end
+
+function z_internal_link_null(this_)
+    ccall((:z_internal_link_null, libzenohc), Cvoid, (Ptr{z_owned_link_t},), this_)
+end
+
 function z_internal_liveliness_token_null(this_)
     ccall((:z_internal_liveliness_token_null, libzenohc), Cvoid, (Ptr{z_owned_liveliness_token_t},), this_)
 end
@@ -2535,8 +5663,20 @@ function z_internal_matching_listener_null(this_)
     ccall((:z_internal_matching_listener_null, libzenohc), Cvoid, (Ptr{z_owned_matching_listener_t},), this_)
 end
 
+function z_internal_memory_layout_null(this_)
+    ccall((:z_internal_memory_layout_null, libzenohc), Cvoid, (Ptr{z_owned_memory_layout_t},), this_)
+end
+
 function z_internal_mutex_null(this_)
     ccall((:z_internal_mutex_null, libzenohc), Cvoid, (Ptr{z_owned_mutex_t},), this_)
+end
+
+function z_internal_precomputed_layout_null(this_)
+    ccall((:z_internal_precomputed_layout_null, libzenohc), Cvoid, (Ptr{z_owned_precomputed_layout_t},), this_)
+end
+
+function z_internal_ptr_in_segment_null(this_)
+    ccall((:z_internal_ptr_in_segment_null, libzenohc), Cvoid, (Ptr{z_owned_ptr_in_segment_t},), this_)
 end
 
 function z_internal_publisher_null(this_)
@@ -2583,6 +5723,30 @@ function z_internal_session_null(this_)
     ccall((:z_internal_session_null, libzenohc), Cvoid, (Ptr{z_owned_session_t},), this_)
 end
 
+function z_internal_shared_shm_provider_null(this_)
+    ccall((:z_internal_shared_shm_provider_null, libzenohc), Cvoid, (Ptr{z_owned_shared_shm_provider_t},), this_)
+end
+
+function z_internal_shm_client_null(this_)
+    ccall((:z_internal_shm_client_null, libzenohc), Cvoid, (Ptr{z_owned_shm_client_t},), this_)
+end
+
+function z_internal_shm_client_storage_null(this_)
+    ccall((:z_internal_shm_client_storage_null, libzenohc), Cvoid, (Ptr{z_owned_shm_client_storage_t},), this_)
+end
+
+function z_internal_shm_mut_null(this_)
+    ccall((:z_internal_shm_mut_null, libzenohc), Cvoid, (Ptr{z_owned_shm_mut_t},), this_)
+end
+
+function z_internal_shm_null(this_)
+    ccall((:z_internal_shm_null, libzenohc), Cvoid, (Ptr{z_owned_shm_t},), this_)
+end
+
+function z_internal_shm_provider_null(this_)
+    ccall((:z_internal_shm_provider_null, libzenohc), Cvoid, (Ptr{z_owned_shm_provider_t},), this_)
+end
+
 function z_internal_slice_null(this_)
     ccall((:z_internal_slice_null, libzenohc), Cvoid, (Ptr{z_owned_slice_t},), this_)
 end
@@ -2603,8 +5767,52 @@ function z_internal_task_null(this_)
     ccall((:z_internal_task_null, libzenohc), Cvoid, (Ptr{z_owned_task_t},), this_)
 end
 
+function z_internal_transport_event_null(this_)
+    ccall((:z_internal_transport_event_null, libzenohc), Cvoid, (Ptr{z_owned_transport_event_t},), this_)
+end
+
+function z_internal_transport_events_listener_null(this_)
+    ccall((:z_internal_transport_events_listener_null, libzenohc), Cvoid, (Ptr{z_owned_transport_events_listener_t},), this_)
+end
+
+function z_internal_transport_null(this_)
+    ccall((:z_internal_transport_null, libzenohc), Cvoid, (Ptr{z_owned_transport_t},), this_)
+end
+
 function zc_internal_closure_log_null(this_)
     ccall((:zc_internal_closure_log_null, libzenohc), Cvoid, (Ptr{zc_owned_closure_log_t},), this_)
+end
+
+function zc_internal_concurrent_close_handle_null(this_)
+    ccall((:zc_internal_concurrent_close_handle_null, libzenohc), Cvoid, (Ptr{zc_owned_concurrent_close_handle_t},), this_)
+end
+
+function zc_internal_shm_client_list_null(this_)
+    ccall((:zc_internal_shm_client_list_null, libzenohc), Cvoid, (Ptr{zc_owned_shm_client_list_t},), this_)
+end
+
+function ze_internal_advanced_publisher_null(this_)
+    ccall((:ze_internal_advanced_publisher_null, libzenohc), Cvoid, (Ptr{ze_owned_advanced_publisher_t},), this_)
+end
+
+function ze_internal_advanced_subscriber_null(this_)
+    ccall((:ze_internal_advanced_subscriber_null, libzenohc), Cvoid, (Ptr{ze_owned_advanced_subscriber_t},), this_)
+end
+
+function ze_internal_closure_miss_null(this_)
+    ccall((:ze_internal_closure_miss_null, libzenohc), Cvoid, (Ptr{ze_owned_closure_miss_t},), this_)
+end
+
+function ze_internal_publication_cache_null(this_)
+    ccall((:ze_internal_publication_cache_null, libzenohc), Cvoid, (Ptr{ze_owned_publication_cache_t},), this_)
+end
+
+function ze_internal_querying_subscriber_null(this_)
+    ccall((:ze_internal_querying_subscriber_null, libzenohc), Cvoid, (Ptr{ze_owned_querying_subscriber_t},), this_)
+end
+
+function ze_internal_sample_miss_listener_null(this_)
+    ccall((:ze_internal_sample_miss_listener_null, libzenohc), Cvoid, (Ptr{ze_owned_sample_miss_listener_t},), this_)
 end
 
 function ze_internal_serializer_null(this_)
@@ -2619,8 +5827,24 @@ function z_bytes_writer_take(this_, x)
     ccall((:z_bytes_writer_take, libzenohc), Cvoid, (Ptr{z_owned_bytes_writer_t}, Ptr{z_moved_bytes_writer_t}), this_, x)
 end
 
+function z_cancellation_token_take(this_, x)
+    ccall((:z_cancellation_token_take, libzenohc), Cvoid, (Ptr{z_owned_cancellation_token_t}, Ptr{z_moved_cancellation_token_t}), this_, x)
+end
+
+function z_chunk_alloc_result_take(this_, x)
+    ccall((:z_chunk_alloc_result_take, libzenohc), Cvoid, (Ptr{z_owned_chunk_alloc_result_t}, Ptr{z_moved_chunk_alloc_result_t}), this_, x)
+end
+
 function z_closure_hello_take(this_, x)
     ccall((:z_closure_hello_take, libzenohc), Cvoid, (Ptr{z_owned_closure_hello_t}, Ptr{z_moved_closure_hello_t}), this_, x)
+end
+
+function z_closure_link_take(closure_, x)
+    ccall((:z_closure_link_take, libzenohc), Cvoid, (Ptr{z_owned_closure_link_t}, Ptr{z_moved_closure_link_t}), closure_, x)
+end
+
+function z_closure_link_event_take(closure_, x)
+    ccall((:z_closure_link_event_take, libzenohc), Cvoid, (Ptr{z_owned_closure_link_event_t}, Ptr{z_moved_closure_link_event_t}), closure_, x)
 end
 
 function z_closure_matching_status_take(closure_, x)
@@ -2637,6 +5861,14 @@ end
 
 function z_closure_sample_take(closure_, x)
     ccall((:z_closure_sample_take, libzenohc), Cvoid, (Ptr{z_owned_closure_sample_t}, Ptr{z_moved_closure_sample_t}), closure_, x)
+end
+
+function z_closure_transport_take(closure_, x)
+    ccall((:z_closure_transport_take, libzenohc), Cvoid, (Ptr{z_owned_closure_transport_t}, Ptr{z_moved_closure_transport_t}), closure_, x)
+end
+
+function z_closure_transport_event_take(closure_, x)
+    ccall((:z_closure_transport_event_take, libzenohc), Cvoid, (Ptr{z_owned_closure_transport_event_t}, Ptr{z_moved_closure_transport_event_t}), closure_, x)
 end
 
 function z_closure_zid_take(closure_, x)
@@ -2675,6 +5907,18 @@ function z_keyexpr_take(this_, x)
     ccall((:z_keyexpr_take, libzenohc), Cvoid, (Ptr{z_owned_keyexpr_t}, Ptr{z_moved_keyexpr_t}), this_, x)
 end
 
+function z_link_take(this_, x)
+    ccall((:z_link_take, libzenohc), Cvoid, (Ptr{z_owned_link_t}, Ptr{z_moved_link_t}), this_, x)
+end
+
+function z_link_event_take(this_, x)
+    ccall((:z_link_event_take, libzenohc), Cvoid, (Ptr{z_owned_link_event_t}, Ptr{z_moved_link_event_t}), this_, x)
+end
+
+function z_link_events_listener_take(this_, x)
+    ccall((:z_link_events_listener_take, libzenohc), Cvoid, (Ptr{z_owned_link_events_listener_t}, Ptr{z_moved_link_events_listener_t}), this_, x)
+end
+
 function z_liveliness_token_take(this_, x)
     ccall((:z_liveliness_token_take, libzenohc), Cvoid, (Ptr{z_owned_liveliness_token_t}, Ptr{z_moved_liveliness_token_t}), this_, x)
 end
@@ -2683,8 +5927,20 @@ function z_matching_listener_take(this_, x)
     ccall((:z_matching_listener_take, libzenohc), Cvoid, (Ptr{z_owned_matching_listener_t}, Ptr{z_moved_matching_listener_t}), this_, x)
 end
 
+function z_memory_layout_take(this_, x)
+    ccall((:z_memory_layout_take, libzenohc), Cvoid, (Ptr{z_owned_memory_layout_t}, Ptr{z_moved_memory_layout_t}), this_, x)
+end
+
 function z_mutex_take(this_, x)
     ccall((:z_mutex_take, libzenohc), Cvoid, (Ptr{z_owned_mutex_t}, Ptr{z_moved_mutex_t}), this_, x)
+end
+
+function z_precomputed_layout_take(this_, x)
+    ccall((:z_precomputed_layout_take, libzenohc), Cvoid, (Ptr{z_owned_precomputed_layout_t}, Ptr{z_moved_precomputed_layout_t}), this_, x)
+end
+
+function z_ptr_in_segment_take(this_, x)
+    ccall((:z_ptr_in_segment_take, libzenohc), Cvoid, (Ptr{z_owned_ptr_in_segment_t}, Ptr{z_moved_ptr_in_segment_t}), this_, x)
 end
 
 function z_publisher_take(this_, x)
@@ -2731,6 +5987,30 @@ function z_session_take(this_, x)
     ccall((:z_session_take, libzenohc), Cvoid, (Ptr{z_owned_session_t}, Ptr{z_moved_session_t}), this_, x)
 end
 
+function z_shared_shm_provider_take(this_, x)
+    ccall((:z_shared_shm_provider_take, libzenohc), Cvoid, (Ptr{z_owned_shared_shm_provider_t}, Ptr{z_moved_shared_shm_provider_t}), this_, x)
+end
+
+function z_shm_client_take(this_, x)
+    ccall((:z_shm_client_take, libzenohc), Cvoid, (Ptr{z_owned_shm_client_t}, Ptr{z_moved_shm_client_t}), this_, x)
+end
+
+function z_shm_client_storage_take(this_, x)
+    ccall((:z_shm_client_storage_take, libzenohc), Cvoid, (Ptr{z_owned_shm_client_storage_t}, Ptr{z_moved_shm_client_storage_t}), this_, x)
+end
+
+function z_shm_take(this_, x)
+    ccall((:z_shm_take, libzenohc), Cvoid, (Ptr{z_owned_shm_t}, Ptr{z_moved_shm_t}), this_, x)
+end
+
+function z_shm_mut_take(this_, x)
+    ccall((:z_shm_mut_take, libzenohc), Cvoid, (Ptr{z_owned_shm_mut_t}, Ptr{z_moved_shm_mut_t}), this_, x)
+end
+
+function z_shm_provider_take(this_, x)
+    ccall((:z_shm_provider_take, libzenohc), Cvoid, (Ptr{z_owned_shm_provider_t}, Ptr{z_moved_shm_provider_t}), this_, x)
+end
+
 function z_slice_take(this_, x)
     ccall((:z_slice_take, libzenohc), Cvoid, (Ptr{z_owned_slice_t}, Ptr{z_moved_slice_t}), this_, x)
 end
@@ -2751,8 +6031,52 @@ function z_task_take(this_, x)
     ccall((:z_task_take, libzenohc), Cvoid, (Ptr{z_owned_task_t}, Ptr{z_moved_task_t}), this_, x)
 end
 
+function z_transport_take(this_, x)
+    ccall((:z_transport_take, libzenohc), Cvoid, (Ptr{z_owned_transport_t}, Ptr{z_moved_transport_t}), this_, x)
+end
+
+function z_transport_event_take(this_, x)
+    ccall((:z_transport_event_take, libzenohc), Cvoid, (Ptr{z_owned_transport_event_t}, Ptr{z_moved_transport_event_t}), this_, x)
+end
+
+function z_transport_events_listener_take(this_, x)
+    ccall((:z_transport_events_listener_take, libzenohc), Cvoid, (Ptr{z_owned_transport_events_listener_t}, Ptr{z_moved_transport_events_listener_t}), this_, x)
+end
+
 function zc_closure_log_take(closure_, x)
     ccall((:zc_closure_log_take, libzenohc), Cvoid, (Ptr{zc_owned_closure_log_t}, Ptr{zc_moved_closure_log_t}), closure_, x)
+end
+
+function zc_concurrent_close_handle_take(this_, x)
+    ccall((:zc_concurrent_close_handle_take, libzenohc), Cvoid, (Ptr{zc_owned_concurrent_close_handle_t}, Ptr{zc_moved_concurrent_close_handle_t}), this_, x)
+end
+
+function zc_shm_client_list_take(this_, x)
+    ccall((:zc_shm_client_list_take, libzenohc), Cvoid, (Ptr{zc_owned_shm_client_list_t}, Ptr{zc_moved_shm_client_list_t}), this_, x)
+end
+
+function ze_advanced_publisher_take(this_, x)
+    ccall((:ze_advanced_publisher_take, libzenohc), Cvoid, (Ptr{ze_owned_advanced_publisher_t}, Ptr{ze_moved_advanced_publisher_t}), this_, x)
+end
+
+function ze_advanced_subscriber_take(this_, x)
+    ccall((:ze_advanced_subscriber_take, libzenohc), Cvoid, (Ptr{ze_owned_advanced_subscriber_t}, Ptr{ze_moved_advanced_subscriber_t}), this_, x)
+end
+
+function ze_closure_miss_take(closure_, x)
+    ccall((:ze_closure_miss_take, libzenohc), Cvoid, (Ptr{ze_owned_closure_miss_t}, Ptr{ze_moved_closure_miss_t}), closure_, x)
+end
+
+function ze_publication_cache_take(this_, x)
+    ccall((:ze_publication_cache_take, libzenohc), Cvoid, (Ptr{ze_owned_publication_cache_t}, Ptr{ze_moved_publication_cache_t}), this_, x)
+end
+
+function ze_querying_subscriber_take(this_, x)
+    ccall((:ze_querying_subscriber_take, libzenohc), Cvoid, (Ptr{ze_owned_querying_subscriber_t}, Ptr{ze_moved_querying_subscriber_t}), this_, x)
+end
+
+function ze_sample_miss_listener_take(this_, x)
+    ccall((:ze_sample_miss_listener_take, libzenohc), Cvoid, (Ptr{ze_owned_sample_miss_listener_t}, Ptr{ze_moved_sample_miss_listener_t}), this_, x)
 end
 
 function ze_serializer_take(this_, x)
@@ -2761,6 +6085,14 @@ end
 
 function z_hello_take_from_loaned(dst, src)
     ccall((:z_hello_take_from_loaned, libzenohc), Cvoid, (Ptr{z_owned_hello_t}, Ptr{z_loaned_hello_t}), dst, src)
+end
+
+function z_link_event_take_from_loaned(dst, src)
+    ccall((:z_link_event_take_from_loaned, libzenohc), Cvoid, (Ptr{z_owned_link_event_t}, Ptr{z_loaned_link_event_t}), dst, src)
+end
+
+function z_link_take_from_loaned(dst, src)
+    ccall((:z_link_take_from_loaned, libzenohc), Cvoid, (Ptr{z_owned_link_t}, Ptr{z_loaned_link_t}), dst, src)
 end
 
 function z_query_take_from_loaned(dst, src)
@@ -2775,6 +6107,14 @@ function z_sample_take_from_loaned(dst, src)
     ccall((:z_sample_take_from_loaned, libzenohc), Cvoid, (Ptr{z_owned_sample_t}, Ptr{z_loaned_sample_t}), dst, src)
 end
 
+function z_transport_event_take_from_loaned(dst, src)
+    ccall((:z_transport_event_take_from_loaned, libzenohc), Cvoid, (Ptr{z_owned_transport_event_t}, Ptr{z_loaned_transport_event_t}), dst, src)
+end
+
+function z_transport_take_from_loaned(dst, src)
+    ccall((:z_transport_take_from_loaned, libzenohc), Cvoid, (Ptr{z_owned_transport_t}, Ptr{z_loaned_transport_t}), dst, src)
+end
+
 function z_internal_bytes_check(this_)
     ccall((:z_internal_bytes_check, libzenohc), Bool, (Ptr{z_owned_bytes_t},), this_)
 end
@@ -2783,8 +6123,24 @@ function z_internal_bytes_writer_check(this_)
     ccall((:z_internal_bytes_writer_check, libzenohc), Bool, (Ptr{z_owned_bytes_writer_t},), this_)
 end
 
+function z_internal_cancellation_token_check(this_)
+    ccall((:z_internal_cancellation_token_check, libzenohc), Bool, (Ptr{z_owned_cancellation_token_t},), this_)
+end
+
+function z_internal_chunk_alloc_result_check(this_)
+    ccall((:z_internal_chunk_alloc_result_check, libzenohc), Bool, (Ptr{z_owned_chunk_alloc_result_t},), this_)
+end
+
 function z_internal_closure_hello_check(this_)
     ccall((:z_internal_closure_hello_check, libzenohc), Bool, (Ptr{z_owned_closure_hello_t},), this_)
+end
+
+function z_internal_closure_link_check(this_)
+    ccall((:z_internal_closure_link_check, libzenohc), Bool, (Ptr{z_owned_closure_link_t},), this_)
+end
+
+function z_internal_closure_link_event_check(this_)
+    ccall((:z_internal_closure_link_event_check, libzenohc), Bool, (Ptr{z_owned_closure_link_event_t},), this_)
 end
 
 function z_internal_closure_matching_status_check(this_)
@@ -2801,6 +6157,14 @@ end
 
 function z_internal_closure_sample_check(this_)
     ccall((:z_internal_closure_sample_check, libzenohc), Bool, (Ptr{z_owned_closure_sample_t},), this_)
+end
+
+function z_internal_closure_transport_check(this_)
+    ccall((:z_internal_closure_transport_check, libzenohc), Bool, (Ptr{z_owned_closure_transport_t},), this_)
+end
+
+function z_internal_closure_transport_event_check(this_)
+    ccall((:z_internal_closure_transport_event_check, libzenohc), Bool, (Ptr{z_owned_closure_transport_event_t},), this_)
 end
 
 function z_internal_closure_zid_check(this_)
@@ -2839,6 +6203,18 @@ function z_internal_keyexpr_check(this_)
     ccall((:z_internal_keyexpr_check, libzenohc), Bool, (Ptr{z_owned_keyexpr_t},), this_)
 end
 
+function z_internal_link_check(this_)
+    ccall((:z_internal_link_check, libzenohc), Bool, (Ptr{z_owned_link_t},), this_)
+end
+
+function z_internal_link_event_check(this_)
+    ccall((:z_internal_link_event_check, libzenohc), Bool, (Ptr{z_owned_link_event_t},), this_)
+end
+
+function z_internal_link_events_listener_check(this_)
+    ccall((:z_internal_link_events_listener_check, libzenohc), Bool, (Ptr{z_owned_link_events_listener_t},), this_)
+end
+
 function z_internal_liveliness_token_check(this_)
     ccall((:z_internal_liveliness_token_check, libzenohc), Bool, (Ptr{z_owned_liveliness_token_t},), this_)
 end
@@ -2847,8 +6223,20 @@ function z_internal_matching_listener_check(this_)
     ccall((:z_internal_matching_listener_check, libzenohc), Bool, (Ptr{z_owned_matching_listener_t},), this_)
 end
 
+function z_internal_memory_layout_check(this_)
+    ccall((:z_internal_memory_layout_check, libzenohc), Bool, (Ptr{z_owned_memory_layout_t},), this_)
+end
+
 function z_internal_mutex_check(this_)
     ccall((:z_internal_mutex_check, libzenohc), Bool, (Ptr{z_owned_mutex_t},), this_)
+end
+
+function z_internal_precomputed_layout_check(this_)
+    ccall((:z_internal_precomputed_layout_check, libzenohc), Bool, (Ptr{z_owned_precomputed_layout_t},), this_)
+end
+
+function z_internal_ptr_in_segment_check(this_)
+    ccall((:z_internal_ptr_in_segment_check, libzenohc), Bool, (Ptr{z_owned_ptr_in_segment_t},), this_)
 end
 
 function z_internal_publisher_check(this_)
@@ -2895,6 +6283,30 @@ function z_internal_session_check(this_)
     ccall((:z_internal_session_check, libzenohc), Bool, (Ptr{z_owned_session_t},), this_)
 end
 
+function z_internal_shared_shm_provider_check(this_)
+    ccall((:z_internal_shared_shm_provider_check, libzenohc), Bool, (Ptr{z_owned_shared_shm_provider_t},), this_)
+end
+
+function z_internal_shm_check(this_)
+    ccall((:z_internal_shm_check, libzenohc), Bool, (Ptr{z_owned_shm_t},), this_)
+end
+
+function z_internal_shm_client_check(this_)
+    ccall((:z_internal_shm_client_check, libzenohc), Bool, (Ptr{z_owned_shm_client_t},), this_)
+end
+
+function z_internal_shm_client_storage_check(this_)
+    ccall((:z_internal_shm_client_storage_check, libzenohc), Bool, (Ptr{z_owned_shm_client_storage_t},), this_)
+end
+
+function z_internal_shm_mut_check(this_)
+    ccall((:z_internal_shm_mut_check, libzenohc), Bool, (Ptr{z_owned_shm_mut_t},), this_)
+end
+
+function z_internal_shm_provider_check(this_)
+    ccall((:z_internal_shm_provider_check, libzenohc), Bool, (Ptr{z_owned_shm_provider_t},), this_)
+end
+
 function z_internal_slice_check(this_)
     ccall((:z_internal_slice_check, libzenohc), Bool, (Ptr{z_owned_slice_t},), this_)
 end
@@ -2915,8 +6327,52 @@ function z_internal_task_check(this_)
     ccall((:z_internal_task_check, libzenohc), Bool, (Ptr{z_owned_task_t},), this_)
 end
 
+function z_internal_transport_check(this_)
+    ccall((:z_internal_transport_check, libzenohc), Bool, (Ptr{z_owned_transport_t},), this_)
+end
+
+function z_internal_transport_event_check(this_)
+    ccall((:z_internal_transport_event_check, libzenohc), Bool, (Ptr{z_owned_transport_event_t},), this_)
+end
+
+function z_internal_transport_events_listener_check(this_)
+    ccall((:z_internal_transport_events_listener_check, libzenohc), Bool, (Ptr{z_owned_transport_events_listener_t},), this_)
+end
+
 function zc_internal_closure_log_check(this_)
     ccall((:zc_internal_closure_log_check, libzenohc), Bool, (Ptr{zc_owned_closure_log_t},), this_)
+end
+
+function zc_internal_concurrent_close_handle_check(this_)
+    ccall((:zc_internal_concurrent_close_handle_check, libzenohc), Bool, (Ptr{zc_owned_concurrent_close_handle_t},), this_)
+end
+
+function zc_internal_shm_client_list_check(this_)
+    ccall((:zc_internal_shm_client_list_check, libzenohc), Bool, (Ptr{zc_owned_shm_client_list_t},), this_)
+end
+
+function ze_internal_advanced_publisher_check(this_)
+    ccall((:ze_internal_advanced_publisher_check, libzenohc), Bool, (Ptr{ze_owned_advanced_publisher_t},), this_)
+end
+
+function ze_internal_advanced_subscriber_check(this_)
+    ccall((:ze_internal_advanced_subscriber_check, libzenohc), Bool, (Ptr{ze_owned_advanced_subscriber_t},), this_)
+end
+
+function ze_internal_closure_miss_check(this_)
+    ccall((:ze_internal_closure_miss_check, libzenohc), Bool, (Ptr{ze_owned_closure_miss_t},), this_)
+end
+
+function ze_internal_publication_cache_check(this_)
+    ccall((:ze_internal_publication_cache_check, libzenohc), Bool, (Ptr{ze_owned_publication_cache_t},), this_)
+end
+
+function ze_internal_querying_subscriber_check(this_)
+    ccall((:ze_internal_querying_subscriber_check, libzenohc), Bool, (Ptr{ze_owned_querying_subscriber_t},), this_)
+end
+
+function ze_internal_sample_miss_listener_check(this_)
+    ccall((:ze_internal_sample_miss_listener_check, libzenohc), Bool, (Ptr{ze_owned_sample_miss_listener_t},), this_)
 end
 
 function ze_internal_serializer_check(this_)
@@ -2925,6 +6381,14 @@ end
 
 function z_closure_hello_call(closure, hello)
     ccall((:z_closure_hello_call, libzenohc), Cvoid, (Ptr{z_loaned_closure_hello_t}, Ptr{z_loaned_hello_t}), closure, hello)
+end
+
+function z_closure_link_call(closure, link)
+    ccall((:z_closure_link_call, libzenohc), Cvoid, (Ptr{z_loaned_closure_link_t}, Ptr{z_loaned_link_t}), closure, link)
+end
+
+function z_closure_link_event_call(closure, event)
+    ccall((:z_closure_link_event_call, libzenohc), Cvoid, (Ptr{z_loaned_closure_link_event_t}, Ptr{z_loaned_link_event_t}), closure, event)
 end
 
 struct z_matching_status_t
@@ -2947,6 +6411,14 @@ function z_closure_sample_call(closure, sample)
     ccall((:z_closure_sample_call, libzenohc), Cvoid, (Ptr{z_loaned_closure_sample_t}, Ptr{z_loaned_sample_t}), closure, sample)
 end
 
+function z_closure_transport_call(closure, transport)
+    ccall((:z_closure_transport_call, libzenohc), Cvoid, (Ptr{z_loaned_closure_transport_t}, Ptr{z_loaned_transport_t}), closure, transport)
+end
+
+function z_closure_transport_event_call(closure, event)
+    ccall((:z_closure_transport_event_call, libzenohc), Cvoid, (Ptr{z_loaned_closure_transport_event_t}, Ptr{z_loaned_transport_event_t}), closure, event)
+end
+
 struct z_id_t
     data::NTuple{16, UInt8}
 end
@@ -2967,12 +6439,89 @@ function Base.setproperty!(x::Ptr{z_id_t}, f::Symbol, v)
     unsafe_store!(getproperty(x, f), v)
 end
 
+function Base.propertynames(x::z_id_t, private::Bool = false)
+    (:id, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
+end
+
 function z_closure_zid_call(closure, z_id)
     ccall((:z_closure_zid_call, libzenohc), Cvoid, (Ptr{z_loaned_closure_zid_t}, Ptr{z_id_t}), closure, z_id)
 end
 
+struct z_entity_global_id_t
+    data::NTuple{20, UInt8}
+end
+
+function Base.getproperty(x::Ptr{z_entity_global_id_t}, f::Symbol)
+    f === :_0 && return Ptr{NTuple{20, UInt8}}(x + 0)
+    return getfield(x, f)
+end
+
+function Base.getproperty(x::z_entity_global_id_t, f::Symbol)
+    r = Ref{z_entity_global_id_t}(x)
+    ptr = Base.unsafe_convert(Ptr{z_entity_global_id_t}, r)
+    fptr = getproperty(ptr, f)
+    GC.@preserve r unsafe_load(fptr)
+end
+
+function Base.setproperty!(x::Ptr{z_entity_global_id_t}, f::Symbol, v)
+    unsafe_store!(getproperty(x, f), v)
+end
+
+function Base.propertynames(x::z_entity_global_id_t, private::Bool = false)
+    (:_0, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
+end
+
+struct ze_miss_t
+    data::NTuple{24, UInt8}
+end
+
+function Base.getproperty(x::Ptr{ze_miss_t}, f::Symbol)
+    f === :source && return Ptr{z_entity_global_id_t}(x + 0)
+    f === :nb && return Ptr{UInt32}(x + 20)
+    return getfield(x, f)
+end
+
+function Base.getproperty(x::ze_miss_t, f::Symbol)
+    r = Ref{ze_miss_t}(x)
+    ptr = Base.unsafe_convert(Ptr{ze_miss_t}, r)
+    fptr = getproperty(ptr, f)
+    GC.@preserve r unsafe_load(fptr)
+end
+
+function Base.setproperty!(x::Ptr{ze_miss_t}, f::Symbol, v)
+    unsafe_store!(getproperty(x, f), v)
+end
+
+function Base.propertynames(x::ze_miss_t, private::Bool = false)
+    (:source, :nb, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
+end
+
+function ze_closure_miss_call(closure, mathing_status)
+    ccall((:ze_closure_miss_call, libzenohc), Cvoid, (Ptr{ze_loaned_closure_miss_t}, Ptr{ze_miss_t}), closure, mathing_status)
+end
+
 function z_closure_hello(this_, call, drop, context)
     ccall((:z_closure_hello, libzenohc), Cvoid, (Ptr{z_owned_closure_hello_t}, Ptr{Cvoid}, Ptr{Cvoid}, Ptr{Cvoid}), this_, call, drop, context)
+end
+
+function z_closure_link(this_, call, drop, context)
+    ccall((:z_closure_link, libzenohc), Cvoid, (Ptr{z_owned_closure_link_t}, Ptr{Cvoid}, Ptr{Cvoid}, Ptr{Cvoid}), this_, call, drop, context)
+end
+
+function z_closure_link_event(this_, call, drop, context)
+    ccall((:z_closure_link_event, libzenohc), Cvoid, (Ptr{z_owned_closure_link_event_t}, Ptr{Cvoid}, Ptr{Cvoid}, Ptr{Cvoid}), this_, call, drop, context)
 end
 
 function z_closure_matching_status(this_, call, drop, context)
@@ -2991,12 +6540,24 @@ function z_closure_sample(this_, call, drop, context)
     ccall((:z_closure_sample, libzenohc), Cvoid, (Ptr{z_owned_closure_sample_t}, Ptr{Cvoid}, Ptr{Cvoid}, Ptr{Cvoid}), this_, call, drop, context)
 end
 
+function z_closure_transport(this_, call, drop, context)
+    ccall((:z_closure_transport, libzenohc), Cvoid, (Ptr{z_owned_closure_transport_t}, Ptr{Cvoid}, Ptr{Cvoid}, Ptr{Cvoid}), this_, call, drop, context)
+end
+
+function z_closure_transport_event(this_, call, drop, context)
+    ccall((:z_closure_transport_event, libzenohc), Cvoid, (Ptr{z_owned_closure_transport_event_t}, Ptr{Cvoid}, Ptr{Cvoid}, Ptr{Cvoid}), this_, call, drop, context)
+end
+
 function z_closure_zid(this_, call, drop, context)
     ccall((:z_closure_zid, libzenohc), Cvoid, (Ptr{z_owned_closure_zid_t}, Ptr{Cvoid}, Ptr{Cvoid}, Ptr{Cvoid}), this_, call, drop, context)
 end
 
 function zc_closure_log(this_, call, drop, context)
     ccall((:zc_closure_log, libzenohc), Cvoid, (Ptr{zc_owned_closure_log_t}, Ptr{Cvoid}, Ptr{Cvoid}, Ptr{Cvoid}), this_, call, drop, context)
+end
+
+function ze_closure_miss(this_, call, drop, context)
+    ccall((:ze_closure_miss, libzenohc), Cvoid, (Ptr{ze_owned_closure_miss_t}, Ptr{Cvoid}, Ptr{Cvoid}, Ptr{Cvoid}), this_, call, drop, context)
 end
 
 const z_result_t = Int8
@@ -3053,6 +6614,10 @@ function z_bytes_clone(dst, this_)
     ccall((:z_bytes_clone, libzenohc), Cvoid, (Ptr{z_owned_bytes_t}, Ptr{z_loaned_bytes_t}), dst, this_)
 end
 
+function z_cancellation_token_clone(dst, this_)
+    ccall((:z_cancellation_token_clone, libzenohc), Cvoid, (Ptr{z_owned_cancellation_token_t}, Ptr{z_loaned_cancellation_token_t}), dst, this_)
+end
+
 function z_config_clone(dst, this_)
     ccall((:z_config_clone, libzenohc), Cvoid, (Ptr{z_owned_config_t}, Ptr{z_loaned_config_t}), dst, this_)
 end
@@ -3067,6 +6632,14 @@ end
 
 function z_keyexpr_clone(dst, this_)
     ccall((:z_keyexpr_clone, libzenohc), Cvoid, (Ptr{z_owned_keyexpr_t}, Ptr{z_loaned_keyexpr_t}), dst, this_)
+end
+
+function z_link_clone(this_, link)
+    ccall((:z_link_clone, libzenohc), Cvoid, (Ptr{z_owned_link_t}, Ptr{z_loaned_link_t}), this_, link)
+end
+
+function z_ptr_in_segment_clone(out, this_)
+    ccall((:z_ptr_in_segment_clone, libzenohc), Cvoid, (Ptr{z_owned_ptr_in_segment_t}, Ptr{z_loaned_ptr_in_segment_t}), out, this_)
 end
 
 function z_query_clone(dst, this_)
@@ -3085,6 +6658,18 @@ function z_sample_clone(dst, this_)
     ccall((:z_sample_clone, libzenohc), Cvoid, (Ptr{z_owned_sample_t}, Ptr{z_loaned_sample_t}), dst, this_)
 end
 
+function z_shared_shm_provider_clone(dst, this_)
+    ccall((:z_shared_shm_provider_clone, libzenohc), Cvoid, (Ptr{z_owned_shared_shm_provider_t}, Ptr{z_loaned_shared_shm_provider_t}), dst, this_)
+end
+
+function z_shm_client_storage_clone(this_, from)
+    ccall((:z_shm_client_storage_clone, libzenohc), Cvoid, (Ptr{z_owned_shm_client_storage_t}, Ptr{z_loaned_shm_client_storage_t}), this_, from)
+end
+
+function z_shm_clone(out, this_)
+    ccall((:z_shm_clone, libzenohc), Cvoid, (Ptr{z_owned_shm_t}, Ptr{z_loaned_shm_t}), out, this_)
+end
+
 function z_slice_clone(dst, this_)
     ccall((:z_slice_clone, libzenohc), Cvoid, (Ptr{z_owned_slice_t}, Ptr{z_loaned_slice_t}), dst, this_)
 end
@@ -3095,6 +6680,75 @@ end
 
 function z_string_clone(dst, this_)
     ccall((:z_string_clone, libzenohc), Cvoid, (Ptr{z_owned_string_t}, Ptr{z_loaned_string_t}), dst, this_)
+end
+
+function z_transport_clone(this_, transport)
+    ccall((:z_transport_clone, libzenohc), Cvoid, (Ptr{z_owned_transport_t}, Ptr{z_loaned_transport_t}), this_, transport)
+end
+
+@cenum zc_buf_alloc_status_t::UInt32 begin
+    ZC_BUF_ALLOC_STATUS_OK = 0
+    ZC_BUF_ALLOC_STATUS_ALLOC_ERROR = 1
+end
+
+@cenum z_alloc_error_t::UInt32 begin
+    Z_ALLOC_ERROR_NEED_DEFRAGMENT = 0
+    Z_ALLOC_ERROR_OUT_OF_MEMORY = 1
+    Z_ALLOC_ERROR_OTHER = 2
+end
+
+@cenum zc_buf_layout_alloc_status_t::UInt32 begin
+    ZC_BUF_LAYOUT_ALLOC_STATUS_OK = 0
+    ZC_BUF_LAYOUT_ALLOC_STATUS_ALLOC_ERROR = 1
+    ZC_BUF_LAYOUT_ALLOC_STATUS_LAYOUT_ERROR = 2
+end
+
+@cenum z_layout_error_t::UInt32 begin
+    Z_LAYOUT_ERROR_INCORRECT_LAYOUT_ARGS = 0
+    Z_LAYOUT_ERROR_PROVIDER_INCOMPATIBLE_LAYOUT = 1
+end
+
+struct z_buf_alloc_result_t
+    data::NTuple{96, UInt8}
+end
+
+function Base.getproperty(x::Ptr{z_buf_alloc_result_t}, f::Symbol)
+    f === :status && return Ptr{zc_buf_alloc_status_t}(x + 0)
+    f === :buf && return Ptr{z_owned_shm_mut_t}(x + 8)
+    f === :error && return Ptr{z_alloc_error_t}(x + 88)
+    return getfield(x, f)
+end
+
+function Base.getproperty(x::z_buf_alloc_result_t, f::Symbol)
+    r = Ref{z_buf_alloc_result_t}(x)
+    ptr = Base.unsafe_convert(Ptr{z_buf_alloc_result_t}, r)
+    fptr = getproperty(ptr, f)
+    GC.@preserve r unsafe_load(fptr)
+end
+
+function Base.setproperty!(x::Ptr{z_buf_alloc_result_t}, f::Symbol, v)
+    unsafe_store!(getproperty(x, f), v)
+end
+
+function Base.propertynames(x::z_buf_alloc_result_t, private::Bool = false)
+    (:status, :buf, :error, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
+end
+
+const z_loaned_alloc_layout_t = z_loaned_precomputed_layout_t
+
+const z_owned_alloc_layout_t = z_owned_precomputed_layout_t
+
+struct zc_threadsafe_context_data_t
+    ptr::Ptr{Cvoid}
+end
+
+struct zc_threadsafe_context_t
+    context::zc_threadsafe_context_data_t
+    delete_fn::Ptr{Cvoid}
 end
 
 struct z_bytes_reader_t
@@ -3117,6 +6771,29 @@ function Base.setproperty!(x::Ptr{z_bytes_reader_t}, f::Symbol, v)
     unsafe_store!(getproperty(x, f), v)
 end
 
+function Base.propertynames(x::z_bytes_reader_t, private::Bool = false)
+    (:_0, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
+end
+
+const z_segment_id_t = UInt32
+
+const z_chunk_id_t = UInt32
+
+struct z_chunk_descriptor_t
+    segment::z_segment_id_t
+    chunk::z_chunk_id_t
+    len::Csize_t
+end
+
+struct z_allocated_chunk_t
+    descriptpr::z_chunk_descriptor_t
+    ptr::Ptr{z_moved_ptr_in_segment_t}
+end
+
 struct z_timestamp_t
     data::NTuple{24, UInt8}
 end
@@ -3135,6 +6812,103 @@ end
 
 function Base.setproperty!(x::Ptr{z_timestamp_t}, f::Symbol, v)
     unsafe_store!(getproperty(x, f), v)
+end
+
+function Base.propertynames(x::z_timestamp_t, private::Bool = false)
+    (:_0, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
+end
+
+struct z_source_info_t
+    data::NTuple{24, UInt8}
+end
+
+function Base.getproperty(x::Ptr{z_source_info_t}, f::Symbol)
+    f === :_0 && return Ptr{NTuple{24, UInt8}}(x + 0)
+    return getfield(x, f)
+end
+
+function Base.getproperty(x::z_source_info_t, f::Symbol)
+    r = Ref{z_source_info_t}(x)
+    ptr = Base.unsafe_convert(Ptr{z_source_info_t}, r)
+    fptr = getproperty(ptr, f)
+    GC.@preserve r unsafe_load(fptr)
+end
+
+function Base.setproperty!(x::Ptr{z_source_info_t}, f::Symbol, v)
+    unsafe_store!(getproperty(x, f), v)
+end
+
+function Base.propertynames(x::z_source_info_t, private::Bool = false)
+    (:_0, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
+end
+
+struct zc_shm_segment_callbacks_t
+    map_fn::Ptr{Cvoid}
+end
+
+struct z_shm_segment_t
+    context::zc_threadsafe_context_t
+    callbacks::zc_shm_segment_callbacks_t
+end
+
+const z_protocol_id_t = UInt32
+
+struct zc_shm_client_callbacks_t
+    attach_fn::Ptr{Cvoid}
+    id_fn::Ptr{Cvoid}
+end
+
+struct z_buf_layout_alloc_result_t
+    data::NTuple{96, UInt8}
+end
+
+function Base.getproperty(x::Ptr{z_buf_layout_alloc_result_t}, f::Symbol)
+    f === :status && return Ptr{zc_buf_layout_alloc_status_t}(x + 0)
+    f === :buf && return Ptr{z_owned_shm_mut_t}(x + 8)
+    f === :alloc_error && return Ptr{z_alloc_error_t}(x + 88)
+    f === :layout_error && return Ptr{z_layout_error_t}(x + 92)
+    return getfield(x, f)
+end
+
+function Base.getproperty(x::z_buf_layout_alloc_result_t, f::Symbol)
+    r = Ref{z_buf_layout_alloc_result_t}(x)
+    ptr = Base.unsafe_convert(Ptr{z_buf_layout_alloc_result_t}, r)
+    fptr = getproperty(ptr, f)
+    GC.@preserve r unsafe_load(fptr)
+end
+
+function Base.setproperty!(x::Ptr{z_buf_layout_alloc_result_t}, f::Symbol, v)
+    unsafe_store!(getproperty(x, f), v)
+end
+
+function Base.propertynames(x::z_buf_layout_alloc_result_t, private::Bool = false)
+    (:status, :buf, :alloc_error, :layout_error, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
+end
+
+struct zc_context_t
+    context::Ptr{Cvoid}
+    delete_fn::Ptr{Cvoid}
+end
+
+struct zc_shm_provider_backend_callbacks_t
+    alloc_fn::Ptr{Cvoid}
+    free_fn::Ptr{Cvoid}
+    defragment_fn::Ptr{Cvoid}
+    available_fn::Ptr{Cvoid}
+    layout_for_fn::Ptr{Cvoid}
+    id_fn::Ptr{Cvoid}
 end
 
 struct ze_deserializer_t
@@ -3157,6 +6931,14 @@ function Base.setproperty!(x::Ptr{ze_deserializer_t}, f::Symbol, v)
     unsafe_store!(getproperty(x, f), v)
 end
 
+function Base.propertynames(x::ze_deserializer_t, private::Bool = false)
+    (:_0, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
+end
+
 @cenum z_locality_t::UInt32 begin
     Z_LOCALITY_ANY = 0
     Z_LOCALITY_DEFAULT = 0
@@ -3173,6 +6955,7 @@ const zc_locality_t = z_locality_t
     Z_CONGESTION_CONTROL_BLOCK = 0
     Z_CONGESTION_CONTROL_DROP = 1
     Z_CONGESTION_CONTROL_DEFAULT = 1
+    Z_CONGESTION_CONTROL_BLOCK_FIRST = 2
 end
 
 @cenum z_priority_t::UInt32 begin
@@ -3184,6 +6967,12 @@ end
     Z_PRIORITY_DEFAULT = 5
     Z_PRIORITY_DATA_LOW = 6
     Z_PRIORITY_BACKGROUND = 7
+end
+
+@cenum z_reliability_t::UInt32 begin
+    Z_RELIABILITY_BEST_EFFORT = 0
+    Z_RELIABILITY_RELIABLE = 1
+    Z_RELIABILITY_DEFAULT = 1
 end
 
 @cenum z_query_target_t::UInt32 begin
@@ -3212,10 +7001,24 @@ end
     Z_WHATAMI_CLIENT = 4
 end
 
+@cenum z_keyexpr_intersection_level_t::UInt32 begin
+    Z_KEYEXPR_INTERSECTION_LEVEL_DISJOINT = 0
+    Z_KEYEXPR_INTERSECTION_LEVEL_INTERSECTS = 1
+    Z_KEYEXPR_INTERSECTION_LEVEL_INCLUDES = 2
+    Z_KEYEXPR_INTERSECTION_LEVEL_EQUALS = 3
+end
+
 @cenum z_sample_kind_t::UInt32 begin
     Z_SAMPLE_KIND_PUT = 0
     Z_SAMPLE_KIND_DEFAULT = 0
     Z_SAMPLE_KIND_DELETE = 1
+end
+
+@cenum z_shm_provider_state::UInt32 begin
+    Z_SHM_PROVIDER_STATE_DISABLED = 0
+    Z_SHM_PROVIDER_STATE_INITIALIZING = 1
+    Z_SHM_PROVIDER_STATE_READY = 2
+    Z_SHM_PROVIDER_STATE_ERROR = 3
 end
 
 @cenum z_what_t::UInt32 begin
@@ -3235,6 +7038,14 @@ end
     ZC_LOG_SEVERITY_WARN = 3
     ZC_LOG_SEVERITY_ERROR = 4
 end
+
+@cenum ze_advanced_publisher_heartbeat_mode_t::UInt32 begin
+    ZE_ADVANCED_PUBLISHER_HEARTBEAT_MODE_NONE = 0
+    ZE_ADVANCED_PUBLISHER_HEARTBEAT_MODE_PERIODIC = 1
+    ZE_ADVANCED_PUBLISHER_HEARTBEAT_MODE_SPORADIC = 2
+end
+
+const z_moved_alloc_layout_t = z_moved_precomputed_layout_t
 
 struct z_bytes_slice_iterator_t
     data::NTuple{24, UInt8}
@@ -3256,13 +7067,27 @@ function Base.setproperty!(x::Ptr{z_bytes_slice_iterator_t}, f::Symbol, v)
     unsafe_store!(getproperty(x, f), v)
 end
 
+function Base.propertynames(x::z_bytes_slice_iterator_t, private::Bool = false)
+    (:_0, if private
+            fieldnames(typeof(x))
+        else
+            ()
+        end...)
+end
+
 struct z_clock_t
     t::UInt64
     t_base::Ptr{Cvoid}
 end
 
 struct z_close_options_t
-    _dummy::UInt8
+    internal_timeout_ms::UInt32
+    internal_out_concurrent::Ptr{zc_owned_concurrent_close_handle_t}
+end
+
+struct z_link_events_listener_options_t
+    history::Bool
+    transport::Ptr{z_moved_transport_t}
 end
 
 struct z_queryable_options_t
@@ -3274,11 +7099,16 @@ struct z_subscriber_options_t
     allowed_origin::z_locality_t
 end
 
+struct z_transport_events_listener_options_t
+    history::Bool
+end
+
 struct z_publisher_options_t
     encoding::Ptr{z_moved_encoding_t}
     congestion_control::z_congestion_control_t
     priority::z_priority_t
     is_express::Bool
+    reliability::z_reliability_t
     allowed_destination::z_locality_t
 end
 function Base.getproperty(x::Ptr{z_publisher_options_t}, f::Symbol)
@@ -3286,7 +7116,8 @@ function Base.getproperty(x::Ptr{z_publisher_options_t}, f::Symbol)
     f === :congestion_control && return Ptr{z_congestion_control_t}(x + 8)
     f === :priority && return Ptr{z_priority_t}(x + 12)
     f === :is_express && return Ptr{Bool}(x + 16)
-    f === :allowed_destination && return Ptr{z_locality_t}(x + 20)
+    f === :reliability && return Ptr{z_reliability_t}(x + 20)
+    f === :allowed_destination && return Ptr{z_locality_t}(x + 24)
     return getfield(x, f)
 end
 
@@ -3324,6 +7155,7 @@ struct z_delete_options_t
     priority::z_priority_t
     is_express::Bool
     timestamp::Ptr{z_timestamp_t}
+    reliability::z_reliability_t
     allowed_destination::z_locality_t
 end
 function Base.getproperty(x::Ptr{z_delete_options_t}, f::Symbol)
@@ -3331,7 +7163,8 @@ function Base.getproperty(x::Ptr{z_delete_options_t}, f::Symbol)
     f === :priority && return Ptr{z_priority_t}(x + 4)
     f === :is_express && return Ptr{Bool}(x + 8)
     f === :timestamp && return Ptr{Ptr{z_timestamp_t}}(x + 16)
-    f === :allowed_destination && return Ptr{z_locality_t}(x + 24)
+    f === :reliability && return Ptr{z_reliability_t}(x + 24)
+    f === :allowed_destination && return Ptr{z_locality_t}(x + 28)
     return getfield(x, f)
 end
 
@@ -3350,8 +7183,10 @@ struct z_get_options_t
     allowed_destination::z_locality_t
     accept_replies::z_reply_keyexpr_t
     priority::z_priority_t
+    source_info::Ptr{z_source_info_t}
     attachment::Ptr{z_moved_bytes_t}
     timeout_ms::UInt64
+    cancellation_token::Ptr{z_moved_cancellation_token_t}
 end
 function Base.getproperty(x::Ptr{z_get_options_t}, f::Symbol)
     f === :target && return Ptr{z_query_target_t}(x + 0)
@@ -3363,8 +7198,10 @@ function Base.getproperty(x::Ptr{z_get_options_t}, f::Symbol)
     f === :allowed_destination && return Ptr{z_locality_t}(x + 32)
     f === :accept_replies && return Ptr{z_reply_keyexpr_t}(x + 36)
     f === :priority && return Ptr{z_priority_t}(x + 40)
-    f === :attachment && return Ptr{Ptr{z_moved_bytes_t}}(x + 48)
-    f === :timeout_ms && return Ptr{UInt64}(x + 56)
+    f === :source_info && return Ptr{Ptr{z_source_info_t}}(x + 48)
+    f === :attachment && return Ptr{Ptr{z_moved_bytes_t}}(x + 56)
+    f === :timeout_ms && return Ptr{UInt64}(x + 64)
+    f === :cancellation_token && return Ptr{Ptr{z_moved_cancellation_token_t}}(x + 72)
     return getfield(x, f)
 end
 
@@ -3372,6 +7209,10 @@ function Base.setproperty!(x::Ptr{z_get_options_t}, f::Symbol, v)
     unsafe_store!(getproperty(x, f), v)
 end
 
+
+struct z_info_links_options_t
+    transport::Ptr{z_moved_transport_t}
+end
 
 struct z_liveliness_subscriber_options_t
     history::Bool
@@ -3392,9 +7233,11 @@ end
 
 struct z_liveliness_get_options_t
     timeout_ms::UInt64
+    cancellation_token::Ptr{z_moved_cancellation_token_t}
 end
 function Base.getproperty(x::Ptr{z_liveliness_get_options_t}, f::Symbol)
     f === :timeout_ms && return Ptr{UInt64}(x + 0)
+    f === :cancellation_token && return Ptr{Ptr{z_moved_cancellation_token_t}}(x + 8)
     return getfield(x, f)
 end
 
@@ -3423,12 +7266,14 @@ end
 struct z_publisher_put_options_t
     encoding::Ptr{z_moved_encoding_t}
     timestamp::Ptr{z_timestamp_t}
+    source_info::Ptr{z_source_info_t}
     attachment::Ptr{z_moved_bytes_t}
 end
 function Base.getproperty(x::Ptr{z_publisher_put_options_t}, f::Symbol)
     f === :encoding && return Ptr{Ptr{z_moved_encoding_t}}(x + 0)
     f === :timestamp && return Ptr{Ptr{z_timestamp_t}}(x + 8)
-    f === :attachment && return Ptr{Ptr{z_moved_bytes_t}}(x + 16)
+    f === :source_info && return Ptr{Ptr{z_source_info_t}}(x + 16)
+    f === :attachment && return Ptr{Ptr{z_moved_bytes_t}}(x + 24)
     return getfield(x, f)
 end
 
@@ -3443,7 +7288,9 @@ struct z_put_options_t
     priority::z_priority_t
     is_express::Bool
     timestamp::Ptr{z_timestamp_t}
+    reliability::z_reliability_t
     allowed_destination::z_locality_t
+    source_info::Ptr{z_source_info_t}
     attachment::Ptr{z_moved_bytes_t}
 end
 function Base.getproperty(x::Ptr{z_put_options_t}, f::Symbol)
@@ -3452,8 +7299,10 @@ function Base.getproperty(x::Ptr{z_put_options_t}, f::Symbol)
     f === :priority && return Ptr{z_priority_t}(x + 12)
     f === :is_express && return Ptr{Bool}(x + 16)
     f === :timestamp && return Ptr{Ptr{z_timestamp_t}}(x + 24)
-    f === :allowed_destination && return Ptr{z_locality_t}(x + 32)
-    f === :attachment && return Ptr{Ptr{z_moved_bytes_t}}(x + 40)
+    f === :reliability && return Ptr{z_reliability_t}(x + 32)
+    f === :allowed_destination && return Ptr{z_locality_t}(x + 36)
+    f === :source_info && return Ptr{Ptr{z_source_info_t}}(x + 40)
+    f === :attachment && return Ptr{Ptr{z_moved_bytes_t}}(x + 48)
     return getfield(x, f)
 end
 
@@ -3465,7 +7314,9 @@ end
 struct z_querier_get_options_t
     payload::Ptr{z_moved_bytes_t}
     encoding::Ptr{z_moved_encoding_t}
+    source_info::Ptr{z_source_info_t}
     attachment::Ptr{z_moved_bytes_t}
+    cancellation_token::Ptr{z_moved_cancellation_token_t}
 end
 
 struct z_query_reply_options_t
@@ -3474,6 +7325,7 @@ struct z_query_reply_options_t
     priority::z_priority_t
     is_express::Bool
     timestamp::Ptr{z_timestamp_t}
+    source_info::Ptr{z_source_info_t}
     attachment::Ptr{z_moved_bytes_t}
 end
 function Base.getproperty(x::Ptr{z_query_reply_options_t}, f::Symbol)
@@ -3482,7 +7334,8 @@ function Base.getproperty(x::Ptr{z_query_reply_options_t}, f::Symbol)
     f === :priority && return Ptr{z_priority_t}(x + 12)
     f === :is_express && return Ptr{Bool}(x + 16)
     f === :timestamp && return Ptr{Ptr{z_timestamp_t}}(x + 24)
-    f === :attachment && return Ptr{Ptr{z_moved_bytes_t}}(x + 32)
+    f === :source_info && return Ptr{Ptr{z_source_info_t}}(x + 32)
+    f === :attachment && return Ptr{Ptr{z_moved_bytes_t}}(x + 40)
     return getfield(x, f)
 end
 
@@ -3496,6 +7349,7 @@ struct z_query_reply_del_options_t
     priority::z_priority_t
     is_express::Bool
     timestamp::Ptr{z_timestamp_t}
+    source_info::Ptr{z_source_info_t}
     attachment::Ptr{z_moved_bytes_t}
 end
 function Base.getproperty(x::Ptr{z_query_reply_del_options_t}, f::Symbol)
@@ -3503,7 +7357,8 @@ function Base.getproperty(x::Ptr{z_query_reply_del_options_t}, f::Symbol)
     f === :priority && return Ptr{z_priority_t}(x + 4)
     f === :is_express && return Ptr{Bool}(x + 8)
     f === :timestamp && return Ptr{Ptr{z_timestamp_t}}(x + 16)
-    f === :attachment && return Ptr{Ptr{z_moved_bytes_t}}(x + 24)
+    f === :source_info && return Ptr{Ptr{z_source_info_t}}(x + 24)
+    f === :attachment && return Ptr{Ptr{z_moved_bytes_t}}(x + 32)
     return getfield(x, f)
 end
 
@@ -3554,6 +7409,127 @@ struct zc_internal_encoding_data_t
     schema_len::Csize_t
 end
 
+struct ze_advanced_publisher_cache_options_t
+    is_enabled::Bool
+    max_samples::Csize_t
+    congestion_control::z_congestion_control_t
+    priority::z_priority_t
+    is_express::Bool
+end
+
+struct ze_advanced_publisher_delete_options_t
+    delete_options::z_publisher_delete_options_t
+end
+
+struct ze_advanced_publisher_sample_miss_detection_options_t
+    is_enabled::Bool
+    heartbeat_mode::ze_advanced_publisher_heartbeat_mode_t
+    heartbeat_period_ms::UInt64
+end
+
+struct ze_advanced_publisher_options_t
+    publisher_options::z_publisher_options_t
+    cache::ze_advanced_publisher_cache_options_t
+    sample_miss_detection::ze_advanced_publisher_sample_miss_detection_options_t
+    publisher_detection::Bool
+    publisher_detection_metadata::Ptr{z_loaned_keyexpr_t}
+end
+
+struct ze_advanced_publisher_put_options_t
+    put_options::z_publisher_put_options_t
+end
+
+struct ze_advanced_subscriber_history_options_t
+    is_enabled::Bool
+    detect_late_publishers::Bool
+    max_samples::Csize_t
+    max_age_ms::UInt64
+end
+
+struct ze_advanced_subscriber_last_sample_miss_detection_options_t
+    is_enabled::Bool
+    periodic_queries_period_ms::UInt64
+end
+
+struct ze_advanced_subscriber_recovery_options_t
+    is_enabled::Bool
+    last_sample_miss_detection::ze_advanced_subscriber_last_sample_miss_detection_options_t
+end
+
+struct ze_advanced_subscriber_options_t
+    subscriber_options::z_subscriber_options_t
+    history::ze_advanced_subscriber_history_options_t
+    recovery::ze_advanced_subscriber_recovery_options_t
+    query_timeout_ms::UInt64
+    subscriber_detection::Bool
+    subscriber_detection_metadata::Ptr{z_loaned_keyexpr_t}
+end
+
+struct ze_publication_cache_options_t
+    queryable_suffix::Ptr{z_loaned_keyexpr_t}
+    queryable_origin::z_locality_t
+    queryable_complete::Bool
+    history::Csize_t
+    resources_limit::Csize_t
+end
+
+struct ze_querying_subscriber_options_t
+    allowed_origin::z_locality_t
+    query_selector::Ptr{z_loaned_keyexpr_t}
+    query_target::z_query_target_t
+    query_consolidation::z_query_consolidation_t
+    query_accept_replies::z_reply_keyexpr_t
+    query_timeout_ms::UInt64
+end
+
+function z_alloc_layout_alloc(out_result, layout)
+    ccall((:z_alloc_layout_alloc, libzenohc), Cvoid, (Ptr{z_buf_alloc_result_t}, Ptr{z_loaned_alloc_layout_t}), out_result, layout)
+end
+
+function z_alloc_layout_alloc_gc(out_result, layout)
+    ccall((:z_alloc_layout_alloc_gc, libzenohc), Cvoid, (Ptr{z_buf_alloc_result_t}, Ptr{z_loaned_alloc_layout_t}), out_result, layout)
+end
+
+function z_alloc_layout_alloc_gc_defrag(out_result, layout)
+    ccall((:z_alloc_layout_alloc_gc_defrag, libzenohc), Cvoid, (Ptr{z_buf_alloc_result_t}, Ptr{z_loaned_alloc_layout_t}), out_result, layout)
+end
+
+function z_alloc_layout_alloc_gc_defrag_blocking(out_result, layout)
+    ccall((:z_alloc_layout_alloc_gc_defrag_blocking, libzenohc), Cvoid, (Ptr{z_buf_alloc_result_t}, Ptr{z_loaned_alloc_layout_t}), out_result, layout)
+end
+
+function z_alloc_layout_alloc_gc_defrag_dealloc(out_result, layout)
+    ccall((:z_alloc_layout_alloc_gc_defrag_dealloc, libzenohc), Cvoid, (Ptr{z_buf_alloc_result_t}, Ptr{z_loaned_alloc_layout_t}), out_result, layout)
+end
+
+function z_alloc_layout_drop(this_)
+    ccall((:z_alloc_layout_drop, libzenohc), Cvoid, (Ptr{z_moved_alloc_layout_t},), this_)
+end
+
+function z_alloc_layout_loan(this_)
+    ccall((:z_alloc_layout_loan, libzenohc), Ptr{z_loaned_alloc_layout_t}, (Ptr{z_owned_alloc_layout_t},), this_)
+end
+
+function z_alloc_layout_new(this_, provider, size)
+    ccall((:z_alloc_layout_new, libzenohc), z_result_t, (Ptr{z_owned_alloc_layout_t}, Ptr{z_loaned_shm_provider_t}, Csize_t), this_, provider, size)
+end
+
+function z_alloc_layout_threadsafe_alloc_gc_defrag_async(out_result, layout, result_context, result_callback)
+    ccall((:z_alloc_layout_threadsafe_alloc_gc_defrag_async, libzenohc), z_result_t, (Ptr{z_buf_alloc_result_t}, Ptr{z_loaned_alloc_layout_t}, zc_threadsafe_context_t, Ptr{Cvoid}), out_result, layout, result_context, result_callback)
+end
+
+function z_alloc_layout_with_alignment_new(this_, provider, size, alignment)
+    ccall((:z_alloc_layout_with_alignment_new, libzenohc), z_result_t, (Ptr{z_owned_alloc_layout_t}, Ptr{z_loaned_shm_provider_t}, Csize_t, z_alloc_alignment_t), this_, provider, size, alignment)
+end
+
+function z_bytes_as_loaned_shm(this_, dst)
+    ccall((:z_bytes_as_loaned_shm, libzenohc), z_result_t, (Ptr{z_loaned_bytes_t}, Ptr{Ptr{z_loaned_shm_t}}), this_, dst)
+end
+
+function z_bytes_as_mut_loaned_shm(this_, dst)
+    ccall((:z_bytes_as_mut_loaned_shm, libzenohc), z_result_t, (Ptr{z_loaned_bytes_t}, Ptr{Ptr{z_loaned_shm_t}}), this_, dst)
+end
+
 function z_bytes_copy_from_buf(this_, data, len)
     ccall((:z_bytes_copy_from_buf, libzenohc), z_result_t, (Ptr{z_owned_bytes_t}, Ptr{UInt8}, Csize_t), this_, data, len)
 end
@@ -3578,6 +7554,14 @@ function z_bytes_from_buf(this_, data, len, deleter, context)
     ccall((:z_bytes_from_buf, libzenohc), z_result_t, (Ptr{z_owned_bytes_t}, Ptr{UInt8}, Csize_t, Ptr{Cvoid}, Ptr{Cvoid}), this_, data, len, deleter, context)
 end
 
+function z_bytes_from_shm(this_, shm)
+    ccall((:z_bytes_from_shm, libzenohc), z_result_t, (Ptr{z_owned_bytes_t}, Ptr{z_moved_shm_t}), this_, shm)
+end
+
+function z_bytes_from_shm_mut(this_, shm)
+    ccall((:z_bytes_from_shm_mut, libzenohc), z_result_t, (Ptr{z_owned_bytes_t}, Ptr{z_moved_shm_mut_t}), this_, shm)
+end
+
 function z_bytes_from_slice(this_, slice)
     ccall((:z_bytes_from_slice, libzenohc), Cvoid, (Ptr{z_owned_bytes_t}, Ptr{z_moved_slice_t}), this_, slice)
 end
@@ -3596,6 +7580,10 @@ end
 
 function z_bytes_from_string(this_, s)
     ccall((:z_bytes_from_string, libzenohc), Cvoid, (Ptr{z_owned_bytes_t}, Ptr{z_moved_string_t}), this_, s)
+end
+
+function z_bytes_get_contiguous_view(this_, view)
+    ccall((:z_bytes_get_contiguous_view, libzenohc), z_result_t, (Ptr{z_loaned_bytes_t}, Ptr{z_view_slice_t}), this_, view)
 end
 
 function z_bytes_get_reader(data)
@@ -3634,6 +7622,10 @@ function z_bytes_slice_iterator_next(this_, slice)
     ccall((:z_bytes_slice_iterator_next, libzenohc), Bool, (Ptr{z_bytes_slice_iterator_t}, Ptr{z_view_slice_t}), this_, slice)
 end
 
+function z_bytes_to_owned_shm(this_, dst)
+    ccall((:z_bytes_to_owned_shm, libzenohc), z_result_t, (Ptr{z_loaned_bytes_t}, Ptr{z_owned_shm_t}), this_, dst)
+end
+
 function z_bytes_to_slice(this_, dst)
     ccall((:z_bytes_to_slice, libzenohc), z_result_t, (Ptr{z_loaned_bytes_t}, Ptr{z_owned_slice_t}), this_, dst)
 end
@@ -3656,6 +7648,26 @@ end
 
 function z_bytes_writer_write_all(this_, src, len)
     ccall((:z_bytes_writer_write_all, libzenohc), z_result_t, (Ptr{z_loaned_bytes_writer_t}, Ptr{UInt8}, Csize_t), this_, src, len)
+end
+
+function z_cancellation_token_cancel(this_)
+    ccall((:z_cancellation_token_cancel, libzenohc), z_result_t, (Ptr{z_loaned_cancellation_token_t},), this_)
+end
+
+function z_cancellation_token_is_cancelled(this_)
+    ccall((:z_cancellation_token_is_cancelled, libzenohc), Bool, (Ptr{z_loaned_cancellation_token_t},), this_)
+end
+
+function z_cancellation_token_new(this_)
+    ccall((:z_cancellation_token_new, libzenohc), z_result_t, (Ptr{z_owned_cancellation_token_t},), this_)
+end
+
+function z_chunk_alloc_result_new_error(this_, alloc_error)
+    ccall((:z_chunk_alloc_result_new_error, libzenohc), Cvoid, (Ptr{z_owned_chunk_alloc_result_t}, z_alloc_error_t), this_, alloc_error)
+end
+
+function z_chunk_alloc_result_new_ok(this_, allocated_chunk)
+    ccall((:z_chunk_alloc_result_new_ok, libzenohc), z_result_t, (Ptr{z_owned_chunk_alloc_result_t}, z_allocated_chunk_t), this_, allocated_chunk)
 end
 
 function z_clock_elapsed_ms(time)
@@ -3702,6 +7714,10 @@ function z_config_default(this_)
     ccall((:z_config_default, libzenohc), z_result_t, (Ptr{z_owned_config_t},), this_)
 end
 
+function z_declare_background_link_events_listener(session, callback, options)
+    ccall((:z_declare_background_link_events_listener, libzenohc), z_result_t, (Ptr{z_loaned_session_t}, Ptr{z_moved_closure_link_event_t}, Ptr{z_link_events_listener_options_t}), session, callback, options)
+end
+
 function z_declare_background_queryable(session, key_expr, callback, options)
     ccall((:z_declare_background_queryable, libzenohc), z_result_t, (Ptr{z_loaned_session_t}, Ptr{z_loaned_keyexpr_t}, Ptr{z_moved_closure_query_t}, Ptr{z_queryable_options_t}), session, key_expr, callback, options)
 end
@@ -3710,8 +7726,16 @@ function z_declare_background_subscriber(session, key_expr, callback, options)
     ccall((:z_declare_background_subscriber, libzenohc), z_result_t, (Ptr{z_loaned_session_t}, Ptr{z_loaned_keyexpr_t}, Ptr{z_moved_closure_sample_t}, Ptr{z_subscriber_options_t}), session, key_expr, callback, options)
 end
 
+function z_declare_background_transport_events_listener(session, callback, options)
+    ccall((:z_declare_background_transport_events_listener, libzenohc), z_result_t, (Ptr{z_loaned_session_t}, Ptr{z_moved_closure_transport_event_t}, Ptr{z_transport_events_listener_options_t}), session, callback, options)
+end
+
 function z_declare_keyexpr(session, declared_key_expr, key_expr)
     ccall((:z_declare_keyexpr, libzenohc), z_result_t, (Ptr{z_loaned_session_t}, Ptr{z_owned_keyexpr_t}, Ptr{z_loaned_keyexpr_t}), session, declared_key_expr, key_expr)
+end
+
+function z_declare_link_events_listener(session, listener, callback, options)
+    ccall((:z_declare_link_events_listener, libzenohc), z_result_t, (Ptr{z_loaned_session_t}, Ptr{z_owned_link_events_listener_t}, Ptr{z_moved_closure_link_event_t}, Ptr{z_link_events_listener_options_t}), session, listener, callback, options)
 end
 
 function z_declare_publisher(session, publisher, key_expr, options)
@@ -3728,6 +7752,10 @@ end
 
 function z_declare_subscriber(session, subscriber, key_expr, callback, options)
     ccall((:z_declare_subscriber, libzenohc), z_result_t, (Ptr{z_loaned_session_t}, Ptr{z_owned_subscriber_t}, Ptr{z_loaned_keyexpr_t}, Ptr{z_moved_closure_sample_t}, Ptr{z_subscriber_options_t}), session, subscriber, key_expr, callback, options)
+end
+
+function z_declare_transport_events_listener(session, listener, callback, options)
+    ccall((:z_declare_transport_events_listener, libzenohc), z_result_t, (Ptr{z_loaned_session_t}, Ptr{z_owned_transport_events_listener_t}, Ptr{z_moved_closure_transport_event_t}, Ptr{z_transport_events_listener_options_t}), session, listener, callback, options)
 end
 
 function z_delete(session, key_expr, options)
@@ -3978,6 +8006,14 @@ function z_encoding_zenoh_string()
     ccall((:z_encoding_zenoh_string, libzenohc), Ptr{z_loaned_encoding_t}, ())
 end
 
+function z_entity_global_id_eid(this_)
+    ccall((:z_entity_global_id_eid, libzenohc), UInt32, (Ptr{z_entity_global_id_t},), this_)
+end
+
+function z_entity_global_id_zid(this_)
+    ccall((:z_entity_global_id_zid, libzenohc), z_id_t, (Ptr{z_entity_global_id_t},), this_)
+end
+
 function z_fifo_channel_query_new(callback, handler, capacity)
     ccall((:z_fifo_channel_query_new, libzenohc), Cvoid, (Ptr{z_owned_closure_query_t}, Ptr{z_owned_fifo_handler_query_t}, Csize_t), callback, handler, capacity)
 end
@@ -4018,6 +8054,14 @@ function z_id_to_string(zid, dst)
     ccall((:z_id_to_string, libzenohc), Cvoid, (Ptr{z_id_t}, Ptr{z_owned_string_t}), zid, dst)
 end
 
+function z_info_links(session, callback, options)
+    ccall((:z_info_links, libzenohc), z_result_t, (Ptr{z_loaned_session_t}, Ptr{z_moved_closure_link_t}, Ptr{z_info_links_options_t}), session, callback, options)
+end
+
+function z_info_links_options_default(this_)
+    ccall((:z_info_links_options_default, libzenohc), Cvoid, (Ptr{z_info_links_options_t},), this_)
+end
+
 function z_info_peers_zid(session, callback)
     ccall((:z_info_peers_zid, libzenohc), z_result_t, (Ptr{z_loaned_session_t}, Ptr{z_moved_closure_zid_t}), session, callback)
 end
@@ -4026,8 +8070,20 @@ function z_info_routers_zid(session, callback)
     ccall((:z_info_routers_zid, libzenohc), z_result_t, (Ptr{z_loaned_session_t}, Ptr{z_moved_closure_zid_t}), session, callback)
 end
 
+function z_info_transports(session, callback)
+    ccall((:z_info_transports, libzenohc), z_result_t, (Ptr{z_loaned_session_t}, Ptr{z_moved_closure_transport_t}), session, callback)
+end
+
 function z_info_zid(session)
     ccall((:z_info_zid, libzenohc), z_id_t, (Ptr{z_loaned_session_t},), session)
+end
+
+function z_internal_alloc_layout_check(this_)
+    ccall((:z_internal_alloc_layout_check, libzenohc), Bool, (Ptr{z_owned_alloc_layout_t},), this_)
+end
+
+function z_internal_alloc_layout_null(this_)
+    ccall((:z_internal_alloc_layout_null, libzenohc), Cvoid, (Ptr{z_owned_alloc_layout_t},), this_)
 end
 
 function z_internal_congestion_control_default_push()
@@ -4090,6 +8146,66 @@ function z_keyexpr_join(this_, left, right)
     ccall((:z_keyexpr_join, libzenohc), z_result_t, (Ptr{z_owned_keyexpr_t}, Ptr{z_loaned_keyexpr_t}, Ptr{z_loaned_keyexpr_t}), this_, left, right)
 end
 
+function z_keyexpr_relation_to(left, right)
+    ccall((:z_keyexpr_relation_to, libzenohc), z_keyexpr_intersection_level_t, (Ptr{z_loaned_keyexpr_t}, Ptr{z_loaned_keyexpr_t}), left, right)
+end
+
+function z_link_auth_identifier(link, str_out)
+    ccall((:z_link_auth_identifier, libzenohc), Cvoid, (Ptr{z_loaned_link_t}, Ptr{z_owned_string_t}), link, str_out)
+end
+
+function z_link_dst(link, str_out)
+    ccall((:z_link_dst, libzenohc), Cvoid, (Ptr{z_loaned_link_t}, Ptr{z_owned_string_t}), link, str_out)
+end
+
+function z_link_event_kind(event)
+    ccall((:z_link_event_kind, libzenohc), z_sample_kind_t, (Ptr{z_loaned_link_event_t},), event)
+end
+
+function z_link_event_link(event)
+    ccall((:z_link_event_link, libzenohc), Ptr{z_loaned_link_t}, (Ptr{z_loaned_link_event_t},), event)
+end
+
+function z_link_event_link_mut(event)
+    ccall((:z_link_event_link_mut, libzenohc), Ptr{z_loaned_link_t}, (Ptr{z_loaned_link_event_t},), event)
+end
+
+function z_link_events_listener_options_default(this_)
+    ccall((:z_link_events_listener_options_default, libzenohc), Cvoid, (Ptr{z_link_events_listener_options_t},), this_)
+end
+
+function z_link_group(link, str_out)
+    ccall((:z_link_group, libzenohc), Cvoid, (Ptr{z_loaned_link_t}, Ptr{z_owned_string_t}), link, str_out)
+end
+
+function z_link_interfaces(link, interfaces_out)
+    ccall((:z_link_interfaces, libzenohc), Cvoid, (Ptr{z_loaned_link_t}, Ptr{z_owned_string_array_t}), link, interfaces_out)
+end
+
+function z_link_is_streamed(link)
+    ccall((:z_link_is_streamed, libzenohc), Bool, (Ptr{z_loaned_link_t},), link)
+end
+
+function z_link_mtu(link)
+    ccall((:z_link_mtu, libzenohc), UInt16, (Ptr{z_loaned_link_t},), link)
+end
+
+function z_link_priorities(link, min_out, max_out)
+    ccall((:z_link_priorities, libzenohc), Bool, (Ptr{z_loaned_link_t}, Ptr{UInt8}, Ptr{UInt8}), link, min_out, max_out)
+end
+
+function z_link_reliability(link, reliability_out)
+    ccall((:z_link_reliability, libzenohc), Bool, (Ptr{z_loaned_link_t}, Ptr{z_reliability_t}), link, reliability_out)
+end
+
+function z_link_src(link, str_out)
+    ccall((:z_link_src, libzenohc), Cvoid, (Ptr{z_loaned_link_t}, Ptr{z_owned_string_t}), link, str_out)
+end
+
+function z_link_zid(link)
+    ccall((:z_link_zid, libzenohc), z_id_t, (Ptr{z_loaned_link_t},), link)
+end
+
 function z_liveliness_declare_background_subscriber(session, key_expr, callback, options)
     ccall((:z_liveliness_declare_background_subscriber, libzenohc), z_result_t, (Ptr{z_loaned_session_t}, Ptr{z_loaned_keyexpr_t}, Ptr{z_moved_closure_sample_t}, Ptr{z_liveliness_subscriber_options_t}), session, key_expr, callback, options)
 end
@@ -4126,6 +8242,14 @@ function z_locality_default()
     ccall((:z_locality_default, libzenohc), z_locality_t, ())
 end
 
+function z_memory_layout_get_data(this_, out_size, out_alignment)
+    ccall((:z_memory_layout_get_data, libzenohc), Cvoid, (Ptr{z_loaned_memory_layout_t}, Ptr{Csize_t}, Ptr{z_alloc_alignment_t}), this_, out_size, out_alignment)
+end
+
+function z_memory_layout_new(this_, size, alignment)
+    ccall((:z_memory_layout_new, libzenohc), z_result_t, (Ptr{z_owned_memory_layout_t}, Csize_t, z_alloc_alignment_t), this_, size, alignment)
+end
+
 function z_mutex_init(this_)
     ccall((:z_mutex_init, libzenohc), z_result_t, (Ptr{z_owned_mutex_t},), this_)
 end
@@ -4142,6 +8266,10 @@ function z_mutex_unlock(this_)
     ccall((:z_mutex_unlock, libzenohc), z_result_t, (Ptr{z_loaned_mutex_t},), this_)
 end
 
+function z_obtain_shm_provider(this_, out_provider, out_state)
+    ccall((:z_obtain_shm_provider, libzenohc), z_result_t, (Ptr{z_loaned_session_t}, Ptr{z_owned_shared_shm_provider_t}, Ptr{z_shm_provider_state}), this_, out_provider, out_state)
+end
+
 function z_open(this_, config, _options)
     ccall((:z_open, libzenohc), z_result_t, (Ptr{z_owned_session_t}, Ptr{z_moved_config_t}, Ptr{z_open_options_t}), this_, config, _options)
 end
@@ -4150,8 +8278,52 @@ function z_open_options_default(this_)
     ccall((:z_open_options_default, libzenohc), Cvoid, (Ptr{z_open_options_t},), this_)
 end
 
+function z_open_with_custom_shm_clients(this_, config, shm_clients)
+    ccall((:z_open_with_custom_shm_clients, libzenohc), z_result_t, (Ptr{z_owned_session_t}, Ptr{z_moved_config_t}, Ptr{z_loaned_shm_client_storage_t}), this_, config, shm_clients)
+end
+
+function z_posix_shm_client_new(this_)
+    ccall((:z_posix_shm_client_new, libzenohc), Cvoid, (Ptr{z_owned_shm_client_t},), this_)
+end
+
+function z_posix_shm_provider_new(this_, size)
+    ccall((:z_posix_shm_provider_new, libzenohc), z_result_t, (Ptr{z_owned_shm_provider_t}, Csize_t), this_, size)
+end
+
+function z_posix_shm_provider_with_layout_new(this_, layout)
+    ccall((:z_posix_shm_provider_with_layout_new, libzenohc), z_result_t, (Ptr{z_owned_shm_provider_t}, Ptr{z_loaned_memory_layout_t}), this_, layout)
+end
+
+function z_precomputed_layout_alloc(out_result, layout)
+    ccall((:z_precomputed_layout_alloc, libzenohc), Cvoid, (Ptr{z_buf_alloc_result_t}, Ptr{z_loaned_precomputed_layout_t}), out_result, layout)
+end
+
+function z_precomputed_layout_alloc_gc(out_result, layout)
+    ccall((:z_precomputed_layout_alloc_gc, libzenohc), Cvoid, (Ptr{z_buf_alloc_result_t}, Ptr{z_loaned_precomputed_layout_t}), out_result, layout)
+end
+
+function z_precomputed_layout_alloc_gc_defrag(out_result, layout)
+    ccall((:z_precomputed_layout_alloc_gc_defrag, libzenohc), Cvoid, (Ptr{z_buf_alloc_result_t}, Ptr{z_loaned_precomputed_layout_t}), out_result, layout)
+end
+
+function z_precomputed_layout_alloc_gc_defrag_blocking(out_result, layout)
+    ccall((:z_precomputed_layout_alloc_gc_defrag_blocking, libzenohc), Cvoid, (Ptr{z_buf_alloc_result_t}, Ptr{z_loaned_precomputed_layout_t}), out_result, layout)
+end
+
+function z_precomputed_layout_alloc_gc_defrag_dealloc(out_result, layout)
+    ccall((:z_precomputed_layout_alloc_gc_defrag_dealloc, libzenohc), Cvoid, (Ptr{z_buf_alloc_result_t}, Ptr{z_loaned_precomputed_layout_t}), out_result, layout)
+end
+
+function z_precomputed_layout_threadsafe_alloc_gc_defrag_async(out_result, layout, result_context, result_callback)
+    ccall((:z_precomputed_layout_threadsafe_alloc_gc_defrag_async, libzenohc), z_result_t, (Ptr{z_buf_alloc_result_t}, Ptr{z_loaned_precomputed_layout_t}, zc_threadsafe_context_t, Ptr{Cvoid}), out_result, layout, result_context, result_callback)
+end
+
 function z_priority_default()
     ccall((:z_priority_default, libzenohc), z_priority_t, ())
+end
+
+function z_ptr_in_segment_new(this_, ptr, segment)
+    ccall((:z_ptr_in_segment_new, libzenohc), Cvoid, (Ptr{z_owned_ptr_in_segment_t}, Ptr{UInt8}, zc_threadsafe_context_t), this_, ptr, segment)
 end
 
 function z_publisher_declare_background_matching_listener(publisher, callback)
@@ -4172,6 +8344,10 @@ end
 
 function z_publisher_get_matching_status(this_, matching_status)
     ccall((:z_publisher_get_matching_status, libzenohc), z_result_t, (Ptr{z_loaned_publisher_t}, Ptr{z_matching_status_t}), this_, matching_status)
+end
+
+function z_publisher_id(publisher)
+    ccall((:z_publisher_id, libzenohc), z_entity_global_id_t, (Ptr{z_loaned_publisher_t},), publisher)
 end
 
 function z_publisher_keyexpr(publisher)
@@ -4220,6 +8396,10 @@ end
 
 function z_querier_get_with_parameters_substr(querier, parameters, parameters_len, callback, options)
     ccall((:z_querier_get_with_parameters_substr, libzenohc), z_result_t, (Ptr{z_loaned_querier_t}, Ptr{Cchar}, Csize_t, Ptr{z_moved_closure_reply_t}, Ptr{z_querier_get_options_t}), querier, parameters, parameters_len, callback, options)
+end
+
+function z_querier_id(querier)
+    ccall((:z_querier_id, libzenohc), z_entity_global_id_t, (Ptr{z_loaned_querier_t},), querier)
 end
 
 function z_querier_keyexpr(querier)
@@ -4306,8 +8486,16 @@ function z_query_reply_options_default(this_)
     ccall((:z_query_reply_options_default, libzenohc), Cvoid, (Ptr{z_query_reply_options_t},), this_)
 end
 
+function z_query_source_info(this_)
+    ccall((:z_query_source_info, libzenohc), Ptr{z_source_info_t}, (Ptr{z_loaned_query_t},), this_)
+end
+
 function z_query_target_default()
     ccall((:z_query_target_default, libzenohc), z_query_target_t, ())
+end
+
+function z_queryable_id(queryable)
+    ccall((:z_queryable_id, libzenohc), z_entity_global_id_t, (Ptr{z_loaned_queryable_t},), queryable)
 end
 
 function z_queryable_keyexpr(queryable)
@@ -4336,6 +8524,14 @@ end
 
 function z_random_u8()
     ccall((:z_random_u8, libzenohc), UInt8, ())
+end
+
+function z_ref_shm_client_storage_global(this_)
+    ccall((:z_ref_shm_client_storage_global, libzenohc), Cvoid, (Ptr{z_owned_shm_client_storage_t},), this_)
+end
+
+function z_reliability_default()
+    ccall((:z_reliability_default, libzenohc), z_reliability_t, ())
 end
 
 function z_reply_err(this_)
@@ -4372,6 +8568,10 @@ end
 
 function z_reply_ok_mut(this_)
     ccall((:z_reply_ok_mut, libzenohc), Ptr{z_loaned_sample_t}, (Ptr{z_loaned_reply_t},), this_)
+end
+
+function z_reply_replier_id(this_, out_id)
+    ccall((:z_reply_replier_id, libzenohc), Bool, (Ptr{z_loaned_reply_t}, Ptr{z_entity_global_id_t}), this_, out_id)
 end
 
 function z_ring_channel_query_new(callback, handler, capacity)
@@ -4422,6 +8622,14 @@ function z_sample_priority(this_)
     ccall((:z_sample_priority, libzenohc), z_priority_t, (Ptr{z_loaned_sample_t},), this_)
 end
 
+function z_sample_reliability(this_)
+    ccall((:z_sample_reliability, libzenohc), z_reliability_t, (Ptr{z_loaned_sample_t},), this_)
+end
+
+function z_sample_source_info(this_)
+    ccall((:z_sample_source_info, libzenohc), Ptr{z_source_info_t}, (Ptr{z_loaned_sample_t},), this_)
+end
+
 function z_sample_timestamp(this_)
     ccall((:z_sample_timestamp, libzenohc), Ptr{z_timestamp_t}, (Ptr{z_loaned_sample_t},), this_)
 end
@@ -4434,8 +8642,148 @@ function z_scout_options_default(this_)
     ccall((:z_scout_options_default, libzenohc), Cvoid, (Ptr{z_scout_options_t},), this_)
 end
 
+function z_session_id(session)
+    ccall((:z_session_id, libzenohc), z_entity_global_id_t, (Ptr{z_loaned_session_t},), session)
+end
+
 function z_session_is_closed(session)
     ccall((:z_session_is_closed, libzenohc), Bool, (Ptr{z_loaned_session_t},), session)
+end
+
+function z_shared_shm_provider_loan_as(this_)
+    ccall((:z_shared_shm_provider_loan_as, libzenohc), Ptr{z_loaned_shm_provider_t}, (Ptr{z_loaned_shared_shm_provider_t},), this_)
+end
+
+function z_shm_client_new(this_, context, callbacks)
+    ccall((:z_shm_client_new, libzenohc), Cvoid, (Ptr{z_owned_shm_client_t}, zc_threadsafe_context_t, zc_shm_client_callbacks_t), this_, context, callbacks)
+end
+
+function z_shm_client_storage_new(this_, clients, add_default_client_set)
+    ccall((:z_shm_client_storage_new, libzenohc), z_result_t, (Ptr{z_owned_shm_client_storage_t}, Ptr{zc_loaned_shm_client_list_t}, Bool), this_, clients, add_default_client_set)
+end
+
+function z_shm_client_storage_new_default(this_)
+    ccall((:z_shm_client_storage_new_default, libzenohc), Cvoid, (Ptr{z_owned_shm_client_storage_t},), this_)
+end
+
+function z_shm_data(this_)
+    ccall((:z_shm_data, libzenohc), Ptr{Cuchar}, (Ptr{z_loaned_shm_t},), this_)
+end
+
+function z_shm_from_mut(this_, that)
+    ccall((:z_shm_from_mut, libzenohc), Cvoid, (Ptr{z_owned_shm_t}, Ptr{z_moved_shm_mut_t}), this_, that)
+end
+
+function z_shm_len(this_)
+    ccall((:z_shm_len, libzenohc), Csize_t, (Ptr{z_loaned_shm_t},), this_)
+end
+
+function z_shm_mut_data(this_)
+    ccall((:z_shm_mut_data, libzenohc), Ptr{Cuchar}, (Ptr{z_loaned_shm_mut_t},), this_)
+end
+
+function z_shm_mut_data_mut(this_)
+    ccall((:z_shm_mut_data_mut, libzenohc), Ptr{Cuchar}, (Ptr{z_loaned_shm_mut_t},), this_)
+end
+
+function z_shm_mut_len(this_)
+    ccall((:z_shm_mut_len, libzenohc), Csize_t, (Ptr{z_loaned_shm_mut_t},), this_)
+end
+
+function z_shm_mut_try_from_immut(this_, that, immut)
+    ccall((:z_shm_mut_try_from_immut, libzenohc), z_result_t, (Ptr{z_owned_shm_mut_t}, Ptr{z_moved_shm_t}, Ptr{z_owned_shm_t}), this_, that, immut)
+end
+
+function z_shm_provider_alloc(out_result, provider, size)
+    ccall((:z_shm_provider_alloc, libzenohc), Cvoid, (Ptr{z_buf_layout_alloc_result_t}, Ptr{z_loaned_shm_provider_t}, Csize_t), out_result, provider, size)
+end
+
+function z_shm_provider_alloc_aligned(out_result, provider, size, alignment)
+    ccall((:z_shm_provider_alloc_aligned, libzenohc), Cvoid, (Ptr{z_buf_layout_alloc_result_t}, Ptr{z_loaned_shm_provider_t}, Csize_t, z_alloc_alignment_t), out_result, provider, size, alignment)
+end
+
+function z_shm_provider_alloc_gc(out_result, provider, size)
+    ccall((:z_shm_provider_alloc_gc, libzenohc), Cvoid, (Ptr{z_buf_layout_alloc_result_t}, Ptr{z_loaned_shm_provider_t}, Csize_t), out_result, provider, size)
+end
+
+function z_shm_provider_alloc_gc_aligned(out_result, provider, size, alignment)
+    ccall((:z_shm_provider_alloc_gc_aligned, libzenohc), Cvoid, (Ptr{z_buf_layout_alloc_result_t}, Ptr{z_loaned_shm_provider_t}, Csize_t, z_alloc_alignment_t), out_result, provider, size, alignment)
+end
+
+function z_shm_provider_alloc_gc_defrag(out_result, provider, size)
+    ccall((:z_shm_provider_alloc_gc_defrag, libzenohc), Cvoid, (Ptr{z_buf_layout_alloc_result_t}, Ptr{z_loaned_shm_provider_t}, Csize_t), out_result, provider, size)
+end
+
+function z_shm_provider_alloc_gc_defrag_aligned(out_result, provider, size, alignment)
+    ccall((:z_shm_provider_alloc_gc_defrag_aligned, libzenohc), Cvoid, (Ptr{z_buf_layout_alloc_result_t}, Ptr{z_loaned_shm_provider_t}, Csize_t, z_alloc_alignment_t), out_result, provider, size, alignment)
+end
+
+function z_shm_provider_alloc_gc_defrag_aligned_async(out_result, provider, size, alignment, result_context, result_callback)
+    ccall((:z_shm_provider_alloc_gc_defrag_aligned_async, libzenohc), z_result_t, (Ptr{z_buf_layout_alloc_result_t}, Ptr{z_loaned_shm_provider_t}, Csize_t, z_alloc_alignment_t, zc_threadsafe_context_t, Ptr{Cvoid}), out_result, provider, size, alignment, result_context, result_callback)
+end
+
+function z_shm_provider_alloc_gc_defrag_async(out_result, provider, size, result_context, result_callback)
+    ccall((:z_shm_provider_alloc_gc_defrag_async, libzenohc), z_result_t, (Ptr{z_buf_layout_alloc_result_t}, Ptr{z_loaned_shm_provider_t}, Csize_t, zc_threadsafe_context_t, Ptr{Cvoid}), out_result, provider, size, result_context, result_callback)
+end
+
+function z_shm_provider_alloc_gc_defrag_blocking(out_result, provider, size)
+    ccall((:z_shm_provider_alloc_gc_defrag_blocking, libzenohc), Cvoid, (Ptr{z_buf_layout_alloc_result_t}, Ptr{z_loaned_shm_provider_t}, Csize_t), out_result, provider, size)
+end
+
+function z_shm_provider_alloc_gc_defrag_blocking_aligned(out_result, provider, size, alignment)
+    ccall((:z_shm_provider_alloc_gc_defrag_blocking_aligned, libzenohc), Cvoid, (Ptr{z_buf_layout_alloc_result_t}, Ptr{z_loaned_shm_provider_t}, Csize_t, z_alloc_alignment_t), out_result, provider, size, alignment)
+end
+
+function z_shm_provider_alloc_gc_defrag_dealloc(out_result, provider, size)
+    ccall((:z_shm_provider_alloc_gc_defrag_dealloc, libzenohc), Cvoid, (Ptr{z_buf_layout_alloc_result_t}, Ptr{z_loaned_shm_provider_t}, Csize_t), out_result, provider, size)
+end
+
+function z_shm_provider_alloc_gc_defrag_dealloc_aligned(out_result, provider, size, alignment)
+    ccall((:z_shm_provider_alloc_gc_defrag_dealloc_aligned, libzenohc), Cvoid, (Ptr{z_buf_layout_alloc_result_t}, Ptr{z_loaned_shm_provider_t}, Csize_t, z_alloc_alignment_t), out_result, provider, size, alignment)
+end
+
+function z_shm_provider_alloc_layout(this_, provider, size)
+    ccall((:z_shm_provider_alloc_layout, libzenohc), z_result_t, (Ptr{z_owned_precomputed_layout_t}, Ptr{z_loaned_shm_provider_t}, Csize_t), this_, provider, size)
+end
+
+function z_shm_provider_alloc_layout_aligned(this_, provider, size, alignment)
+    ccall((:z_shm_provider_alloc_layout_aligned, libzenohc), z_result_t, (Ptr{z_owned_precomputed_layout_t}, Ptr{z_loaned_shm_provider_t}, Csize_t, z_alloc_alignment_t), this_, provider, size, alignment)
+end
+
+function z_shm_provider_available(provider)
+    ccall((:z_shm_provider_available, libzenohc), Csize_t, (Ptr{z_loaned_shm_provider_t},), provider)
+end
+
+function z_shm_provider_default_new(this_, size)
+    ccall((:z_shm_provider_default_new, libzenohc), z_result_t, (Ptr{z_owned_shm_provider_t}, Csize_t), this_, size)
+end
+
+function z_shm_provider_defragment(provider)
+    ccall((:z_shm_provider_defragment, libzenohc), Csize_t, (Ptr{z_loaned_shm_provider_t},), provider)
+end
+
+function z_shm_provider_garbage_collect(provider)
+    ccall((:z_shm_provider_garbage_collect, libzenohc), Csize_t, (Ptr{z_loaned_shm_provider_t},), provider)
+end
+
+function z_shm_provider_map(out_result, provider, allocated_chunk, len)
+    ccall((:z_shm_provider_map, libzenohc), z_result_t, (Ptr{z_owned_shm_mut_t}, Ptr{z_loaned_shm_provider_t}, z_allocated_chunk_t, Csize_t), out_result, provider, allocated_chunk, len)
+end
+
+function z_shm_provider_new(this_, context, callbacks)
+    ccall((:z_shm_provider_new, libzenohc), Cvoid, (Ptr{z_owned_shm_provider_t}, zc_context_t, zc_shm_provider_backend_callbacks_t), this_, context, callbacks)
+end
+
+function z_shm_provider_threadsafe_new(this_, context, callbacks)
+    ccall((:z_shm_provider_threadsafe_new, libzenohc), Cvoid, (Ptr{z_owned_shm_provider_t}, zc_threadsafe_context_t, zc_shm_provider_backend_callbacks_t), this_, context, callbacks)
+end
+
+function z_shm_try_mut(this_)
+    ccall((:z_shm_try_mut, libzenohc), Ptr{z_loaned_shm_mut_t}, (Ptr{z_owned_shm_t},), this_)
+end
+
+function z_shm_try_reloan_mut(this_)
+    ccall((:z_shm_try_reloan_mut, libzenohc), Ptr{z_loaned_shm_mut_t}, (Ptr{z_loaned_shm_t},), this_)
 end
 
 function z_sleep_ms(time)
@@ -4472,6 +8820,18 @@ end
 
 function z_slice_len(this_)
     ccall((:z_slice_len, libzenohc), Csize_t, (Ptr{z_loaned_slice_t},), this_)
+end
+
+function z_source_info_id(this_)
+    ccall((:z_source_info_id, libzenohc), z_entity_global_id_t, (Ptr{z_source_info_t},), this_)
+end
+
+function z_source_info_new(source_id, source_sn)
+    ccall((:z_source_info_new, libzenohc), z_source_info_t, (Ptr{z_entity_global_id_t}, UInt32), source_id, source_sn)
+end
+
+function z_source_info_sn(this_)
+    ccall((:z_source_info_sn, libzenohc), UInt32, (Ptr{z_source_info_t},), this_)
 end
 
 function z_string_array_get(this_, index)
@@ -4530,6 +8890,10 @@ function z_string_len(this_)
     ccall((:z_string_len, libzenohc), Csize_t, (Ptr{z_loaned_string_t},), this_)
 end
 
+function z_subscriber_id(subscriber)
+    ccall((:z_subscriber_id, libzenohc), z_entity_global_id_t, (Ptr{z_loaned_subscriber_t},), subscriber)
+end
+
 function z_subscriber_keyexpr(subscriber)
     ccall((:z_subscriber_keyexpr, libzenohc), Ptr{z_loaned_keyexpr_t}, (Ptr{z_loaned_subscriber_t},), subscriber)
 end
@@ -4582,8 +8946,48 @@ function z_timestamp_ntp64_time(this_)
     ccall((:z_timestamp_ntp64_time, libzenohc), UInt64, (Ptr{z_timestamp_t},), this_)
 end
 
+function z_transport_event_kind(event)
+    ccall((:z_transport_event_kind, libzenohc), z_sample_kind_t, (Ptr{z_loaned_transport_event_t},), event)
+end
+
+function z_transport_event_transport(event)
+    ccall((:z_transport_event_transport, libzenohc), Ptr{z_loaned_transport_t}, (Ptr{z_loaned_transport_event_t},), event)
+end
+
+function z_transport_event_transport_mut(event)
+    ccall((:z_transport_event_transport_mut, libzenohc), Ptr{z_loaned_transport_t}, (Ptr{z_loaned_transport_event_t},), event)
+end
+
+function z_transport_events_listener_options_default(this_)
+    ccall((:z_transport_events_listener_options_default, libzenohc), Cvoid, (Ptr{z_transport_events_listener_options_t},), this_)
+end
+
+function z_transport_is_multicast(transport)
+    ccall((:z_transport_is_multicast, libzenohc), Bool, (Ptr{z_loaned_transport_t},), transport)
+end
+
+function z_transport_is_qos(transport)
+    ccall((:z_transport_is_qos, libzenohc), Bool, (Ptr{z_loaned_transport_t},), transport)
+end
+
+function z_transport_is_shm(transport)
+    ccall((:z_transport_is_shm, libzenohc), Bool, (Ptr{z_loaned_transport_t},), transport)
+end
+
+function z_transport_whatami(transport)
+    ccall((:z_transport_whatami, libzenohc), z_whatami_t, (Ptr{z_loaned_transport_t},), transport)
+end
+
+function z_transport_zid(transport)
+    ccall((:z_transport_zid, libzenohc), z_id_t, (Ptr{z_loaned_transport_t},), transport)
+end
+
 function z_undeclare_keyexpr(session, key_expr)
     ccall((:z_undeclare_keyexpr, libzenohc), z_result_t, (Ptr{z_loaned_session_t}, Ptr{z_moved_keyexpr_t}), session, key_expr)
+end
+
+function z_undeclare_link_events_listener(this_)
+    ccall((:z_undeclare_link_events_listener, libzenohc), z_result_t, (Ptr{z_moved_link_events_listener_t},), this_)
 end
 
 function z_undeclare_matching_listener(this_)
@@ -4604,6 +9008,10 @@ end
 
 function z_undeclare_subscriber(this_)
     ccall((:z_undeclare_subscriber, libzenohc), z_result_t, (Ptr{z_moved_subscriber_t},), this_)
+end
+
+function z_undeclare_transport_events_listener(this_)
+    ccall((:z_undeclare_transport_events_listener, libzenohc), z_result_t, (Ptr{z_moved_transport_events_listener_t},), this_)
 end
 
 function z_view_keyexpr_empty(this_)
@@ -4670,8 +9078,16 @@ function z_whatami_to_view_string(whatami, str_out)
     ccall((:z_whatami_to_view_string, libzenohc), z_result_t, (z_whatami_t, Ptr{z_view_string_t}), whatami, str_out)
 end
 
+function zc_cleanup_orphaned_shm_segments()
+    ccall((:zc_cleanup_orphaned_shm_segments, libzenohc), Cvoid, ())
+end
+
 function zc_closure_log_call(closure, severity, msg)
     ccall((:zc_closure_log_call, libzenohc), Cvoid, (Ptr{zc_loaned_closure_log_t}, zc_log_severity_t, Ptr{z_loaned_string_t}), closure, severity, msg)
+end
+
+function zc_concurrent_close_handle_wait(handle)
+    ccall((:zc_concurrent_close_handle_wait, libzenohc), z_result_t, (Ptr{zc_moved_concurrent_close_handle_t},), handle)
 end
 
 function zc_config_from_env(this_)
@@ -4714,12 +9130,20 @@ function zc_config_to_string(config, out_config_string)
     ccall((:zc_config_to_string, libzenohc), z_result_t, (Ptr{z_loaned_config_t}, Ptr{z_owned_string_t}), config, out_config_string)
 end
 
+function zc_get_last_error(out)
+    ccall((:zc_get_last_error, libzenohc), Cvoid, (Ptr{z_view_string_t},), out)
+end
+
 function zc_init_log_from_env_or(fallback_filter)
     ccall((:zc_init_log_from_env_or, libzenohc), z_result_t, (Ptr{Cchar},), fallback_filter)
 end
 
 function zc_init_log_with_callback(min_severity, callback)
     ccall((:zc_init_log_with_callback, libzenohc), Cvoid, (zc_log_severity_t, Ptr{zc_moved_closure_log_t}), min_severity, callback)
+end
+
+function zc_internal_create_transport_shm(this_, zid, whatami, is_qos, is_multicast, is_shm)
+    ccall((:zc_internal_create_transport_shm, libzenohc), Cvoid, (Ptr{z_owned_transport_t}, z_id_t, z_whatami_t, Bool, Bool, Bool), this_, zid, whatami, is_qos, is_multicast, is_shm)
 end
 
 function zc_internal_encoding_from_data(this_, data)
@@ -4734,12 +9158,136 @@ function zc_locality_default()
     ccall((:zc_locality_default, libzenohc), z_locality_t, ())
 end
 
+function zc_shm_client_list_add_client(this_, client)
+    ccall((:zc_shm_client_list_add_client, libzenohc), z_result_t, (Ptr{zc_loaned_shm_client_list_t}, Ptr{z_moved_shm_client_t}), this_, client)
+end
+
+function zc_shm_client_list_new(this_)
+    ccall((:zc_shm_client_list_new, libzenohc), Cvoid, (Ptr{zc_owned_shm_client_list_t},), this_)
+end
+
 function zc_stop_z_runtime()
     ccall((:zc_stop_z_runtime, libzenohc), Cvoid, ())
 end
 
 function zc_try_init_log_from_env()
     ccall((:zc_try_init_log_from_env, libzenohc), Cvoid, ())
+end
+
+function ze_advanced_publisher_cache_options_default(this_)
+    ccall((:ze_advanced_publisher_cache_options_default, libzenohc), Cvoid, (Ptr{ze_advanced_publisher_cache_options_t},), this_)
+end
+
+function ze_advanced_publisher_declare_background_matching_listener(publisher, callback)
+    ccall((:ze_advanced_publisher_declare_background_matching_listener, libzenohc), z_result_t, (Ptr{ze_loaned_advanced_publisher_t}, Ptr{z_moved_closure_matching_status_t}), publisher, callback)
+end
+
+function ze_advanced_publisher_declare_matching_listener(publisher, matching_listener, callback)
+    ccall((:ze_advanced_publisher_declare_matching_listener, libzenohc), z_result_t, (Ptr{ze_loaned_advanced_publisher_t}, Ptr{z_owned_matching_listener_t}, Ptr{z_moved_closure_matching_status_t}), publisher, matching_listener, callback)
+end
+
+function ze_advanced_publisher_delete(publisher, options)
+    ccall((:ze_advanced_publisher_delete, libzenohc), z_result_t, (Ptr{ze_loaned_advanced_publisher_t}, Ptr{ze_advanced_publisher_delete_options_t}), publisher, options)
+end
+
+function ze_advanced_publisher_delete_options_default(this_)
+    ccall((:ze_advanced_publisher_delete_options_default, libzenohc), Cvoid, (Ptr{ze_advanced_publisher_delete_options_t},), this_)
+end
+
+function ze_advanced_publisher_get_matching_status(this_, matching_status)
+    ccall((:ze_advanced_publisher_get_matching_status, libzenohc), z_result_t, (Ptr{ze_loaned_advanced_publisher_t}, Ptr{z_matching_status_t}), this_, matching_status)
+end
+
+function ze_advanced_publisher_id(publisher)
+    ccall((:ze_advanced_publisher_id, libzenohc), z_entity_global_id_t, (Ptr{ze_loaned_advanced_publisher_t},), publisher)
+end
+
+function ze_advanced_publisher_keyexpr(publisher)
+    ccall((:ze_advanced_publisher_keyexpr, libzenohc), Ptr{z_loaned_keyexpr_t}, (Ptr{ze_loaned_advanced_publisher_t},), publisher)
+end
+
+function ze_advanced_publisher_options_default(this_)
+    ccall((:ze_advanced_publisher_options_default, libzenohc), Cvoid, (Ptr{ze_advanced_publisher_options_t},), this_)
+end
+
+function ze_advanced_publisher_put(this_, payload, options)
+    ccall((:ze_advanced_publisher_put, libzenohc), z_result_t, (Ptr{ze_loaned_advanced_publisher_t}, Ptr{z_moved_bytes_t}, Ptr{ze_advanced_publisher_put_options_t}), this_, payload, options)
+end
+
+function ze_advanced_publisher_put_options_default(this_)
+    ccall((:ze_advanced_publisher_put_options_default, libzenohc), Cvoid, (Ptr{ze_advanced_publisher_put_options_t},), this_)
+end
+
+function ze_advanced_publisher_sample_miss_detection_options_default(this_)
+    ccall((:ze_advanced_publisher_sample_miss_detection_options_default, libzenohc), Cvoid, (Ptr{ze_advanced_publisher_sample_miss_detection_options_t},), this_)
+end
+
+function ze_advanced_subscriber_declare_background_sample_miss_listener(subscriber, callback)
+    ccall((:ze_advanced_subscriber_declare_background_sample_miss_listener, libzenohc), z_result_t, (Ptr{ze_loaned_advanced_subscriber_t}, Ptr{ze_moved_closure_miss_t}), subscriber, callback)
+end
+
+function ze_advanced_subscriber_declare_sample_miss_listener(subscriber, sample_miss_listener, callback)
+    ccall((:ze_advanced_subscriber_declare_sample_miss_listener, libzenohc), z_result_t, (Ptr{ze_loaned_advanced_subscriber_t}, Ptr{ze_owned_sample_miss_listener_t}, Ptr{ze_moved_closure_miss_t}), subscriber, sample_miss_listener, callback)
+end
+
+function ze_advanced_subscriber_detect_publishers(subscriber, liveliness_subscriber, callback, options)
+    ccall((:ze_advanced_subscriber_detect_publishers, libzenohc), z_result_t, (Ptr{ze_loaned_advanced_subscriber_t}, Ptr{z_owned_subscriber_t}, Ptr{z_moved_closure_sample_t}, Ptr{z_liveliness_subscriber_options_t}), subscriber, liveliness_subscriber, callback, options)
+end
+
+function ze_advanced_subscriber_detect_publishers_background(subscriber, callback, options)
+    ccall((:ze_advanced_subscriber_detect_publishers_background, libzenohc), z_result_t, (Ptr{ze_loaned_advanced_subscriber_t}, Ptr{z_moved_closure_sample_t}, Ptr{z_liveliness_subscriber_options_t}), subscriber, callback, options)
+end
+
+function ze_advanced_subscriber_history_options_default(this_)
+    ccall((:ze_advanced_subscriber_history_options_default, libzenohc), Cvoid, (Ptr{ze_advanced_subscriber_history_options_t},), this_)
+end
+
+function ze_advanced_subscriber_id(subscriber)
+    ccall((:ze_advanced_subscriber_id, libzenohc), z_entity_global_id_t, (Ptr{ze_loaned_advanced_subscriber_t},), subscriber)
+end
+
+function ze_advanced_subscriber_keyexpr(subscriber)
+    ccall((:ze_advanced_subscriber_keyexpr, libzenohc), Ptr{z_loaned_keyexpr_t}, (Ptr{ze_loaned_advanced_subscriber_t},), subscriber)
+end
+
+function ze_advanced_subscriber_last_sample_miss_detection_options_default(this_)
+    ccall((:ze_advanced_subscriber_last_sample_miss_detection_options_default, libzenohc), Cvoid, (Ptr{ze_advanced_subscriber_last_sample_miss_detection_options_t},), this_)
+end
+
+function ze_advanced_subscriber_options_default(this_)
+    ccall((:ze_advanced_subscriber_options_default, libzenohc), Cvoid, (Ptr{ze_advanced_subscriber_options_t},), this_)
+end
+
+function ze_advanced_subscriber_recovery_options_default(this_)
+    ccall((:ze_advanced_subscriber_recovery_options_default, libzenohc), Cvoid, (Ptr{ze_advanced_subscriber_recovery_options_t},), this_)
+end
+
+function ze_declare_advanced_publisher(session, publisher, key_expr, options)
+    ccall((:ze_declare_advanced_publisher, libzenohc), z_result_t, (Ptr{z_loaned_session_t}, Ptr{ze_owned_advanced_publisher_t}, Ptr{z_loaned_keyexpr_t}, Ptr{ze_advanced_publisher_options_t}), session, publisher, key_expr, options)
+end
+
+function ze_declare_advanced_subscriber(session, subscriber, key_expr, callback, options)
+    ccall((:ze_declare_advanced_subscriber, libzenohc), z_result_t, (Ptr{z_loaned_session_t}, Ptr{ze_owned_advanced_subscriber_t}, Ptr{z_loaned_keyexpr_t}, Ptr{z_moved_closure_sample_t}, Ptr{ze_advanced_subscriber_options_t}), session, subscriber, key_expr, callback, options)
+end
+
+function ze_declare_background_advanced_subscriber(session, key_expr, callback, options)
+    ccall((:ze_declare_background_advanced_subscriber, libzenohc), z_result_t, (Ptr{z_loaned_session_t}, Ptr{z_loaned_keyexpr_t}, Ptr{z_moved_closure_sample_t}, Ptr{ze_advanced_subscriber_options_t}), session, key_expr, callback, options)
+end
+
+function ze_declare_background_publication_cache(session, key_expr, options)
+    ccall((:ze_declare_background_publication_cache, libzenohc), z_result_t, (Ptr{z_loaned_session_t}, Ptr{z_loaned_keyexpr_t}, Ptr{ze_publication_cache_options_t}), session, key_expr, options)
+end
+
+function ze_declare_background_querying_subscriber(session, key_expr, callback, options)
+    ccall((:ze_declare_background_querying_subscriber, libzenohc), z_result_t, (Ptr{z_loaned_session_t}, Ptr{z_loaned_keyexpr_t}, Ptr{z_moved_closure_sample_t}, Ptr{ze_querying_subscriber_options_t}), session, key_expr, callback, options)
+end
+
+function ze_declare_publication_cache(session, pub_cache, key_expr, options)
+    ccall((:ze_declare_publication_cache, libzenohc), z_result_t, (Ptr{z_loaned_session_t}, Ptr{ze_owned_publication_cache_t}, Ptr{z_loaned_keyexpr_t}, Ptr{ze_publication_cache_options_t}), session, pub_cache, key_expr, options)
+end
+
+function ze_declare_querying_subscriber(session, querying_subscriber, key_expr, callback, options)
+    ccall((:ze_declare_querying_subscriber, libzenohc), z_result_t, (Ptr{z_loaned_session_t}, Ptr{ze_owned_querying_subscriber_t}, Ptr{z_loaned_keyexpr_t}, Ptr{z_moved_closure_sample_t}, Ptr{ze_querying_subscriber_options_t}), session, querying_subscriber, key_expr, callback, options)
 end
 
 function ze_deserialize_bool(this_, dst)
@@ -4856,6 +9404,22 @@ end
 
 function ze_deserializer_is_done(this_)
     ccall((:ze_deserializer_is_done, libzenohc), Bool, (Ptr{ze_deserializer_t},), this_)
+end
+
+function ze_publication_cache_keyexpr(this_)
+    ccall((:ze_publication_cache_keyexpr, libzenohc), Ptr{z_loaned_keyexpr_t}, (Ptr{ze_loaned_publication_cache_t},), this_)
+end
+
+function ze_publication_cache_options_default(this_)
+    ccall((:ze_publication_cache_options_default, libzenohc), Cvoid, (Ptr{ze_publication_cache_options_t},), this_)
+end
+
+function ze_querying_subscriber_get(this_, selector, options)
+    ccall((:ze_querying_subscriber_get, libzenohc), z_result_t, (Ptr{ze_loaned_querying_subscriber_t}, Ptr{z_loaned_keyexpr_t}, Ptr{z_get_options_t}), this_, selector, options)
+end
+
+function ze_querying_subscriber_options_default(this_)
+    ccall((:ze_querying_subscriber_options_default, libzenohc), Cvoid, (Ptr{ze_querying_subscriber_options_t},), this_)
 end
 
 function ze_serialize_bool(this_, val)
@@ -4998,11 +9562,37 @@ function ze_serializer_serialize_uint8(this_, val)
     ccall((:ze_serializer_serialize_uint8, libzenohc), z_result_t, (Ptr{ze_loaned_serializer_t}, UInt8), this_, val)
 end
 
+function ze_undeclare_advanced_publisher(this_)
+    ccall((:ze_undeclare_advanced_publisher, libzenohc), z_result_t, (Ptr{ze_moved_advanced_publisher_t},), this_)
+end
+
+function ze_undeclare_advanced_subscriber(this_)
+    ccall((:ze_undeclare_advanced_subscriber, libzenohc), z_result_t, (Ptr{ze_moved_advanced_subscriber_t},), this_)
+end
+
+function ze_undeclare_publication_cache(this_)
+    ccall((:ze_undeclare_publication_cache, libzenohc), z_result_t, (Ptr{ze_moved_publication_cache_t},), this_)
+end
+
+function ze_undeclare_querying_subscriber(this_)
+    ccall((:ze_undeclare_querying_subscriber, libzenohc), z_result_t, (Ptr{ze_moved_querying_subscriber_t},), this_)
+end
+
+function ze_undeclare_sample_miss_listener(this_)
+    ccall((:ze_undeclare_sample_miss_listener, libzenohc), z_result_t, (Ptr{ze_moved_sample_miss_listener_t},), this_)
+end
+
 # typedef void ( * z_closure_drop_callback_t ) ( void * context )
 const z_closure_drop_callback_t = Ptr{Cvoid}
 
 # typedef void ( * z_closure_hello_callback_t ) ( z_loaned_hello_t * hello , void * context )
 const z_closure_hello_callback_t = Ptr{Cvoid}
+
+# typedef void ( * z_closure_link_callback_t ) ( z_loaned_link_t * link , void * context )
+const z_closure_link_callback_t = Ptr{Cvoid}
+
+# typedef void ( * z_closure_link_event_callback_t ) ( z_loaned_link_event_t * event , void * context )
+const z_closure_link_event_callback_t = Ptr{Cvoid}
 
 # typedef void ( * z_closure_matching_status_callback_t ) ( const z_matching_status_t * matching_status , void * context )
 const z_closure_matching_status_callback_t = Ptr{Cvoid}
@@ -5016,11 +9606,20 @@ const z_closure_reply_callback_t = Ptr{Cvoid}
 # typedef void ( * z_closure_sample_callback_t ) ( z_loaned_sample_t * sample , void * context )
 const z_closure_sample_callback_t = Ptr{Cvoid}
 
+# typedef void ( * z_closure_transport_callback_t ) ( z_loaned_transport_t * transport , void * context )
+const z_closure_transport_callback_t = Ptr{Cvoid}
+
+# typedef void ( * z_closure_transport_event_callback_t ) ( z_loaned_transport_event_t * event , void * context )
+const z_closure_transport_event_callback_t = Ptr{Cvoid}
+
 # typedef void ( * z_closure_zid_callback_t ) ( const z_id_t * z_id , void * context )
 const z_closure_zid_callback_t = Ptr{Cvoid}
 
 # typedef void ( * zc_closure_log_callback_t ) ( zc_log_severity_t severity , const z_loaned_string_t * msg , void * context )
 const zc_closure_log_callback_t = Ptr{Cvoid}
+
+# typedef void ( * ze_closure_miss_callback_t ) ( const ze_miss_t * matching_status , void * context )
+const ze_closure_miss_callback_t = Ptr{Cvoid}
 
 function z_malloc(size)
     ccall((:z_malloc, libzenohc), Ptr{Cvoid}, (Csize_t,), size)
@@ -5101,6 +9700,14 @@ const Z_CONFIG_SCOUTING_TIMEOUT_KEY = "scouting/timeout"
 const Z_CONFIG_ADD_TIMESTAMP_KEY = "timestamping/enabled"
 
 const Z_CONFIG_SHARED_MEMORY_KEY = "transport/shared_memory/enabled"
+
+# Skipping MacroDefinition: ALIGN_1_BYTE ( z_alloc_alignment_t { 0 } )
+
+# Skipping MacroDefinition: ALIGN_2_BYTES ( z_alloc_alignment_t { 1 } )
+
+# Skipping MacroDefinition: ALIGN_4_BYTES ( z_alloc_alignment_t { 2 } )
+
+# Skipping MacroDefinition: ALIGN_8_BYTES ( z_alloc_alignment_t { 3 } )
 
 # exports
 const PREFIXES = ["z_", "zc_", "ze_"]
