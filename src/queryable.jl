@@ -286,6 +286,14 @@ Buffered queryable returned by `Queryable(s, k; channel=:fifo|:ring, capacity=N)
 Iterate or use `take!`/`tryrecv!` to consume `Query`s. Iteration
 terminates after `close(qh)`. Blocking recv runs on a libuv worker
 thread, so other Julia tasks (including `close`) run concurrently.
+
+**Iteration finalizes the previous `Query`** at the start of each next-call,
+matching the callback-form behavior. The drop is what sends the final-ack
+the originating `get` is waiting on; without it every reply looks
+timeout-late. As a consequence, don't accumulate queries across iterations
+(`collect(qh)` will yield handles that have already been dropped); reply
+inline and let the loop continue. For deferred handling, use `take!` and
+finalize manually.
 """
 struct QueryableHandler{HType, Mode}
     qable::Base.RefValue{LibZenohC.z_owned_queryable_t}
@@ -316,15 +324,33 @@ function Queryable(s::Session, k::Keyexpr;
     return QueryableHandler{eltype(typeof(handler)), channel}(qable, handler, k)
 end
 
-function Base.iterate(qh::QueryableHandler{H, M}, ::Any=nothing) where {H, M}
+function Base.iterate(qh::QueryableHandler{H, M},
+        prev::Union{Nothing, Query}=nothing) where {H, M}
+    # Drop the previous query before blocking on the next recv. The
+    # z_query_drop is what sends the final-ack the originating get is
+    # waiting on; relying on GC to do this defers the ack until at best
+    # the next allocation cycle, and in test workloads typically until
+    # the query times out — making every reply look 2 s late.
+    #
+    # Mirrors the callback-form Queryable's `wrapped` shim that calls
+    # `finalize(query.q)` immediately after the user's `f` returns.
+    prev === nothing || finalize(prev.q)
     owned = Ref{LibZenohC.z_owned_query_t}()
     rtc = GC.@preserve qh owned _recv(Val(:query), Val(M), _loan(qh.h),
         Base.unsafe_convert(Ptr{LibZenohC.z_owned_query_t}, owned))
-    rtc == LibZenohC.Z_OK && return (Query(owned), nothing)
+    if rtc == LibZenohC.Z_OK
+        q = Query(owned)
+        return (q, q)
+    end
     rtc == LibZenohC.Z_CHANNEL_DISCONNECTED && return nothing
     throw(ZenohError(rtc))
 end
 
+# Unlike `iterate`, `take!` / `tryrecv!` hand the Query out without a
+# follow-on call site where the previous handle can be finalized, so the
+# caller owns its lifetime. To unblock the originating `get` promptly,
+# call `finalize(q.q)` after replying — otherwise the final-ack waits on
+# GC, and the get blocks for its full timeout window.
 function Base.take!(qh::QueryableHandler{H, M}) where {H, M}
     owned = Ref{LibZenohC.z_owned_query_t}()
     rtc = GC.@preserve qh owned _recv(Val(:query), Val(M), _loan(qh.h),
