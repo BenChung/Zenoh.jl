@@ -51,8 +51,26 @@ function _open_callback_sub(declare_fn::F, ::Type{T}, f::Function,
     return T(sub, ctx, async_cond, task, k, false)
 end
 
+# z_subscriber_options_t is a single-field POD with no generated
+# setproperty!; poke the field through the raw pointer (same pattern as
+# z_queryable_options_t in queryable.jl). Returns `nothing` if no
+# user-set fields — caller passes C_NULL to take libzenoh defaults.
+function _make_subscriber_opts(allowed_origin::Union{Nothing, Locality})
+    isnothing(allowed_origin) && return nothing
+    opts = Ref{LibZenohC.z_subscriber_options_t}()
+    LibZenohC.z_subscriber_options_default(opts)
+    p = Base.unsafe_convert(Ptr{LibZenohC.z_subscriber_options_t}, opts)
+    unsafe_store!(Ptr{LibZenohC.z_locality_t}(p + fieldoffset(LibZenohC.z_subscriber_options_t, 1)),
+                  _raw(allowed_origin))
+    return opts
+end
+
+_sub_opts_arg(::Nothing) = C_NULL
+_sub_opts_arg(r::Ref)    = r
+
 """
-    open(f, s::Session, k::Keyexpr; should_close_on_error=true)
+    open(f, s::Session, k::Keyexpr; should_close_on_error=true,
+         allowed_origin=nothing)
 
 Subscribe to keyexpr `k` in session `s`. `f(::Sample)` is invoked on a
 dedicated Julia task for each sample that fits through the single-slot
@@ -63,13 +81,18 @@ ones are dropped silently.
 If `f` throws and `should_close_on_error` is `true`, the dispatcher
 task exits; subsequent samples accumulate (and get overwritten) in
 the cell until `close(sub)` is called.
+
+`allowed_origin` filters which peers' samples are delivered. Accepts a
+`Locality` singleton (`Localities.ANY` / `SESSION_LOCAL` / `REMOTE`).
 """
 function Base.open(f::Function, s::Session, k::Keyexpr;
-        should_close_on_error::Bool=true)
+        should_close_on_error::Bool=true,
+        allowed_origin::Union{Nothing, Locality} = nothing)
+    opts = _make_subscriber_opts(allowed_origin)
     _open_callback_sub(Subscriber, f, k;
             should_close_on_error=should_close_on_error) do sub, closure
-        LibZenohC.z_declare_subscriber(_loan(s), sub, _loan(k),
-            _move(closure), C_NULL)
+        GC.@preserve opts LibZenohC.z_declare_subscriber(_loan(s), sub, _loan(k),
+            _move(closure), _sub_opts_arg(opts))
     end
 end
 

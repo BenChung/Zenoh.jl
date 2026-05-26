@@ -355,8 +355,8 @@ try
             received_keyexpr = Channel{String}(1)
             received_attachment = Channel{Union{Nothing, Zenoh.ZBytes}}(1)
             received_encoding = Channel{Zenoh.Encoding}(1)
-            received_cc = Channel{Zenoh.LibZenohC.z_congestion_control_t}(1)
-            received_prio = Channel{Zenoh.LibZenohC.z_priority_t}(1)
+            received_cc = Channel{Zenoh.CongestionControl}(1)
+            received_prio = Channel{Zenoh.Priority}(1)
             received_express = Channel{Bool}(1)
             received_done = Channel{Bool}(1)
 
@@ -381,8 +381,8 @@ try
             enc = take!(received_encoding)
             @test enc isa Zenoh.Encoding
             @test !isempty(enc.mime)
-            @test take!(received_cc) == Zenoh.LibZenohC.Z_CONGESTION_CONTROL_DEFAULT
-            @test take!(received_prio) == Zenoh.LibZenohC.Z_PRIORITY_DEFAULT
+            @test take!(received_cc) === Zenoh.CongestionControls.DEFAULT
+            @test take!(received_prio) === Zenoh.Priorities.DEFAULT
             @test take!(received_express) isa Bool
         finally
             if !isnothing(sub)
@@ -708,19 +708,144 @@ try
         end
     end
 
-    @timed_testset "Locality" begin
-        @test Zenoh.Locality(:any).v           == Zenoh.LibZenohC.Z_LOCALITY_ANY
-        @test Zenoh.Locality(:session_local).v == Zenoh.LibZenohC.Z_LOCALITY_SESSION_LOCAL
-        @test Zenoh.Locality(:remote).v        == Zenoh.LibZenohC.Z_LOCALITY_REMOTE
-        @test Zenoh.Locality(:default).v       == Zenoh.LibZenohC.z_locality_default()
-        @test_throws MethodError Zenoh.Locality(:bogus)
+    @timed_testset "QoS enums" begin
+        # Singleton-instance identity, subtype relationships, and raw-enum
+        # round-trip for the four bounded QoS enums.
+        @test Zenoh.Localities.ANY           isa Zenoh.Locality
+        @test Zenoh.Localities.SESSION_LOCAL isa Zenoh.Locality
+        @test Zenoh.Localities.REMOTE        isa Zenoh.Locality
+        @test Zenoh.Localities.DEFAULT === Zenoh.Localities.ANY
 
-        @test Zenoh.Locality(:any) == Zenoh.Localities.ANY
-        @test Zenoh.Localities.SESSION_LOCAL == Zenoh.Locality(:session_local)
-        @test Zenoh.Localities.REMOTE.v == Zenoh.LibZenohC.Z_LOCALITY_REMOTE
+        @test Zenoh.Priorities.REAL_TIME        isa Zenoh.Priority
+        @test Zenoh.Priorities.DATA             isa Zenoh.Priority
+        @test Zenoh.Priorities.BACKGROUND       isa Zenoh.Priority
+        @test Zenoh.Priorities.DEFAULT === Zenoh.Priorities.DATA
 
-        @test hash(Zenoh.Locality(:remote)) == hash(Zenoh.Localities.REMOTE)
-        @test occursin(":remote", sprint(show, Zenoh.Localities.REMOTE))
+        @test Zenoh.CongestionControls.BLOCK isa Zenoh.CongestionControl
+        @test Zenoh.CongestionControls.DROP  isa Zenoh.CongestionControl
+        @test Zenoh.CongestionControls.DEFAULT === Zenoh.CongestionControls.DROP
+
+        @test Zenoh.ReplyKeyexprs.ANY            isa Zenoh.ReplyKeyexpr
+        @test Zenoh.ReplyKeyexprs.MATCHING_QUERY isa Zenoh.ReplyKeyexpr
+        @test Zenoh.ReplyKeyexprs.DEFAULT === Zenoh.ReplyKeyexprs.MATCHING_QUERY
+
+        # Singletons survive the raw round-trip.
+        @test Zenoh._priority_from_raw(Zenoh._raw(Zenoh.Priorities.REAL_TIME)) ===
+              Zenoh.Priorities.REAL_TIME
+        @test Zenoh._locality_from_raw(Zenoh._raw(Zenoh.Localities.REMOTE)) ===
+              Zenoh.Localities.REMOTE
+        @test Zenoh._congestion_control_from_raw(Zenoh._raw(Zenoh.CongestionControls.BLOCK)) ===
+              Zenoh.CongestionControls.BLOCK
+        @test Zenoh._reply_keyexpr_from_raw(Zenoh._raw(Zenoh.ReplyKeyexprs.ANY)) ===
+              Zenoh.ReplyKeyexprs.ANY
+
+        @test occursin("Priorities.REAL_TIME",      sprint(show, Zenoh.Priorities.REAL_TIME))
+        @test occursin("Localities.REMOTE",         sprint(show, Zenoh.Localities.REMOTE))
+        @test occursin("CongestionControls.BLOCK",  sprint(show, Zenoh.CongestionControls.BLOCK))
+        @test occursin("ReplyKeyexprs.ANY",         sprint(show, Zenoh.ReplyKeyexprs.ANY))
+    end
+
+    @timed_testset "QoS end-to-end (session put → subscriber)" begin
+        # Session-level put threads the QoS fields onto the wire; verify
+        # the subscriber-side Sample accessors reflect them.
+        c = Zenoh.Config(; str = """{connect: { endpoints: ["tcp/localhost:19148"]}}""")
+        s = open(c)
+        sub = nothing
+        try
+            test_key = Zenoh.Keyexpr("test/qos/end_to_end")
+            received_prio    = Channel{Zenoh.Priority}(1)
+            received_cc      = Channel{Zenoh.CongestionControl}(1)
+            received_express = Channel{Bool}(1)
+            received_done    = Channel{Bool}(1)
+
+            sub = open((sample) -> begin
+                put!(received_prio,    Zenoh.priority(sample))
+                put!(received_cc,      Zenoh.congestion_control(sample))
+                put!(received_express, Zenoh.express(sample))
+                put!(received_done, true)
+            end, s, test_key)
+
+            Zenoh.put(s, test_key, "qos payload";
+                priority           = Zenoh.Priorities.REAL_TIME,
+                congestion_control = Zenoh.CongestionControls.BLOCK,
+                is_express         = true)
+
+            @test take!(received_done)
+            @test take!(received_prio)    === Zenoh.Priorities.REAL_TIME
+            @test take!(received_cc)      === Zenoh.CongestionControls.BLOCK
+            @test take!(received_express) === true
+        finally
+            !isnothing(sub) && close(sub)
+            close(s)
+        end
+    end
+
+    @timed_testset "QoS via Publisher options" begin
+        # Same idea but the QoS lives on the Publisher itself, not on
+        # the per-put call.
+        c = Zenoh.Config(; str = """{connect: { endpoints: ["tcp/localhost:19148"]}}""")
+        s = open(c)
+        sub = nothing
+        pub = nothing
+        try
+            test_key = Zenoh.Keyexpr("test/qos/publisher")
+            received_prio = Channel{Zenoh.Priority}(1)
+            received_cc   = Channel{Zenoh.CongestionControl}(1)
+            received_done = Channel{Bool}(1)
+
+            sub = open((sample) -> begin
+                put!(received_prio, Zenoh.priority(sample))
+                put!(received_cc,   Zenoh.congestion_control(sample))
+                put!(received_done, true)
+            end, s, test_key)
+
+            pub = Zenoh.Publisher(s, test_key;
+                priority           = Zenoh.Priorities.INTERACTIVE_HIGH,
+                congestion_control = Zenoh.CongestionControls.BLOCK)
+            Zenoh.put(pub, "pub qos payload")
+
+            @test take!(received_done)
+            @test take!(received_prio) === Zenoh.Priorities.INTERACTIVE_HIGH
+            @test take!(received_cc)   === Zenoh.CongestionControls.BLOCK
+        finally
+            !isnothing(sub) && close(sub)
+            !isnothing(pub) && close(pub)
+            close(s)
+        end
+    end
+
+    @timed_testset "Subscriber allowed_origin" begin
+        # Same-session puts are session-local. A subscriber with
+        # allowed_origin=REMOTE should not receive them. Use a tryrecv-style
+        # negative check.
+        c = Zenoh.Config(; str = """{connect: { endpoints: ["tcp/localhost:19148"]}}""")
+        s = open(c)
+        sh_remote = nothing
+        sh_any    = nothing
+        try
+            test_key = Zenoh.Keyexpr("test/qos/locality")
+            sh_remote = open(s, test_key; channel=:fifo, capacity=4,
+                             allowed_origin=Zenoh.Localities.REMOTE)
+            sh_any    = open(s, test_key; channel=:fifo, capacity=4,
+                             allowed_origin=Zenoh.Localities.ANY)
+            sleep(0.1)
+
+            Zenoh.put(s, test_key, "hello")
+
+            # The :any subscriber receives the message.
+            smp = take!(sh_any)
+            @test Zenoh.keyexpr(smp) == "test/qos/locality"
+
+            # The :remote subscriber must not — session-local origin is
+            # filtered out. Give libzenohc a generous window to deliver
+            # before asserting absence.
+            sleep(0.3)
+            @test Zenoh.tryrecv!(sh_remote) === nothing
+        finally
+            !isnothing(sh_remote) && close(sh_remote)
+            !isnothing(sh_any)    && close(sh_any)
+            close(s)
+        end
     end
 
     @timed_testset "Queryable (channel) round-trip" begin
@@ -993,6 +1118,186 @@ try
             !isnothing(sub) && close(sub)
             !isnothing(ml)  && close(ml)
             !isnothing(pub) && close(pub)
+            close(s2)
+            close(s1)
+        end
+    end
+
+    @timed_testset "Querier (channel) round-trip" begin
+        # Two sessions through the same router: queryable on s1, querier on s2.
+        c1 = Zenoh.Config(; str = """{connect: { endpoints: ["tcp/localhost:19148"]}}""")
+        c2 = Zenoh.Config(; str = """{connect: { endpoints: ["tcp/localhost:19148"]}}""")
+        s1 = open(c1)
+        s2 = open(c2)
+        qh = nothing
+        qrr = nothing
+        srv = nothing
+        try
+            test_key = Zenoh.Keyexpr("test/querier/channel")
+            qh = Zenoh.Queryable(s1, test_key; channel=:fifo, capacity=8,
+                                 complete=true, allowed_origin=Zenoh.Localities.ANY)
+
+            seen_params = Channel{String}(4)
+            seen_keyexpr = Channel{String}(4)
+            srv = @async begin
+                for query in qh
+                    put!(seen_keyexpr, Zenoh.keyexpr(query))
+                    put!(seen_params,  Zenoh.parameters(query))
+                    Zenoh.reply(query, "querier-pong";
+                        encoding=Zenoh.Encodings.TEXT_PLAIN)
+                end
+            end
+
+            sleep(0.2)  # let the router learn about the queryable
+
+            qrr = Zenoh.Querier(s2, test_key;
+                target=:all, consolidation=:none, timeout_ms=2000)
+
+            @test Zenoh.keyexpr(qrr) == "test/querier/channel"
+
+            replies = collect(Zenoh.get(qrr, "k1=v1&k2=v2"))
+            ok_replies = filter(Zenoh.is_ok, replies)
+            @test length(ok_replies) >= 1
+
+            smp = Zenoh.sample(ok_replies[1])
+            @test Zenoh.keyexpr(smp) == "test/querier/channel"
+            open(Zenoh.payload(smp), Val(:read)) do io
+                @test read(io, String) == "querier-pong"
+            end
+            @test Zenoh.encoding(smp) == Zenoh.Encodings.TEXT_PLAIN
+
+            @test take!(seen_keyexpr) == "test/querier/channel"
+            @test take!(seen_params)  == "k1=v1&k2=v2"
+        finally
+            !isnothing(qrr) && close(qrr)
+            !isnothing(qh)  && close(qh)
+            !isnothing(srv) && wait(srv)
+            close(s2)
+            close(s1)
+        end
+    end
+
+    @timed_testset "Querier repeated queries reuse declared options" begin
+        c1 = Zenoh.Config(; str = """{connect: { endpoints: ["tcp/localhost:19148"]}}""")
+        c2 = Zenoh.Config(; str = """{connect: { endpoints: ["tcp/localhost:19148"]}}""")
+        s1 = open(c1)
+        s2 = open(c2)
+        qh = nothing
+        qrr = nothing
+        srv = nothing
+        try
+            test_key = Zenoh.Keyexpr("test/querier/repeated")
+            qh = Zenoh.Queryable(s1, test_key; channel=:fifo, capacity=8)
+            srv = @async begin
+                for query in qh
+                    Zenoh.reply(query, "ack-" * Zenoh.parameters(query))
+                end
+            end
+            sleep(0.2)
+
+            qrr = Zenoh.Querier(s2, test_key; timeout_ms=2000)
+
+            for i in 1:3
+                replies = collect(Zenoh.get(qrr, "i=$i"))
+                ok = filter(Zenoh.is_ok, replies)
+                @test length(ok) >= 1
+                open(Zenoh.payload(Zenoh.sample(ok[1])), Val(:read)) do io
+                    @test read(io, String) == "ack-i=$i"
+                end
+            end
+        finally
+            !isnothing(qrr) && close(qrr)
+            !isnothing(qh)  && close(qh)
+            !isnothing(srv) && wait(srv)
+            close(s2)
+            close(s1)
+        end
+    end
+
+    @timed_testset "Querier (callback) round-trip" begin
+        c1 = Zenoh.Config(; str = """{connect: { endpoints: ["tcp/localhost:19148"]}}""")
+        c2 = Zenoh.Config(; str = """{connect: { endpoints: ["tcp/localhost:19148"]}}""")
+        s1 = open(c1)
+        s2 = open(c2)
+        qh = nothing
+        qrr = nothing
+        srv = nothing
+        try
+            test_key = Zenoh.Keyexpr("test/querier/callback")
+            qh = Zenoh.Queryable(s1, test_key; channel=:fifo, capacity=8)
+            srv = @async begin
+                for query in qh
+                    Zenoh.reply(query, "cb-pong")
+                end
+            end
+            sleep(0.2)
+
+            qrr = Zenoh.Querier(s2, test_key; timeout_ms=2000)
+            received = Channel{String}(4)
+            Zenoh.get(qrr, "x=1") do reply
+                if Zenoh.is_ok(reply)
+                    open(Zenoh.payload(Zenoh.sample(reply)), Val(:read)) do io
+                        put!(received, read(io, String))
+                    end
+                end
+            end
+            @test take!(received) == "cb-pong"
+        finally
+            !isnothing(qrr) && close(qrr)
+            !isnothing(qh)  && close(qh)
+            !isnothing(srv) && wait(srv)
+            close(s2)
+            close(s1)
+        end
+    end
+
+    @timed_testset "Querier MatchingListener + matching_status" begin
+        c1 = Zenoh.Config(; str = """{connect: { endpoints: ["tcp/localhost:19148"]}}""")
+        c2 = Zenoh.Config(; str = """{connect: { endpoints: ["tcp/localhost:19148"]}}""")
+        s1 = open(c1)
+        s2 = open(c2)
+        qrr = nothing
+        ml  = nothing
+        qh  = nothing
+        srv = nothing
+        try
+            k = Zenoh.Keyexpr("test/querier/matching")
+            qrr = Zenoh.Querier(s1, k)
+
+            events = Channel{Bool}(16)
+            ml = Zenoh.MatchingListener(qrr) do matching
+                put!(events, matching)
+            end
+
+            # No queryable yet — poll reports false.
+            @test Zenoh.matching_status(qrr) == false
+
+            # Queryable arrives → poll flips to true; a `true` event appears.
+            qh = Zenoh.Queryable(s2, k; channel=:fifo, capacity=4)
+            srv = @async begin
+                for _ in qh
+                    # ignore queries — this test cares about matching, not replies
+                end
+            end
+            sleep(0.2)
+            @test Zenoh.matching_status(qrr) == true
+            arrivals = Bool[]
+            while isready(events); push!(arrivals, take!(events)); end
+            @test true in arrivals
+
+            # Queryable leaves → poll flips back; a `false` event appears.
+            close(qh); qh = nothing
+            !isnothing(srv) && wait(srv); srv = nothing
+            sleep(0.2)
+            @test Zenoh.matching_status(qrr) == false
+            departures = Bool[]
+            while isready(events); push!(departures, take!(events)); end
+            @test false in departures
+        finally
+            !isnothing(qh)  && close(qh)
+            !isnothing(srv) && wait(srv)
+            !isnothing(ml)  && close(ml)
+            !isnothing(qrr) && close(qrr)
             close(s2)
             close(s1)
         end

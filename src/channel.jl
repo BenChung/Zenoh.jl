@@ -181,31 +181,21 @@ _consolidation(::Val{:monotonic}) = LibZenohC.z_query_consolidation_monotonic()
 _consolidation(::Val{:latest})    = LibZenohC.z_query_consolidation_latest()
 _consolidation(s::Symbol) = _consolidation(Val(s))
 
-"""
-    get(s::Session, k::Keyexpr, parameters=""; kwargs...) -> GetHandler
-
-Issue a query on key expression `k`, returning a `GetHandler` over the
-replies. Iterate it to consume each `Reply`.
-
-Keyword arguments:
-- `channel`     — `:fifo` (default) or `:ring`
-- `capacity`    — channel buffer size (default 16)
-- `target`      — `:best_matching`, `:all`, `:all_complete`
-- `consolidation` — `:auto`, `:none`, `:monotonic`, `:latest`
-- `timeout_ms`  — request timeout in milliseconds (`0` = no timeout)
-- `payload`     — optional payload bytes (anything `ZBytes` accepts)
-- `encoding`    — payload encoding (`Encoding`, MIME, or string)
-- `attachment`  — optional attachment bytes
-"""
-function get(s::Session, k::Keyexpr, parameters::AbstractString="";
-        channel::Symbol = :fifo,
-        capacity::Integer = 16,
+# Populate a Ref{z_get_options_t} from the shared `get` kwargs. Returns
+# `(opts, payload_bytes, attach_bytes, enc_ref)`; callers GC.@preserve
+# the three trailing values across the z_get call.
+function _make_get_opts(;
         target::Union{Nothing, Symbol} = nothing,
         consolidation::Union{Nothing, Symbol} = nothing,
         timeout_ms::Integer = 0,
         payload = nothing,
         encoding::Union{Nothing, Encoding, AbstractString, Base.MIME} = nothing,
-        attachment = nothing)
+        attachment = nothing,
+        congestion_control::Union{Nothing, CongestionControl} = nothing,
+        priority::Union{Nothing, Priority}                    = nothing,
+        is_express::Union{Nothing, Bool}                      = nothing,
+        allowed_destination::Union{Nothing, Locality}         = nothing,
+        accept_replies::Union{Nothing, ReplyKeyexpr}          = nothing)
     opts = Ref{LibZenohC.z_get_options_t}()
     LibZenohC.z_get_options_default(opts)
     optsP = Base.unsafe_convert(Ptr{LibZenohC.z_get_options_t}, opts)
@@ -219,6 +209,42 @@ function get(s::Session, k::Keyexpr, parameters::AbstractString="";
     isnothing(payload_bytes) || (optsP.payload    = _move(payload_bytes))
     isnothing(attach_bytes)  || (optsP.attachment = _move(attach_bytes))
     isnothing(enc_ref)       || (optsP.encoding   = _move(enc_ref))
+
+    isnothing(congestion_control)  || (optsP.congestion_control  = _raw(congestion_control))
+    isnothing(priority)            || (optsP.priority            = _raw(priority))
+    isnothing(is_express)          || (optsP.is_express          = is_express)
+    isnothing(allowed_destination) || (optsP.allowed_destination = _raw(allowed_destination))
+    isnothing(accept_replies)      || (optsP.accept_replies      = _raw(accept_replies))
+
+    return opts, payload_bytes, attach_bytes, enc_ref
+end
+
+"""
+    get(s::Session, k::Keyexpr, parameters=""; kwargs...) -> GetHandler
+
+Issue a query on key expression `k`, returning a `GetHandler` over the
+replies. Iterate it to consume each `Reply`.
+
+Keyword arguments:
+- `channel`            — `:fifo` (default) or `:ring`
+- `capacity`           — channel buffer size (default 16)
+- `target`             — `:best_matching`, `:all`, `:all_complete`
+- `consolidation`      — `:auto`, `:none`, `:monotonic`, `:latest`
+- `timeout_ms`         — request timeout in milliseconds (`0` = no timeout)
+- `payload`            — optional payload bytes (anything `ZBytes` accepts)
+- `encoding`           — payload encoding (`Encoding`, MIME, or string)
+- `attachment`         — optional attachment bytes
+- `congestion_control` — `CongestionControls.BLOCK` or `DROP`
+- `priority`           — `Priorities.REAL_TIME` … `BACKGROUND`
+- `is_express`         — `Bool`; bypass batching
+- `allowed_destination`— `Localities.ANY` / `SESSION_LOCAL` / `REMOTE`
+- `accept_replies`     — `ReplyKeyexprs.ANY` or `MATCHING_QUERY`
+"""
+function get(s::Session, k::Keyexpr, parameters::AbstractString="";
+        channel::Symbol = :fifo,
+        capacity::Integer = 16,
+        kwargs...)
+    opts, payload_bytes, attach_bytes, enc_ref = _make_get_opts(; kwargs...)
 
     closure = _make_closure_ref(Val(:reply))
     handler = _new_channel(Val(:reply), Val(channel), closure, capacity)

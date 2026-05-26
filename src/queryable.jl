@@ -76,7 +76,9 @@ accepts_replies(q::Query) = LibZenohC.z_query_accepts_replies(_loaned_query(q))
 function _make_reply_opts(;
         encoding=nothing, timestamp::Union{Nothing, ZTimestamp}=nothing,
         attachment=nothing,
-        congestion_control=nothing, priority=nothing, is_express=nothing)
+        congestion_control::Union{Nothing, CongestionControl}=nothing,
+        priority::Union{Nothing, Priority}=nothing,
+        is_express::Union{Nothing, Bool}=nothing)
     opts = Ref{LibZenohC.z_query_reply_options_t}()
     LibZenohC.z_query_reply_options_default(opts)
     optsP = Base.unsafe_convert(Ptr{LibZenohC.z_query_reply_options_t}, opts)
@@ -85,8 +87,8 @@ function _make_reply_opts(;
     isnothing(timestamp)          || (optsP.timestamp          = Base.unsafe_convert(Ptr{LibZenohC.z_timestamp_t}, timestamp.ts))
     isnothing(enc_ref)            || (optsP.encoding           = _move(enc_ref))
     isnothing(attach_ref)         || (optsP.attachment         = _move(attach_ref))
-    isnothing(congestion_control) || (optsP.congestion_control = congestion_control)
-    isnothing(priority)           || (optsP.priority           = priority)
+    isnothing(congestion_control) || (optsP.congestion_control = _raw(congestion_control))
+    isnothing(priority)           || (optsP.priority           = _raw(priority))
     isnothing(is_express)         || (optsP.is_express         = is_express)
     return opts, enc_ref, attach_ref
 end
@@ -103,15 +105,17 @@ end
 function _make_reply_del_opts(;
         timestamp::Union{Nothing, ZTimestamp}=nothing,
         attachment=nothing,
-        congestion_control=nothing, priority=nothing, is_express=nothing)
+        congestion_control::Union{Nothing, CongestionControl}=nothing,
+        priority::Union{Nothing, Priority}=nothing,
+        is_express::Union{Nothing, Bool}=nothing)
     opts = Ref{LibZenohC.z_query_reply_del_options_t}()
     LibZenohC.z_query_reply_del_options_default(opts)
     optsP = Base.unsafe_convert(Ptr{LibZenohC.z_query_reply_del_options_t}, opts)
     attach_ref = isnothing(attachment) ? nothing : ZBytes(attachment)
     isnothing(timestamp)          || (optsP.timestamp          = Base.unsafe_convert(Ptr{LibZenohC.z_timestamp_t}, timestamp.ts))
     isnothing(attach_ref)         || (optsP.attachment         = _move(attach_ref))
-    isnothing(congestion_control) || (optsP.congestion_control = congestion_control)
-    isnothing(priority)           || (optsP.priority           = priority)
+    isnothing(congestion_control) || (optsP.congestion_control = _raw(congestion_control))
+    isnothing(priority)           || (optsP.priority           = _raw(priority))
     isnothing(is_express)         || (optsP.is_express         = is_express)
     return opts, attach_ref
 end
@@ -173,18 +177,19 @@ end
 # structs with only POD fields and no padding gaps). Reconstructing the
 # struct via its Julia constructor can clobber padding bytes that
 # libzenohc depends on, so we poke fields through the raw pointer.
-function _make_queryable_opts(; complete=nothing, allowed_origin=nothing)
+function _make_queryable_opts(;
+        complete::Union{Nothing, Bool} = nothing,
+        allowed_origin::Union{Nothing, Locality} = nothing)
     opts = Ref{LibZenohC.z_queryable_options_t}()
     LibZenohC.z_queryable_options_default(opts)
     p = Base.unsafe_convert(Ptr{LibZenohC.z_queryable_options_t}, opts)
     if !isnothing(complete)
         unsafe_store!(Ptr{Bool}(p + fieldoffset(LibZenohC.z_queryable_options_t, 1)),
-                      Bool(complete))
+                      complete)
     end
     if !isnothing(allowed_origin)
-        loc_v = allowed_origin isa Locality ? allowed_origin.v : Locality(allowed_origin).v
         unsafe_store!(Ptr{LibZenohC.z_locality_t}(p + fieldoffset(LibZenohC.z_queryable_options_t, 2)),
-                      loc_v)
+                      _raw(allowed_origin))
     end
     return opts
 end
@@ -223,8 +228,8 @@ originating `get` is waiting on; deferring reply work past the callback
 will see the query revoked. For deferred handling, use the channel form
 `Queryable(s, k; channel=:fifo)`.
 
-`allowed_origin` accepts a `Locality` or a symbol (`:any`,
-`:session_local`, `:remote`, `:default`).
+`allowed_origin` accepts a `Locality` singleton (`Localities.ANY`,
+`SESSION_LOCAL`, `REMOTE`).
 """
 function Queryable(f::Function, s::Session, k::Keyexpr;
         complete=nothing, allowed_origin=nothing,
@@ -295,8 +300,8 @@ end
 Declare a queryable with a buffered channel handler. Returns a
 `QueryableHandler`. Iterate / `take!` / `tryrecv!` to receive `Query`s.
 
-`allowed_origin` accepts a `Locality` or a symbol (`:any`,
-`:session_local`, `:remote`, `:default`).
+`allowed_origin` accepts a `Locality` singleton (`Localities.ANY`,
+`SESSION_LOCAL`, `REMOTE`).
 """
 function Queryable(s::Session, k::Keyexpr;
         channel::Symbol = :fifo, capacity::Integer = 16,

@@ -26,32 +26,16 @@ responded or the timeout elapsed). For queued semantics use the
 channel form: `get(s, k, params; channel=:fifo|:ring, capacity=N)`.
 
 Keyword arguments mirror the channel-form `get`: `target`,
-`consolidation`, `timeout_ms`, `payload`, `encoding`, `attachment`.
-Plus `should_close_on_error::Bool=true` — if `f` throws, abandon the
-remaining replies.
+`consolidation`, `timeout_ms`, `payload`, `encoding`, `attachment`,
+`congestion_control`, `priority`, `is_express`, `allowed_destination`,
+`accept_replies`. Plus `should_close_on_error::Bool=true` — if `f`
+throws, abandon the remaining replies.
 """
 function get(f::Function, s::Session, k::Keyexpr,
         parameters::AbstractString="";
         should_close_on_error::Bool=true,
-        target::Union{Nothing, Symbol} = nothing,
-        consolidation::Union{Nothing, Symbol} = nothing,
-        timeout_ms::Integer = 0,
-        payload = nothing,
-        encoding::Union{Nothing, Encoding, AbstractString, Base.MIME} = nothing,
-        attachment = nothing)
-    opts = Ref{LibZenohC.z_get_options_t}()
-    LibZenohC.z_get_options_default(opts)
-    optsP = Base.unsafe_convert(Ptr{LibZenohC.z_get_options_t}, opts)
-    isnothing(target)        || (optsP.target        = _query_target(target))
-    isnothing(consolidation) || (optsP.consolidation = _consolidation(consolidation))
-    timeout_ms > 0           && (optsP.timeout_ms    = UInt64(timeout_ms))
-
-    payload_bytes = isnothing(payload)    ? nothing : ZBytes(payload)
-    attach_bytes  = isnothing(attachment) ? nothing : ZBytes(attachment)
-    enc_ref       = isnothing(encoding)   ? nothing : _to_owned_encoding(_as_encoding(encoding))
-    isnothing(payload_bytes) || (optsP.payload    = _move(payload_bytes))
-    isnothing(attach_bytes)  || (optsP.attachment = _move(attach_bytes))
-    isnothing(enc_ref)       || (optsP.encoding   = _move(enc_ref))
+        kwargs...)
+    opts, payload_bytes, attach_bytes, enc_ref = _make_get_opts(; kwargs...)
 
     params = String(parameters)
     _callback_get(f; should_close_on_error=should_close_on_error) do closure

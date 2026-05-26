@@ -15,7 +15,7 @@ function _string(r::Ref{LibZenohC.z_owned_string_t})
 end
 
 include("encoding.jl")
-include("locality.jl")
+include("qos.jl")
 
 const _refs_in_flight = Dict{UInt64, Ref}()
 const _refptr = Ref{UInt64}(0)
@@ -289,11 +289,25 @@ _loaned_sample(s::Sample{Base.RefValue{LibZenohC.z_owned_sample_t}}) = _loan(s.s
 struct Publisher
     pub::Base.RefValue{LibZenohC.z_owned_publisher_t}
     keyexpr::Keyexpr # we have to keep this for GC
-    function Publisher(s::Session, k::Keyexpr)
+    function Publisher(s::Session, k::Keyexpr;
+            encoding::Union{Nothing, Encoding, AbstractString, Base.MIME} = nothing,
+            congestion_control::Union{Nothing, CongestionControl}         = nothing,
+            priority::Union{Nothing, Priority}                            = nothing,
+            is_express::Union{Nothing, Bool}                              = nothing,
+            allowed_destination::Union{Nothing, Locality}                 = nothing)
         opts = Ref{LibZenohC.z_publisher_options_t}()
         LibZenohC.z_publisher_options_default(opts)
+        optsP = Base.unsafe_convert(Ptr{LibZenohC.z_publisher_options_t}, opts)
+
+        enc_ref = isnothing(encoding) ? nothing : _to_owned_encoding(_as_encoding(encoding))
+        isnothing(enc_ref)             || (optsP.encoding            = _move(enc_ref))
+        isnothing(congestion_control)  || (optsP.congestion_control  = _raw(congestion_control))
+        isnothing(priority)            || (optsP.priority            = _raw(priority))
+        isnothing(is_express)          || (optsP.is_express          = is_express)
+        isnothing(allowed_destination) || (optsP.allowed_destination = _raw(allowed_destination))
+
         pub = Ref{LibZenohC.z_owned_publisher_t}()
-        ret = LibZenohC.z_declare_publisher(_loan(s), pub, _loan(k), opts)
+        ret = GC.@preserve enc_ref LibZenohC.z_declare_publisher(_loan(s), pub, _loan(k), opts)
         _handle_result(ret)
         return new(pub, k)
     end
@@ -337,38 +351,55 @@ function _init_put_opts(::Type{LibZenohC.z_put_options_t})
 end
 
 const _Put_Types = Union{LibZenohC.z_publisher_put_options_t, LibZenohC.z_put_options_t}
+
+# Shared between session-level put (z_put_options_t) and publisher put
+# (z_publisher_put_options_t): timestamp, encoding, attachment. QoS
+# fields (congestion_control / priority / is_express / allowed_destination)
+# only exist on z_put_options_t — at the publisher level they're baked
+# into the Publisher itself — so the session-level `put` handles those
+# inline rather than threading another conditional through this helper.
 function _make_put_opts(::Type{T};
         timestamp::Union{Nothing, ZTimestamp} = nothing,
-        encoding::Union{Nothing, Encoding, AbstractString, Base.MIME} = nothing) where T <: _Put_Types
-    opts = _init_put_opts(T)
+        encoding::Union{Nothing, Encoding, AbstractString, Base.MIME} = nothing,
+        attachment = nothing) where T <: _Put_Types
+    opts  = _init_put_opts(T)
+    optsP = Base.unsafe_convert(Ptr{T}, opts)
 
-    if !isnothing(timestamp)
-        Base.unsafe_convert(Ptr{T}, opts).timestamp = Base.unsafe_convert(Ptr{LibZenohC.z_timestamp_t}, timestamp.ts)
-    end
+    enc_ref    = isnothing(encoding)   ? nothing : _to_owned_encoding(_as_encoding(encoding))
+    attach_ref = isnothing(attachment) ? nothing : ZBytes(attachment)
 
-    enc_ref = isnothing(encoding) ? nothing : _to_owned_encoding(_as_encoding(encoding))
-    if !isnothing(enc_ref)
-        Base.unsafe_convert(Ptr{T}, opts).encoding = _move(enc_ref)
-    end
+    isnothing(timestamp)  || (optsP.timestamp  = Base.unsafe_convert(Ptr{LibZenohC.z_timestamp_t}, timestamp.ts))
+    isnothing(enc_ref)    || (optsP.encoding   = _move(enc_ref))
+    isnothing(attach_ref) || (optsP.attachment = _move(attach_ref))
 
-    return opts, enc_ref
+    return opts, enc_ref, attach_ref
 end
 
 function put(p::Publisher, payload; kwargs...)
     bytes = ZBytes(payload)
-    opts, enc_ref = _make_put_opts(LibZenohC.z_publisher_put_options_t; kwargs...)
+    opts, enc_ref, attach_ref = _make_put_opts(LibZenohC.z_publisher_put_options_t; kwargs...)
 
-    GC.@preserve enc_ref begin
+    GC.@preserve enc_ref attach_ref begin
         rtc = LibZenohC.z_publisher_put(_loan(p.pub), _move(bytes), opts)
         _handle_result(rtc)
     end
 end
 
-function put(s::Session, k::Keyexpr, payload; kwargs...)
+function put(s::Session, k::Keyexpr, payload;
+        congestion_control::Union{Nothing, CongestionControl} = nothing,
+        priority::Union{Nothing, Priority}                    = nothing,
+        is_express::Union{Nothing, Bool}                      = nothing,
+        allowed_destination::Union{Nothing, Locality}         = nothing,
+        kwargs...)
     bytes = ZBytes(payload)
-    opts, enc_ref = _make_put_opts(LibZenohC.z_put_options_t; kwargs...)
+    opts, enc_ref, attach_ref = _make_put_opts(LibZenohC.z_put_options_t; kwargs...)
+    optsP = Base.unsafe_convert(Ptr{LibZenohC.z_put_options_t}, opts)
+    isnothing(congestion_control)  || (optsP.congestion_control  = _raw(congestion_control))
+    isnothing(priority)            || (optsP.priority            = _raw(priority))
+    isnothing(is_express)          || (optsP.is_express          = is_express)
+    isnothing(allowed_destination) || (optsP.allowed_destination = _raw(allowed_destination))
 
-    GC.@preserve enc_ref begin
+    GC.@preserve enc_ref attach_ref begin
         rtc = LibZenohC.z_put(_loan(s), _loan(k), _move(bytes), opts)
         _handle_result(rtc)
     end
@@ -406,8 +437,8 @@ function attachment(s::Sample)
     end
 end
 
-congestion_control(s::Sample) = LibZenohC.z_sample_congestion_control(_loaned_sample(s))
-priority(s::Sample) = LibZenohC.z_sample_priority(_loaned_sample(s))
+congestion_control(s::Sample) = _congestion_control_from_raw(LibZenohC.z_sample_congestion_control(_loaned_sample(s)))
+priority(s::Sample) = _priority_from_raw(LibZenohC.z_sample_priority(_loaned_sample(s)))
 express(s::Sample) = LibZenohC.z_sample_express(_loaned_sample(s))
 
 function encoding(s::Sample)
@@ -421,12 +452,16 @@ Subscribe to keyexpr `k` in session `s` with a buffered channel handler.
 Returns a `SubscriberHandler` that can be iterated or polled with
 `take!`/`tryrecv!`. Call `close(sub)` to undeclare the subscriber;
 iteration will then terminate once buffered samples are drained.
+
+`allowed_origin` accepts a `Locality` singleton (`Localities.ANY` etc.).
 """
 function Base.open(s::Session, k::Keyexpr;
-        channel::Symbol = :fifo, capacity::Integer = 16)
+        channel::Symbol = :fifo, capacity::Integer = 16,
+        allowed_origin::Union{Nothing, Locality} = nothing)
+    opts = _make_subscriber_opts(allowed_origin)
     _open_buffered_sub(SubscriberHandler, k, channel, capacity) do sub, closure
-        LibZenohC.z_declare_subscriber(_loan(s), sub, _loan(k),
-            _move(closure), C_NULL)
+        GC.@preserve opts LibZenohC.z_declare_subscriber(_loan(s), sub, _loan(k),
+            _move(closure), _sub_opts_arg(opts))
     end
 end
 
@@ -434,6 +469,7 @@ include("subscriber.jl")
 include("get_callback.jl")
 include("queryable.jl")
 include("liveliness.jl")
+include("querier.jl")
 include("matching.jl")
 include("scout.jl")
 
