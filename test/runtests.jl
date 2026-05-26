@@ -1302,6 +1302,154 @@ try
             close(s1)
         end
     end
+
+    @timed_testset "SHM provider basics" timeout=20 begin
+        p = Zenoh.ShmProvider(1 << 20)
+        @test p isa Zenoh.ShmProvider
+        @test p isa Zenoh.AbstractShmProvider
+        # available/defragment/garbage_collect should return non-negative Ints.
+        @test Zenoh.available(p) >= 0
+        @test Zenoh.defragment(p) >= 0
+        @test Zenoh.garbage_collect(p) >= 0
+    end
+
+    @timed_testset "SHM allocation" timeout=20 begin
+        p = Zenoh.ShmProvider(1 << 20)
+        buf = Zenoh.alloc(p, 256)
+        @test buf isa Zenoh.ShmBufMut
+        @test length(buf) == 256
+        @test Zenoh.data(buf) isa Memory{UInt8}
+        # Write through the Memory view; round-trip the bytes.
+        for i in 1:256
+            Zenoh.data(buf)[i] = UInt8((i - 1) % 256)
+        end
+        @test Zenoh.data(buf)[1] == 0x00
+        @test Zenoh.data(buf)[16] == 0x0f
+
+        # Aligned alloc. The built-in POSIX provider only supports align=1
+        # (its layout has fixed alignment); larger alignments surface as a
+        # ShmLayoutError(:provider_incompatible). align=1 is a no-op and
+        # always succeeds.
+        buf2 = Zenoh.alloc(p, 128; align=1)
+        @test length(buf2) == 128
+        @test buf2 isa Zenoh.ShmBufMut
+        @test_throws Zenoh.ShmLayoutError Zenoh.alloc(p, 128; align=64)
+
+        # Blocking alloc.
+        buf3 = Zenoh.alloc(p, 64; blocking=true)
+        @test length(buf3) == 64
+
+        # copyto! convenience.
+        src = collect(UInt8(1):UInt8(32))
+        buf4 = Zenoh.alloc(p, 32)
+        copyto!(buf4, src)
+        @test Vector{UInt8}(Zenoh.data(buf4)[1:32]) == src
+
+        # Alignment validation.
+        @test_throws ArgumentError Zenoh.alloc(p, 16; align=3)  # not power of 2
+    end
+
+    @timed_testset "SHM client storage + open kwarg" timeout=20 begin
+        cs = Zenoh.default_shm_clients()
+        @test cs isa Zenoh.ShmClientStorage
+        c = Zenoh.Config(; str = """{connect: { endpoints: ["tcp/localhost:19148"]}}""")
+        s = open(c; shm_clients = cs)
+        try
+            @test isopen(s)
+        finally
+            close(s)
+        end
+    end
+
+    @timed_testset "SHM round-trip publish/subscribe" timeout=20 begin
+        c1 = Zenoh.Config(; str = """{connect: { endpoints: ["tcp/localhost:19148"]}}""")
+        c2 = Zenoh.Config(; str = """{connect: { endpoints: ["tcp/localhost:19148"]}}""")
+        s_pub = open(c1; shm_clients = Zenoh.default_shm_clients())
+        s_sub = open(c2; shm_clients = Zenoh.default_shm_clients())
+        sleep(0.5)
+
+        received = Channel{Vector{UInt8}}(4)
+        was_shm  = Channel{Bool}(4)
+        test_key = Zenoh.Keyexpr("shm/roundtrip")
+        sub = open(s_sub, test_key) do sample
+            zb = Zenoh.payload(sample)
+            shm = Zenoh.as_shm(zb)
+            if shm !== nothing
+                put!(was_shm, true)
+                put!(received, Vector{UInt8}(Zenoh.data(shm)))
+            else
+                put!(was_shm, false)
+                bytes = Vector{UInt8}(undef, length(zb))
+                open(zb, Val(:read)) do io
+                    readbytes!(io, bytes, length(zb))
+                end
+                put!(received, bytes)
+            end
+        end
+        sleep(0.5)
+        try
+            provider = Zenoh.ShmProvider(1 << 20)
+
+            # (a) Manual: alloc, fill, publish a ShmBufMut directly.
+            msg_a = UInt8[10, 20, 30, 40, 50, 60, 70]
+            buf = Zenoh.alloc(provider, length(msg_a))
+            copyto!(buf, msg_a)
+            Zenoh.put(s_pub, test_key, buf)
+            @test take!(received) == msg_a
+            @test take!(was_shm)  # round-trip went through SHM
+
+            # (b) High-level: put with shm= kwarg, AbstractVector{UInt8} data.
+            msg_b = collect(UInt8(100):UInt8(200))
+            Zenoh.put(s_pub, test_key, msg_b; shm = provider)
+            @test take!(received) == msg_b
+            @test take!(was_shm)
+
+            # (c) High-level with a String.
+            msg_c = "hello-shm-world"
+            Zenoh.put(s_pub, test_key, msg_c; shm = provider)
+            @test String(take!(received)) == msg_c
+            @test take!(was_shm)
+
+            # (d) is_shm predicate on a Vector-backed (non-SHM) payload.
+            # Non-shm round-trip — make sure as_shm correctly says "no" and
+            # is_shm returns false.
+            Zenoh.put(s_pub, test_key, UInt8[1, 2, 3])
+            @test take!(received) == UInt8[1, 2, 3]
+            @test !take!(was_shm)
+        finally
+            close(sub)
+            close(s_pub)
+            close(s_sub)
+        end
+    end
+
+    @timed_testset "SHM session-derived provider" timeout=20 begin
+        # `z_obtain_shm_provider` requires the session to be configured with
+        # a session-side SHM provider, which the default test config does not
+        # enable. Verify the API is callable and either succeeds (provider
+        # returned) or surfaces a ZenohError — exercising the error path is
+        # what matters for v1 coverage of this entrypoint.
+        c = Zenoh.Config(; str = """{connect: { endpoints: ["tcp/localhost:19148"]}}""")
+        s = open(c; shm_clients = Zenoh.default_shm_clients())
+        try
+            local provider
+            try
+                provider = Zenoh.obtain_shm_provider(s)
+                @test provider isa Zenoh.SharedShmProvider
+                @test provider isa Zenoh.AbstractShmProvider
+            catch e
+                @test e isa Zenoh.ZenohError
+            end
+        finally
+            close(s)
+        end
+    end
+
+    @timed_testset "SHM cleanup_orphaned_shm_segments" timeout=10 begin
+        # Idempotent / safe to call.
+        @test Zenoh.cleanup_orphaned_shm_segments() === nothing
+    end
+
 finally
     kill(router)
 end

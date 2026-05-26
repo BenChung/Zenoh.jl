@@ -64,6 +64,11 @@ struct ZBytes{R <: Union{Base.RefValue{LibZenohC.z_owned_bytes_t}, Ptr{LibZenohC
         _handle_result(rtc)
         return out
     end
+    # Wrap a z_owned_bytes_t that an external builder (z_bytes_from_shm,
+    # z_bytes_from_shm_mut, …) has already populated. shm.jl uses this.
+    function ZBytes(b::Base.RefValue{LibZenohC.z_owned_bytes_t}, ::Val{:owned})
+        return new{Base.RefValue{LibZenohC.z_owned_bytes_t}}(b)
+    end
 end
 Base.length(z::ZBytes{Base.RefValue{LibZenohC.z_owned_bytes_t}}) = LibZenohC.z_bytes_len(_loan(z.b))
 Base.length(z::ZBytes{Ptr{LibZenohC.z_loaned_bytes_t}}) = LibZenohC.z_bytes_len(z.b)
@@ -375,8 +380,12 @@ function _make_put_opts(::Type{T};
     return opts, enc_ref, attach_ref
 end
 
-function put(p::Publisher, payload; kwargs...)
-    bytes = ZBytes(payload)
+# Default for `shm=` kwarg routing. shm.jl specializes on AbstractShmProvider
+# to alloc + copy into SHM and produce an SHM-backed ZBytes.
+_shm_zbytes(::Nothing, payload) = ZBytes(payload)
+
+function put(p::Publisher, payload; shm=nothing, kwargs...)
+    bytes = _shm_zbytes(shm, payload)
     opts, enc_ref, attach_ref = _make_put_opts(LibZenohC.z_publisher_put_options_t; kwargs...)
 
     GC.@preserve enc_ref attach_ref begin
@@ -386,12 +395,13 @@ function put(p::Publisher, payload; kwargs...)
 end
 
 function put(s::Session, k::Keyexpr, payload;
+        shm=nothing,
         congestion_control::Union{Nothing, CongestionControl} = nothing,
         priority::Union{Nothing, Priority}                    = nothing,
         is_express::Union{Nothing, Bool}                      = nothing,
         allowed_destination::Union{Nothing, Locality}         = nothing,
         kwargs...)
-    bytes = ZBytes(payload)
+    bytes = _shm_zbytes(shm, payload)
     opts, enc_ref, attach_ref = _make_put_opts(LibZenohC.z_put_options_t; kwargs...)
     optsP = Base.unsafe_convert(Ptr{LibZenohC.z_put_options_t}, opts)
     isnothing(congestion_control)  || (optsP.congestion_control  = _raw(congestion_control))
@@ -472,6 +482,8 @@ include("liveliness.jl")
 include("querier.jl")
 include("matching.jl")
 include("scout.jl")
+include("shm_client.jl")
+include("shm.jl")
 
 export scout, Hello, whatami_string
 

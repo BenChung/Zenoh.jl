@@ -5,18 +5,24 @@ end
 
 """
 Opens a new Zenoh session with a given Zenoh config. Copies the config.
+
+Pass `shm_clients=default_shm_clients()` (or a custom `ShmClientStorage`) to
+open the session with shared-memory client support enabled. When unset, the
+session is opened without SHM clients — same behavior as zenoh-c's `z_open`.
 """
-function Base.open(c::Config)
+function Base.open(c::Config; shm_clients=nothing)
     s = Session()
     cfg_copy = Ref{LibZenohC.z_owned_config_t}()
     LibZenohC.z_config_clone(cfg_copy, LibZenohC.z_config_loan(c.c))
 
-    # there's no options?
-    opts = Ref{LibZenohC.z_open_options_t}()
-    LibZenohC.z_open_options_default(opts)
-
-    result = LibZenohC.z_open(s.s, _move(cfg_copy), opts)
-    _handle_result(result)
+    if shm_clients === nothing
+        opts = Ref{LibZenohC.z_open_options_t}()
+        LibZenohC.z_open_options_default(opts)
+        _handle_result(LibZenohC.z_open(s.s, _move(cfg_copy), opts))
+    else
+        _handle_result(LibZenohC.z_open_with_custom_shm_clients(
+            s.s, _move(cfg_copy), _loan(shm_clients.s)))
+    end
 
     finalizer(s -> _drop(_move(s)), s.s)
     return s
