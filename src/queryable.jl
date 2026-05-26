@@ -217,6 +217,12 @@ Declare a queryable on keyexpr `k` and invoke `f(::Query)` on a dedicated
 Julia task per query that fits through the single-slot handoff. See
 `Queryable` docs for the latest-wins caveat.
 
+`f` must finish replying (or choose not to) before returning. The `Query`
+handle is dropped as soon as `f` returns, which sends the final-ack the
+originating `get` is waiting on; deferring reply work past the callback
+will see the query revoked. For deferred handling, use the channel form
+`Queryable(s, k; channel=:fifo)`.
+
 `allowed_origin` accepts a `Locality` or a symbol (`:any`,
 `:session_local`, `:remote`, `:default`).
 """
@@ -234,7 +240,19 @@ function Queryable(f::Function, s::Session, k::Keyexpr;
         _handle_result(rtc)
     end
 
-    task = Threads.@spawn consume(f, Query, ctx, async_cond, should_close_on_error)
+    # Wrap the user's callback so we drop the owned Query as soon as it
+    # returns. The Query handle being dropped is what tells libzenohc
+    # "this queryable is done with this query"; if we leave that to GC,
+    # the originating get sees no final-ack and blocks for the entire
+    # timeout window even when the reply arrived in microseconds.
+    wrapped = function (query::Query)
+        try
+            f(query)
+        finally
+            finalize(query.q)
+        end
+    end
+    task = Threads.@spawn consume(wrapped, Query, ctx, async_cond, should_close_on_error)
     return Queryable(qable, ctx, async_cond, task, k, false)
 end
 

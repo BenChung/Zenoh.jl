@@ -751,7 +751,7 @@ try
             # path (one from the local queryable + one routed back), so
             # we filter for ok replies and assert at least one.
             replies = collect(Zenoh.get(s, test_key, "k1=v1&k2=v2";
-                timeout_ms=2000))
+                timeout_ms=500))
             ok_replies = filter(Zenoh.is_ok, replies)
             @test length(ok_replies) >= 1
             smp = Zenoh.sample(ok_replies[1])
@@ -832,7 +832,7 @@ try
             end
             sleep(0.2)
 
-            collect(Zenoh.get(s, test_key; timeout_ms=2000,
+            collect(Zenoh.get(s, test_key; timeout_ms=500,
                 payload="req-payload",
                 encoding=Zenoh.Encodings.APPLICATION_JSON,
                 attachment="req-meta"))
