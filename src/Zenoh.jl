@@ -267,22 +267,6 @@ struct Keyexpr
     end
 end
 
-"""
-    kexpr"key/expr"
-    kexpr"key//expr"c
-
-String macro for constructing a `Keyexpr`. The `c` flag opts into
-autocanonicalization (collapses `//` and similar).
-"""
-macro kexpr_str(s, flags="")
-    autocanonize = false
-    for c in flags
-        c == 'c' || throw(ArgumentError("unknown kexpr flag '$c'; only 'c' is supported"))
-        autocanonize = true
-    end
-    return :(Keyexpr($s; autocanonize=$autocanonize))
-end
-
 export Keyexpr, @kexpr_str
 export includes, intersects, concat, canonize, is_canon
 

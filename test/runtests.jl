@@ -120,6 +120,44 @@ try
         @test_throws Zenoh.ZenohError Zenoh.canonize("")
     end
 
+    @timed_testset "Keyexpr interpolation" begin
+        x = Zenoh.Keyexpr("a/b")
+        y = Zenoh.Keyexpr("c/d")
+
+        # $name
+        @test String(kexpr"$x") == "a/b"
+        @test String(kexpr"prefix/$x") == "prefix/a/b"
+        @test String(kexpr"$x/suffix") == "a/b/suffix"
+        @test String(kexpr"prefix/$x/suffix") == "prefix/a/b/suffix"
+
+        # Multiple interpolations
+        @test String(kexpr"$x/$y") == "a/b/c/d"
+        @test String(kexpr"head/$x/mid/$y/tail") == "head/a/b/mid/c/d/tail"
+
+        # $(expr) explicit form, and a complex expression
+        @test String(kexpr"prefix/$(x)/suffix") == "prefix/a/b/suffix"
+        @test String(kexpr"$(Zenoh.concat(x, \"/extra\"))") == "a/b/extra"
+
+        # AbstractString interpolation
+        seg = "plain"
+        @test String(kexpr"prefix/$seg/suffix") == "prefix/plain/suffix"
+
+        # Autocanonize flag through interpolation
+        ks = Zenoh.Keyexpr("**")
+        @test String(kexpr"$ks/**/leaf"c) == "**/leaf"
+        # Without the flag, the assembled `**/**` is non-canonical → throw.
+        @test_throws Zenoh.ZenohError kexpr"$ks/**/leaf"
+
+        # Parse-time errors surface as ArgumentError from @macroexpand.
+        @test_throws ArgumentError @macroexpand kexpr"trailing$"
+        @test_throws ArgumentError @macroexpand kexpr"$(unbalanced"
+        @test_throws ArgumentError @macroexpand kexpr"bad$!literal"
+
+        # Round-tripped through interpolation == direct construction.
+        @test kexpr"$x" == x
+        @test kexpr"prefix/$x" == Zenoh.Keyexpr("prefix/a/b")
+    end
+
     @timed_testset "ZBytes iteration" begin
         # Covers the iterate(::ZBytes) path, which must loan the underlying
         # z_owned_bytes_t before calling z_bytes_get_slice_iterator.

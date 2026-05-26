@@ -1,7 +1,6 @@
 # Matching listener — notification when a publisher's keyexpr starts /
-# stops having subscribers (or, eventually, when a querier's keyexpr
-# starts/stops having queryables; currently blocked on the `Querier`
-# wrapper, which isn't in the codebase yet).
+# stops having subscribers, or when a querier's keyexpr starts / stops
+# having matching queryables.
 #
 # Payload type is the POD `z_matching_status_t` (one Bool), so this
 # rides the `:pod`-shape `@closure_kind :matching_status` in
@@ -11,11 +10,12 @@
 #
 # ═══════════════════════════════════════════════════════════════════════
 # TODO(background-matching-listener):
-# `z_publisher_declare_background_matching_listener` and the querier
-# counterpart aren't wrapped. Same reasoning as background liveliness /
-# background queryable: no handle is returned, so the closure lifetime
-# must be tied to the publisher (or session); a small follow-up once a
-# unified background-callback pin policy exists.
+# `z_publisher_declare_background_matching_listener` and
+# `z_querier_declare_background_matching_listener` aren't wrapped. Same
+# reasoning as background liveliness / background queryable: no handle
+# is returned, so the closure lifetime must be tied to the publisher /
+# querier (or session); a small follow-up once a unified
+# background-callback pin policy exists.
 # ═══════════════════════════════════════════════════════════════════════
 
 # `wrap` for the consume() loop: extract the Bool from the POD struct.
@@ -26,12 +26,15 @@
     MatchingListener
 
 Foreground matching listener returned by
-`MatchingListener(f, pub::Publisher)`. `f(::Bool)` is invoked on a
-dedicated Julia task each time the publisher's set of matching
-subscribers transitions between empty and non-empty:
+`MatchingListener(f, ::Publisher)` or `MatchingListener(f, ::Querier)`.
+`f(::Bool)` is invoked on a dedicated Julia task each time the matching
+set transitions between empty and non-empty:
 
-- `f(true)`  — at least one matching subscriber now exists
-- `f(false)` — the last matching subscriber went away
+- `f(true)`  — at least one matching peer now exists
+- `f(false)` — the last matching peer went away
+
+For a Publisher the peers are subscribers; for a Querier they are
+queryables.
 
 Single-slot latest-wins semantics — see [`Subscriber`](@ref). For
 matching status this is rarely a concern (transitions are infrequent
@@ -46,24 +49,18 @@ mutable struct MatchingListener
     ctx::CallbackCtx{LibZenohC.z_matching_status_t}
     async_cond::Base.AsyncCondition
     task::Task
-    pub::Publisher  # GC pin — listener references the publisher internally
+    target::Union{Publisher, Querier}  # GC pin — listener references the target internally
     closed::Bool
 end
 
-"""
-    MatchingListener(f, pub::Publisher; should_close_on_error=true)
-
-Declare a matching listener on `pub` and invoke `f(::Bool)` on each
-matching-status transition. See [`MatchingListener`](@ref) for
-semantics.
-"""
-function MatchingListener(f::Function, pub::Publisher;
-        should_close_on_error::Bool=true)
+# Shared declare-and-spawn machinery. `declare_fn(handle, closure) -> rtc`
+# picks the C entrypoint (publisher vs querier variant).
+function _matching_listener_setup(declare_fn::F, f::Function, target,
+        should_close_on_error::Bool) where F
     ctx, async_cond, closure = _setup_callback(Val(:matching_status))
 
     handle = Ref{LibZenohC.z_owned_matching_listener_t}()
-    rtc = GC.@preserve ctx LibZenohC.z_publisher_declare_matching_listener(
-        _loan(pub.pub), handle, _move(closure))
+    rtc = GC.@preserve ctx declare_fn(handle, closure)
     if rtc != LibZenohC.Z_OK
         # declare failed before the closure was installed → its drop
         # trampoline fires via z_closure_matching_status's own
@@ -74,7 +71,37 @@ function MatchingListener(f::Function, pub::Publisher;
 
     task = Threads.@spawn consume(f, _matching_unwrap, ctx, async_cond,
         should_close_on_error)
-    return MatchingListener(handle, ctx, async_cond, task, pub, false)
+    return MatchingListener(handle, ctx, async_cond, task, target, false)
+end
+
+"""
+    MatchingListener(f, pub::Publisher; should_close_on_error=true)
+
+Declare a matching listener on `pub` and invoke `f(::Bool)` on each
+matching-status transition (i.e. when a subscriber arrives or the last
+subscriber departs). See [`MatchingListener`](@ref) for semantics.
+"""
+function MatchingListener(f::Function, pub::Publisher;
+        should_close_on_error::Bool=true)
+    _matching_listener_setup(f, pub, should_close_on_error) do handle, closure
+        LibZenohC.z_publisher_declare_matching_listener(
+            _loan(pub.pub), handle, _move(closure))
+    end
+end
+
+"""
+    MatchingListener(f, q::Querier; should_close_on_error=true)
+
+Declare a matching listener on querier `q` and invoke `f(::Bool)` on
+each matching-status transition (i.e. when a queryable arrives or the
+last queryable departs). See [`MatchingListener`](@ref) for semantics.
+"""
+function MatchingListener(f::Function, q::Querier;
+        should_close_on_error::Bool=true)
+    _matching_listener_setup(f, q, should_close_on_error) do handle, closure
+        LibZenohC.z_querier_declare_matching_listener(
+            _loan(q), handle, _move(closure))
+    end
 end
 
 function Base.close(ml::MatchingListener)
@@ -103,6 +130,20 @@ notifications use [`MatchingListener`](@ref).
 function matching_status(pub::Publisher)
     status = Ref{LibZenohC.z_matching_status_t}()
     rtc = LibZenohC.z_publisher_get_matching_status(_loan(pub.pub), status)
+    _handle_result(rtc)
+    return status[].matching
+end
+
+"""
+    matching_status(q::Querier) -> Bool
+
+One-shot poll of `q`'s current matching status. Returns `true` iff at
+least one matching queryable exists right now. For change notifications
+use [`MatchingListener`](@ref).
+"""
+function matching_status(q::Querier)
+    status = Ref{LibZenohC.z_matching_status_t}()
+    rtc = LibZenohC.z_querier_get_matching_status(_loan(q), status)
     _handle_result(rtc)
     return status[].matching
 end
