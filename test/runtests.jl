@@ -768,7 +768,7 @@ try
             Zenoh.put(s, test_key, "qos payload";
                 priority           = Zenoh.Priorities.REAL_TIME,
                 congestion_control = Zenoh.CongestionControls.BLOCK,
-                is_express         = true)
+                express            = true)
 
             @test take!(received_done)
             @test take!(received_prio)    === Zenoh.Priorities.REAL_TIME
@@ -1300,6 +1300,57 @@ try
             !isnothing(qrr) && close(qrr)
             close(s2)
             close(s1)
+        end
+    end
+
+    @timed_testset "Typed query target/consolidation + Querier QoS singletons" begin
+        # The QueryTargets / QueryConsolidations singletons are the canonical
+        # form; verify they thread through both get and Querier, and that the
+        # Querier accepts the same CongestionControl/Priority/Locality
+        # singletons every other entrypoint takes (this path previously took
+        # raw enum values and broke on the singletons).
+        c = Zenoh.Config(; str = """{connect: { endpoints: ["tcp/localhost:19148"]}}""")
+        s = open(c)
+        qrr = nothing
+        try
+            # get with typed singletons against a key no one answers.
+            h = Zenoh.get(s, Zenoh.Keyexpr("test/typed/none");
+                target=Zenoh.QueryTargets.ALL,
+                consolidation=Zenoh.QueryConsolidations.NONE,
+                timeout_ms=200)
+            @test collect(h) isa Vector{Zenoh.Reply}
+
+            # Symbol shorthand and singleton coerce identically.
+            @test Zenoh._as_query_target(Zenoh.QueryTargets.ALL) ==
+                  Zenoh._as_query_target(:all)
+
+            # Querier declared with typed QoS singletons (formerly raw-only).
+            qrr = Zenoh.Querier(s, Zenoh.Keyexpr("test/typed/querier");
+                target=Zenoh.QueryTargets.ALL_COMPLETE,
+                consolidation=Zenoh.QueryConsolidations.LATEST,
+                congestion_control=Zenoh.CongestionControls.BLOCK,
+                priority=Zenoh.Priorities.DATA_HIGH,
+                allowed_destination=Zenoh.Localities.ANY,
+                express=true, timeout_ms=200)
+            @test Zenoh.keyexpr(qrr) == "test/typed/querier"
+            @test collect(Zenoh.get(qrr)) isa Vector{Zenoh.Reply}
+        finally
+            !isnothing(qrr) && close(qrr)
+            close(s)
+        end
+    end
+
+    @timed_testset "Publisher idempotent close" begin
+        c = Zenoh.Config(; str = """{connect: { endpoints: ["tcp/localhost:19148"]}}""")
+        s = open(c)
+        try
+            pub = Zenoh.Publisher(s, Zenoh.Keyexpr("test/pub/close"))
+            close(pub)
+            @test pub.closed
+            close(pub)  # second close is a no-op, must not throw
+            @test pub.closed
+        finally
+            close(s)
         end
     end
 

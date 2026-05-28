@@ -85,7 +85,7 @@ function _make_reply_opts(;
         attachment=nothing,
         congestion_control::Union{Nothing, CongestionControl}=nothing,
         priority::Union{Nothing, Priority}=nothing,
-        is_express::Union{Nothing, Bool}=nothing)
+        express::Union{Nothing, Bool}=nothing)
     opts = Ref{LibZenohC.z_query_reply_options_t}()
     LibZenohC.z_query_reply_options_default(opts)
     optsP = Base.unsafe_convert(Ptr{LibZenohC.z_query_reply_options_t}, opts)
@@ -96,7 +96,7 @@ function _make_reply_opts(;
     isnothing(attach_ref)         || (optsP.attachment         = _move(attach_ref))
     isnothing(congestion_control) || (optsP.congestion_control = _raw(congestion_control))
     isnothing(priority)           || (optsP.priority           = _raw(priority))
-    isnothing(is_express)         || (optsP.is_express         = is_express)
+    isnothing(express)            || (optsP.is_express         = express)
     # `timestamp` is returned so the caller can GC.@preserve it across the
     # reply: optsP.timestamp is a borrowed pointer into the ZTimestamp's
     # Ref (unlike encoding/attachment, which are moved-owned).
@@ -117,7 +117,7 @@ function _make_reply_del_opts(;
         attachment=nothing,
         congestion_control::Union{Nothing, CongestionControl}=nothing,
         priority::Union{Nothing, Priority}=nothing,
-        is_express::Union{Nothing, Bool}=nothing)
+        express::Union{Nothing, Bool}=nothing)
     opts = Ref{LibZenohC.z_query_reply_del_options_t}()
     LibZenohC.z_query_reply_del_options_default(opts)
     optsP = Base.unsafe_convert(Ptr{LibZenohC.z_query_reply_del_options_t}, opts)
@@ -126,7 +126,7 @@ function _make_reply_del_opts(;
     isnothing(attach_ref)         || (optsP.attachment         = _move(attach_ref))
     isnothing(congestion_control) || (optsP.congestion_control = _raw(congestion_control))
     isnothing(priority)           || (optsP.priority           = _raw(priority))
-    isnothing(is_express)         || (optsP.is_express         = is_express)
+    isnothing(express)            || (optsP.is_express         = express)
     # See _make_reply_opts: timestamp is borrowed, returned for preservation.
     return opts, attach_ref, timestamp
 end
@@ -134,20 +134,24 @@ end
 # ── Public reply methods ───────────────────────────────────────────────
 
 """
-    reply(q::Query, payload, k::Keyexpr=Keyexpr(keyexpr(q)); kwargs...)
+    reply(q::Query, payload, k::Keyexpr=<query's keyexpr>; kwargs...)
 
 Send a successful reply to query `q`. `payload` is anything `ZBytes`
 accepts. The keyexpr defaults to the query's own — pass an explicit one
 when serving wildcard keyexprs with per-key resolution.
 
 Keyword arguments: `encoding`, `timestamp`, `attachment`,
-`congestion_control`, `priority`, `is_express`.
+`congestion_control`, `priority`, `express`.
 """
-function reply(q::Query, payload, k::Keyexpr = Keyexpr(keyexpr(q)); kwargs...)
+function reply(q::Query, payload, k::Union{Nothing, Keyexpr} = nothing; kwargs...)
     bytes = ZBytes(payload)
     opts, enc_ref, attach_ref, ts = _make_reply_opts(; kwargs...)
-    GC.@preserve enc_ref attach_ref ts begin
-        rtc = LibZenohC.z_query_reply(_loaned_query(q), _loan(k), _move(bytes), opts)
+    # Default keyexpr: borrow the query's own loaned keyexpr directly rather
+    # than round-tripping it through a Julia String and a fresh owned
+    # Keyexpr. `q` is preserved so that borrowed pointer stays valid.
+    GC.@preserve q k enc_ref attach_ref ts begin
+        ke = isnothing(k) ? LibZenohC.z_query_keyexpr(_loaned_query(q)) : _loan(k)
+        rtc = LibZenohC.z_query_reply(_loaned_query(q), ke, _move(bytes), opts)
         _handle_result(rtc)
     end
 end
@@ -167,17 +171,19 @@ function reply_err(q::Query, payload; kwargs...)
 end
 
 """
-    reply_del(q::Query, k::Keyexpr=Keyexpr(keyexpr(q)); kwargs...)
+    reply_del(q::Query, k::Keyexpr=<query's keyexpr>; kwargs...)
 
 Send a delete-notification reply to query `q`.
 
 Keyword arguments: `timestamp`, `attachment`, `congestion_control`,
-`priority`, `is_express`.
+`priority`, `express`.
 """
-function reply_del(q::Query, k::Keyexpr = Keyexpr(keyexpr(q)); kwargs...)
+function reply_del(q::Query, k::Union{Nothing, Keyexpr} = nothing; kwargs...)
     opts, attach_ref, ts = _make_reply_del_opts(; kwargs...)
-    GC.@preserve attach_ref ts begin
-        rtc = LibZenohC.z_query_reply_del(_loaned_query(q), _loan(k), opts)
+    # See `reply`: borrow the query's own loaned keyexpr by default.
+    GC.@preserve q k attach_ref ts begin
+        ke = isnothing(k) ? LibZenohC.z_query_keyexpr(_loaned_query(q)) : _loan(k)
+        rtc = LibZenohC.z_query_reply_del(_loaned_query(q), ke, opts)
         _handle_result(rtc)
     end
 end
@@ -187,21 +193,14 @@ end
 # z_queryable_options_t has no generated Base.setproperty! (Clang.jl skips
 # structs with only POD fields and no padding gaps). Reconstructing the
 # struct via its Julia constructor can clobber padding bytes that
-# libzenohc depends on, so we poke fields through the raw pointer.
+# libzenohc depends on, so we poke fields at their offset via `_store_field!`.
 function _make_queryable_opts(;
         complete::Union{Nothing, Bool} = nothing,
         allowed_origin::Union{Nothing, Locality} = nothing)
     opts = Ref{LibZenohC.z_queryable_options_t}()
     LibZenohC.z_queryable_options_default(opts)
-    p = Base.unsafe_convert(Ptr{LibZenohC.z_queryable_options_t}, opts)
-    if !isnothing(complete)
-        unsafe_store!(Ptr{Bool}(p + fieldoffset(LibZenohC.z_queryable_options_t, 1)),
-                      complete)
-    end
-    if !isnothing(allowed_origin)
-        unsafe_store!(Ptr{LibZenohC.z_locality_t}(p + fieldoffset(LibZenohC.z_queryable_options_t, 2)),
-                      _raw(allowed_origin))
-    end
+    isnothing(complete)       || _store_field!(opts, 1, complete)
+    isnothing(allowed_origin) || _store_field!(opts, 2, _raw(allowed_origin))
     return opts
 end
 
@@ -272,6 +271,11 @@ function Queryable(f::Function, s::Session, k::Keyexpr;
     return Queryable(qable, ctx, async_cond, task, k, false)
 end
 
+# NB: like the callback Subscriber, the callback Queryable has no GC
+# finalizer — its ctx is reachable only via this struct and the consume
+# task (a reference cycle), and teardown must `wait(task)`, neither of
+# which a finalizer can do safely. Relies on explicit `close()`. The
+# channel QueryableHandler (no ctx/task) does get a finalizer.
 function Base.close(q::Queryable)
     q.closed && return
     q.closed = true
@@ -332,6 +336,10 @@ function Queryable(s::Session, k::Keyexpr;
     rtc = GC.@preserve opts LibZenohC.z_declare_queryable(
         _loan(s), qable, _loan(k), _move(closure), opts)
     _handle_result(rtc)
+    # GC safety net: drop the queryable if the handler is collected without
+    # an explicit close(). libzenoh owns the channel here (no ctx/task), so
+    # a plain drop is safe; no-op once close() has moved the handle out.
+    finalizer(x -> LibZenohC.z_queryable_drop(_move(x)), qable)
     return QueryableHandler{eltype(typeof(handler)), channel}(qable, handler, k)
 end
 
@@ -384,3 +392,6 @@ end
 
 Base.IteratorSize(::Type{<:QueryableHandler}) = Base.SizeUnknown()
 Base.eltype(::Type{<:QueryableHandler}) = Query
+
+export Query, Queryable, QueryableHandler, reply, reply_err, reply_del,
+    parameters, accepts_replies

@@ -22,19 +22,19 @@ _loaned_reply(r::Reply{Base.RefValue{LibZenohC.z_owned_reply_t}}) = _loan(r.r)
 is_ok(r::Reply) = LibZenohC.z_reply_is_ok(_loaned_reply(r))
 
 function sample(r::Reply)
-    is_ok(r) || error("Reply is error; check is_ok(r) first")
+    is_ok(r) || throw(ArgumentError("Reply is an error; check is_ok(r) first"))
     # Pass `r` as owner: the returned Sample borrows from the reply, so it
     # must keep the reply alive while reachable.
     return Sample(LibZenohC.z_reply_ok(_loaned_reply(r)), r)
 end
 
 function error_payload(r::Reply)
-    is_ok(r) && error("Reply is ok; no error payload")
+    is_ok(r) && throw(ArgumentError("Reply is ok; no error payload"))
     return ZBytes(LibZenohC.z_reply_err_payload(LibZenohC.z_reply_err(_loaned_reply(r))), r)
 end
 
 function error_encoding(r::Reply)
-    is_ok(r) && error("Reply is ok; no error encoding")
+    is_ok(r) && throw(ArgumentError("Reply is ok; no error encoding"))
     return _from_loaned_encoding(LibZenohC.z_reply_err_encoding(LibZenohC.z_reply_err(_loaned_reply(r))))
 end
 
@@ -92,6 +92,11 @@ function _open_buffered_sub(declare_fn::F, ::Type{T}, k::Keyexpr,
     sub = Ref{LibZenohC.z_owned_subscriber_t}()
     rtc = declare_fn(sub, closure)
     _handle_result(rtc)
+    # GC safety net: drop the subscriber if the handler is collected without
+    # an explicit close(). Unlike the callback form there is no ctx/task
+    # here (libzenoh owns the channel), so a plain drop is safe; no-op once
+    # close() has moved the handle out.
+    finalizer(s -> LibZenohC.z_subscriber_drop(_move(s)), sub)
     return T{eltype(typeof(handler)), channel}(sub, handler, k)
 end
 
@@ -183,26 +188,37 @@ _consolidation(::Val{:monotonic}) = LibZenohC.z_query_consolidation_monotonic()
 _consolidation(::Val{:latest})    = LibZenohC.z_query_consolidation_latest()
 _consolidation(s::Symbol) = _consolidation(Val(s))
 
+# Coerce a `target=` / `consolidation=` argument to its raw libzenoh
+# value. Accepts the typed singletons (`QueryTargets.ALL`) — the
+# canonical, dispatch-checked form, consistent with the QoS enums — or a
+# `Symbol` shorthand (`:all`), mirroring how `_as_encoding` accepts both
+# an `Encoding` and a bare string.
+_as_query_target(t::QueryTarget) = _raw(t)
+_as_query_target(s::Symbol)      = _query_target(s)
+
+_as_consolidation(c::QueryConsolidation) = _raw(c)
+_as_consolidation(s::Symbol)             = _consolidation(s)
+
 # Populate a Ref{z_get_options_t} from the shared `get` kwargs. Returns
 # `(opts, payload_bytes, attach_bytes, enc_ref)`; callers GC.@preserve
 # the three trailing values across the z_get call.
 function _make_get_opts(;
-        target::Union{Nothing, Symbol} = nothing,
-        consolidation::Union{Nothing, Symbol} = nothing,
+        target::Union{Nothing, QueryTarget, Symbol} = nothing,
+        consolidation::Union{Nothing, QueryConsolidation, Symbol} = nothing,
         timeout_ms::Integer = 0,
         payload = nothing,
         encoding::Union{Nothing, Encoding, AbstractString, Base.MIME} = nothing,
         attachment = nothing,
         congestion_control::Union{Nothing, CongestionControl} = nothing,
         priority::Union{Nothing, Priority}                    = nothing,
-        is_express::Union{Nothing, Bool}                      = nothing,
+        express::Union{Nothing, Bool}                         = nothing,
         allowed_destination::Union{Nothing, Locality}         = nothing,
         accept_replies::Union{Nothing, ReplyKeyexpr}          = nothing)
     opts = Ref{LibZenohC.z_get_options_t}()
     LibZenohC.z_get_options_default(opts)
     optsP = Base.unsafe_convert(Ptr{LibZenohC.z_get_options_t}, opts)
-    isnothing(target)        || (optsP.target        = _query_target(target))
-    isnothing(consolidation) || (optsP.consolidation = _consolidation(consolidation))
+    isnothing(target)        || (optsP.target        = _as_query_target(target))
+    isnothing(consolidation) || (optsP.consolidation = _as_consolidation(consolidation))
     timeout_ms > 0           && (optsP.timeout_ms    = UInt64(timeout_ms))
 
     payload_bytes = isnothing(payload)    ? nothing : ZBytes(payload)
@@ -214,7 +230,7 @@ function _make_get_opts(;
 
     isnothing(congestion_control)  || (optsP.congestion_control  = _raw(congestion_control))
     isnothing(priority)            || (optsP.priority            = _raw(priority))
-    isnothing(is_express)          || (optsP.is_express          = is_express)
+    isnothing(express)             || (optsP.is_express          = express)
     isnothing(allowed_destination) || (optsP.allowed_destination = _raw(allowed_destination))
     isnothing(accept_replies)      || (optsP.accept_replies      = _raw(accept_replies))
 
@@ -230,19 +246,21 @@ replies. Iterate it to consume each `Reply`.
 Keyword arguments:
 - `channel`            — `:fifo` (default) or `:ring`
 - `capacity`           — channel buffer size (default 16)
-- `target`             — `:best_matching`, `:all`, `:all_complete`
-- `consolidation`      — `:auto`, `:none`, `:monotonic`, `:latest`
+- `target`             — `QueryTargets.BEST_MATCHING` / `ALL` / `ALL_COMPLETE`
+                         (or the `:best_matching` / `:all` / `:all_complete` shorthand)
+- `consolidation`      — `QueryConsolidations.AUTO` / `NONE` / `MONOTONIC` / `LATEST`
+                         (or the `:auto` / `:none` / `:monotonic` / `:latest` shorthand)
 - `timeout_ms`         — request timeout in milliseconds (`0` = no timeout)
 - `payload`            — optional payload bytes (anything `ZBytes` accepts)
 - `encoding`           — payload encoding (`Encoding`, MIME, or string)
 - `attachment`         — optional attachment bytes
 - `congestion_control` — `CongestionControls.BLOCK` or `DROP`
 - `priority`           — `Priorities.REAL_TIME` … `BACKGROUND`
-- `is_express`         — `Bool`; bypass batching
+- `express`            — `Bool`; bypass batching
 - `allowed_destination`— `Localities.ANY` / `SESSION_LOCAL` / `REMOTE`
 - `accept_replies`     — `ReplyKeyexprs.ANY` or `MATCHING_QUERY`
 """
-function get(s::Session, k::Keyexpr, parameters::AbstractString="";
+function Base.get(s::Session, k::Keyexpr, parameters::AbstractString="";
         channel::Symbol = :fifo,
         capacity::Integer = 16,
         kwargs...)
@@ -261,3 +279,6 @@ function get(s::Session, k::Keyexpr, parameters::AbstractString="";
 
     return GetHandler{eltype(typeof(handler)), channel}(handler)
 end
+
+export Reply, SubscriberHandler, GetHandler, tryrecv!,
+    is_ok, sample, error_payload, error_encoding

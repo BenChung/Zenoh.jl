@@ -27,11 +27,11 @@ channel form: `get(s, k, params; channel=:fifo|:ring, capacity=N)`.
 
 Keyword arguments mirror the channel-form `get`: `target`,
 `consolidation`, `timeout_ms`, `payload`, `encoding`, `attachment`,
-`congestion_control`, `priority`, `is_express`, `allowed_destination`,
+`congestion_control`, `priority`, `express`, `allowed_destination`,
 `accept_replies`. Plus `should_close_on_error::Bool=true` — if `f`
 throws, abandon the remaining replies.
 """
-function get(f::Function, s::Session, k::Keyexpr,
+function Base.get(f::Function, s::Session, k::Keyexpr,
         parameters::AbstractString="";
         should_close_on_error::Bool=true,
         kwargs...)

@@ -219,3 +219,5 @@ end
 
 function Base.close(z::ZBytesSliceReader)
 end
+
+export ZBytes

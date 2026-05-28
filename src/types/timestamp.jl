@@ -22,3 +22,5 @@ end
 
 zid(z::ZTimestamp) = LibZenohC.z_timestamp_id(z.ts)
 ntp64_time(z::ZTimestamp) = LibZenohC.z_timestamp_ntp64_time(z.ts)
+
+export ZTimestamp, ntp64_time

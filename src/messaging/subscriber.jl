@@ -52,16 +52,14 @@ function _open_callback_sub(declare_fn::F, ::Type{T}, f::Function,
 end
 
 # z_subscriber_options_t is a single-field POD with no generated
-# setproperty!; poke the field through the raw pointer (same pattern as
-# z_queryable_options_t in queryable.jl). Returns `nothing` if no
-# user-set fields — caller passes C_NULL to take libzenoh defaults.
+# setproperty!; poke the field at its offset via `_store_field!` (same
+# pattern as z_queryable_options_t in queryable.jl). Returns `nothing` if
+# no user-set fields — caller passes C_NULL to take libzenoh defaults.
 function _make_subscriber_opts(allowed_origin::Union{Nothing, Locality})
     isnothing(allowed_origin) && return nothing
     opts = Ref{LibZenohC.z_subscriber_options_t}()
     LibZenohC.z_subscriber_options_default(opts)
-    p = Base.unsafe_convert(Ptr{LibZenohC.z_subscriber_options_t}, opts)
-    unsafe_store!(Ptr{LibZenohC.z_locality_t}(p + fieldoffset(LibZenohC.z_subscriber_options_t, 1)),
-                  _raw(allowed_origin))
+    _store_field!(opts, 1, _raw(allowed_origin))
     return opts
 end
 
@@ -114,6 +112,14 @@ function Base.open(s::Session, k::Keyexpr;
     end
 end
 
+# NB: the callback-form subscriber intentionally has no GC finalizer.
+# Its ctx is reachable only through this struct and the consume task
+# (which form a reference cycle), so a finalizer that dropped the C
+# subscriber would race the ctx's own finalization — the drop trampoline
+# touches the ctx, and finalizer ordering within the cycle is undefined.
+# Tearing down also has to `wait(task)`, which a finalizer cannot do. So
+# the callback subscriber relies on an explicit `close()`; the plain
+# channel handler (no ctx/task) does get a finalizer in `_open_buffered_sub`.
 function Base.close(sub::AbstractCallbackSubscriber)
     sub.closed && return
     sub.closed = true
@@ -132,3 +138,5 @@ function Base.close(sub::AbstractCallbackSubscriber)
     # Subscriber becomes unreachable.
     return nothing
 end
+
+export Subscriber

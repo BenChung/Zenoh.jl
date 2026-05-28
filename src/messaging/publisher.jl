@@ -4,14 +4,15 @@
 # `_shm_zbytes` routes the optional `shm=` kwarg through to an
 # SHM-backed ZBytes; specializations live in shm.jl.
 
-struct Publisher
+mutable struct Publisher
     pub::Base.RefValue{LibZenohC.z_owned_publisher_t}
     keyexpr::Keyexpr # we have to keep this for GC
+    closed::Bool
     function Publisher(s::Session, k::Keyexpr;
             encoding::Union{Nothing, Encoding, AbstractString, Base.MIME} = nothing,
             congestion_control::Union{Nothing, CongestionControl}         = nothing,
             priority::Union{Nothing, Priority}                            = nothing,
-            is_express::Union{Nothing, Bool}                              = nothing,
+            express::Union{Nothing, Bool}                                 = nothing,
             allowed_destination::Union{Nothing, Locality}                 = nothing)
         opts = Ref{LibZenohC.z_publisher_options_t}()
         LibZenohC.z_publisher_options_default(opts)
@@ -21,17 +22,23 @@ struct Publisher
         isnothing(enc_ref)             || (optsP.encoding            = _move(enc_ref))
         isnothing(congestion_control)  || (optsP.congestion_control  = _raw(congestion_control))
         isnothing(priority)            || (optsP.priority            = _raw(priority))
-        isnothing(is_express)          || (optsP.is_express          = is_express)
+        isnothing(express)             || (optsP.is_express          = express)
         isnothing(allowed_destination) || (optsP.allowed_destination = _raw(allowed_destination))
 
         pub = Ref{LibZenohC.z_owned_publisher_t}()
         ret = GC.@preserve enc_ref LibZenohC.z_declare_publisher(_loan(s), pub, _loan(k), opts)
         _handle_result(ret)
-        return new(pub, k)
+        # GC safety net: if the Publisher is dropped without an explicit
+        # close(), drop the C handle. No-op once close() has moved it out.
+        finalizer(p -> LibZenohC.z_publisher_drop(_move(p)), pub)
+        return new(pub, k, false)
     end
 end
-function Base.close(s::Publisher)
-    _handle_result(LibZenohC.z_undeclare_publisher(_move(s.pub)))
+function Base.close(p::Publisher)
+    p.closed && return
+    p.closed = true
+    _handle_result(LibZenohC.z_undeclare_publisher(_move(p.pub)))
+    return nothing
 end
 
 function _init_put_opts(::Type{LibZenohC.z_publisher_put_options_t})
@@ -93,7 +100,7 @@ function put(s::Session, k::Keyexpr, payload;
         shm=nothing,
         congestion_control::Union{Nothing, CongestionControl} = nothing,
         priority::Union{Nothing, Priority}                    = nothing,
-        is_express::Union{Nothing, Bool}                      = nothing,
+        express::Union{Nothing, Bool}                         = nothing,
         allowed_destination::Union{Nothing, Locality}         = nothing,
         kwargs...)
     bytes = _shm_zbytes(shm, payload)
@@ -101,7 +108,7 @@ function put(s::Session, k::Keyexpr, payload;
     optsP = Base.unsafe_convert(Ptr{LibZenohC.z_put_options_t}, opts)
     isnothing(congestion_control)  || (optsP.congestion_control  = _raw(congestion_control))
     isnothing(priority)            || (optsP.priority            = _raw(priority))
-    isnothing(is_express)          || (optsP.is_express          = is_express)
+    isnothing(express)             || (optsP.is_express          = express)
     isnothing(allowed_destination) || (optsP.allowed_destination = _raw(allowed_destination))
 
     GC.@preserve enc_ref attach_ref ts begin
@@ -109,3 +116,5 @@ function put(s::Session, k::Keyexpr, payload;
         _handle_result(rtc)
     end
 end
+
+export Publisher, put

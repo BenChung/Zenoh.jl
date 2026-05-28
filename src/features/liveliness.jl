@@ -127,6 +127,18 @@ function LivelinessSubscriberHandler(s::Session, k::Keyexpr;
     end
 end
 
+"""
+    LivelinessSubscriber(s::Session, k::Keyexpr;
+                         channel=:fifo, capacity=16, history=false)
+
+Buffered form, selected by the absence of a callback `f` — the mirror of
+the data plane's `open(f, s, k)` (callback) vs `open(s, k; channel=…)`
+(buffered) split. Returns a [`LivelinessSubscriberHandler`](@ref);
+iterate / `take!` / `tryrecv!` to consume token samples.
+"""
+LivelinessSubscriber(s::Session, k::Keyexpr; kwargs...) =
+    LivelinessSubscriberHandler(s, k; kwargs...)
+
 # --- liveliness_get --------------------------------------------------
 
 """

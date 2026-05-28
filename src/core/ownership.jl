@@ -84,3 +84,19 @@ end
 function _string(r::Ref{LibZenohC.z_owned_string_t})
     return unsafe_string(LibZenohC.z_string_data(_loan(r)), LibZenohC.z_string_len(_loan(r)))
 end
+
+# Poke a single field of an options struct through its raw pointer.
+#
+# Clang.jl skips generating `Base.setproperty!` for gap-free POD option
+# structs (z_queryable_options_t, z_querier_options_t, …), and
+# reconstructing the struct via its Julia constructor can clobber padding
+# bytes libzenohc relies on. So the opts-builders write one field at a
+# time at its `fieldoffset`. `val` must already be the field's exact C
+# type — the store is by `typeof(val)`, so a Julia `Int` where the field
+# is `UInt64` would land the wrong width; convert at the call site (the
+# builders do, e.g. `UInt64(timeout_ms)`).
+@inline function _store_field!(opts::Ref{T}, idx::Integer, val) where {T}
+    p = Base.unsafe_convert(Ptr{T}, opts)
+    unsafe_store!(Ptr{typeof(val)}(p + fieldoffset(T, idx)), val)
+    return nothing
+end

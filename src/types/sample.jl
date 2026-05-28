@@ -64,3 +64,6 @@ express(s::Sample) = LibZenohC.z_sample_express(_loaned_sample(s))
 function encoding(s::Sample)
     return _from_loaned_encoding(LibZenohC.z_sample_encoding(_loaned_sample(s)))
 end
+
+export Sample, payload, keyexpr, encoding, attachment, timestamp, kind,
+    priority, congestion_control, express

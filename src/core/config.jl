@@ -17,7 +17,7 @@ struct Config
         elseif !from_env && isnothing(file) && !isnothing(str)
             res = GC.@preserve str LibZenohC.zc_config_from_str(cfg, pointer(Base.unsafe_convert(Cstring, str)))
         else
-            throw("Only one of env/file/str can be used to configure Zenoh")
+            throw(ArgumentError("Only one of from_env/file/str can be used to configure Zenoh"))
         end
         _handle_result(res)
         finalizer(c -> _drop(_move(c)), cfg)

@@ -13,47 +13,28 @@
 # ═══════════════════════════════════════════════════════════════════════
 
 # z_querier_options_t and z_querier_get_options_t have no generated
-# Base.setproperty! (Clang.jl skips POD structs without padding gaps).
-# Same workaround as `_make_queryable_opts` in queryable.jl: poke fields
-# through the raw pointer via `fieldoffset`.
+# Base.setproperty! (Clang.jl skips POD structs without padding gaps), so
+# fields are poked at their `fieldoffset` via `_store_field!`. The QoS /
+# target / consolidation arguments are the same typed singletons every
+# other entrypoint takes (`Priorities.REAL_TIME`, `QueryTargets.ALL`, …),
+# with the same `Symbol` shorthand for target/consolidation as `get`.
 function _make_querier_opts(;
-        target::Union{Nothing, Symbol} = nothing,
-        consolidation::Union{Nothing, Symbol} = nothing,
-        congestion_control = nothing,
-        is_express::Union{Nothing, Bool} = nothing,
-        allowed_destination::Union{Nothing, Locality, Symbol} = nothing,
-        priority = nothing,
+        target::Union{Nothing, QueryTarget, Symbol} = nothing,
+        consolidation::Union{Nothing, QueryConsolidation, Symbol} = nothing,
+        congestion_control::Union{Nothing, CongestionControl} = nothing,
+        express::Union{Nothing, Bool} = nothing,
+        allowed_destination::Union{Nothing, Locality} = nothing,
+        priority::Union{Nothing, Priority} = nothing,
         timeout_ms::Integer = 0)
     opts = Ref{LibZenohC.z_querier_options_t}()
     LibZenohC.z_querier_options_default(opts)
-    p = Base.unsafe_convert(Ptr{LibZenohC.z_querier_options_t}, opts)
-    T = LibZenohC.z_querier_options_t
-    if !isnothing(target)
-        unsafe_store!(Ptr{LibZenohC.z_query_target_t}(p + fieldoffset(T, 1)),
-                      _query_target(target))
-    end
-    if !isnothing(consolidation)
-        unsafe_store!(Ptr{LibZenohC.z_query_consolidation_t}(p + fieldoffset(T, 2)),
-                      _consolidation(consolidation))
-    end
-    if !isnothing(congestion_control)
-        unsafe_store!(Ptr{LibZenohC.z_congestion_control_t}(p + fieldoffset(T, 3)),
-                      congestion_control)
-    end
-    if !isnothing(is_express)
-        unsafe_store!(Ptr{Bool}(p + fieldoffset(T, 4)), is_express)
-    end
-    if !isnothing(allowed_destination)
-        loc_v = allowed_destination isa Locality ? allowed_destination.v :
-                Locality(allowed_destination).v
-        unsafe_store!(Ptr{LibZenohC.z_locality_t}(p + fieldoffset(T, 5)), loc_v)
-    end
-    if !isnothing(priority)
-        unsafe_store!(Ptr{LibZenohC.z_priority_t}(p + fieldoffset(T, 7)), priority)
-    end
-    if timeout_ms > 0
-        unsafe_store!(Ptr{UInt64}(p + fieldoffset(T, 8)), UInt64(timeout_ms))
-    end
+    isnothing(target)             || _store_field!(opts, 1, _as_query_target(target))
+    isnothing(consolidation)      || _store_field!(opts, 2, _as_consolidation(consolidation))
+    isnothing(congestion_control) || _store_field!(opts, 3, _raw(congestion_control))
+    isnothing(express)            || _store_field!(opts, 4, express)
+    isnothing(allowed_destination)|| _store_field!(opts, 5, _raw(allowed_destination))
+    isnothing(priority)           || _store_field!(opts, 7, _raw(priority))
+    timeout_ms > 0                && _store_field!(opts, 8, UInt64(timeout_ms))
     return opts
 end
 
@@ -63,25 +44,13 @@ function _make_querier_get_opts(;
         attachment = nothing)
     opts = Ref{LibZenohC.z_querier_get_options_t}()
     LibZenohC.z_querier_get_options_default(opts)
-    p = Base.unsafe_convert(Ptr{LibZenohC.z_querier_get_options_t}, opts)
-    T = LibZenohC.z_querier_get_options_t
     payload_bytes = isnothing(payload)    ? nothing : ZBytes(payload)
     attach_bytes  = isnothing(attachment) ? nothing : ZBytes(attachment)
     enc_ref       = isnothing(encoding)   ? nothing : _to_owned_encoding(_as_encoding(encoding))
-    if !isnothing(payload_bytes)
-        unsafe_store!(Ptr{Ptr{LibZenohC.z_moved_bytes_t}}(p + fieldoffset(T, 1)),
-                      _move(payload_bytes))
-    end
-    if !isnothing(enc_ref)
-        unsafe_store!(Ptr{Ptr{LibZenohC.z_moved_encoding_t}}(p + fieldoffset(T, 2)),
-                      _move(enc_ref))
-    end
-    if !isnothing(attach_bytes)
-        # attachment sits after the `source_info` field (index 3) in
-        # z_querier_get_options_t.
-        unsafe_store!(Ptr{Ptr{LibZenohC.z_moved_bytes_t}}(p + fieldoffset(T, 4)),
-                      _move(attach_bytes))
-    end
+    isnothing(payload_bytes) || _store_field!(opts, 1, _move(payload_bytes))
+    isnothing(enc_ref)       || _store_field!(opts, 2, _move(enc_ref))
+    # attachment sits after the `source_info` field (index 3).
+    isnothing(attach_bytes)  || _store_field!(opts, 4, _move(attach_bytes))
     return opts, payload_bytes, attach_bytes, enc_ref
 end
 
@@ -114,12 +83,14 @@ _loan(q::Querier) = _loan(q.querier)
 Declare a querier on session `s` for keyexpr `k`. Keyword arguments are
 baked in as defaults for every subsequent `get(::Querier, …)` call:
 
-- `target`              — `:best_matching`, `:all`, `:all_complete`
-- `consolidation`       — `:auto`, `:none`, `:monotonic`, `:latest`
-- `congestion_control`  — raw `z_congestion_control_t`
-- `is_express`          — `Bool`
-- `allowed_destination` — `Locality` or symbol (`:any`, `:remote`, …)
-- `priority`            — raw `z_priority_t`
+- `target`              — `QueryTargets.BEST_MATCHING` / `ALL` / `ALL_COMPLETE`
+                          (or `:best_matching` / `:all` / `:all_complete`)
+- `consolidation`       — `QueryConsolidations.AUTO` / `NONE` / `MONOTONIC` / `LATEST`
+                          (or `:auto` / `:none` / `:monotonic` / `:latest`)
+- `congestion_control`  — `CongestionControls.BLOCK` or `DROP`
+- `express`             — `Bool`
+- `allowed_destination` — `Localities.ANY` / `SESSION_LOCAL` / `REMOTE`
+- `priority`            — `Priorities.REAL_TIME` … `BACKGROUND`
 - `timeout_ms`          — request timeout in milliseconds (`0` = none)
 """
 function Querier(s::Session, k::Keyexpr; kwargs...)
@@ -128,6 +99,11 @@ function Querier(s::Session, k::Keyexpr; kwargs...)
     rtc = GC.@preserve opts LibZenohC.z_declare_querier(
         _loan(s), qref, _loan(k), opts)
     _handle_result(rtc)
+    # GC safety net: drop the C handle if the Querier is dropped without an
+    # explicit close(). The Querier owns no callback ctx/task (replies ride
+    # per-get closures), so a plain drop is safe; no-op once close() has
+    # moved the handle out.
+    finalizer(q -> LibZenohC.z_querier_drop(_move(q)), qref)
     return Querier(qref, k, false)
 end
 
@@ -156,7 +132,7 @@ target/consolidation/QoS.
 Keyword arguments: `channel` (`:fifo`/`:ring`), `capacity`, `payload`,
 `encoding`, `attachment`.
 """
-function get(q::Querier, parameters::AbstractString="";
+function Base.get(q::Querier, parameters::AbstractString="";
         channel::Symbol = :fifo,
         capacity::Integer = 16,
         payload = nothing,
@@ -189,7 +165,7 @@ reply that fits through the single-slot handoff. Mirrors
 Keyword arguments: `should_close_on_error`, `payload`, `encoding`,
 `attachment`.
 """
-function get(f::Function, q::Querier, parameters::AbstractString="";
+function Base.get(f::Function, q::Querier, parameters::AbstractString="";
         should_close_on_error::Bool=true,
         payload = nothing,
         encoding::Union{Nothing, Encoding, AbstractString, Base.MIME} = nothing,

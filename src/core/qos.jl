@@ -169,3 +169,76 @@ end
 
 Base.show(io::IO, ::ReplyKeyexprs.Any)           = print(io, "ReplyKeyexprs.ANY")
 Base.show(io::IO, ::ReplyKeyexprs.MatchingQuery) = print(io, "ReplyKeyexprs.MATCHING_QUERY")
+
+# ── QueryTarget ─────────────────────────────────────────────────────────
+#
+# Which matching queryables a `get` / `Querier` reaches. Same singleton
+# pattern as the QoS enums above so `target=` takes the same kind of
+# value everywhere (`QueryTargets.ALL`); a `Symbol` shorthand (`:all`)
+# is also accepted at the call sites via `_as_query_target`.
+
+module QueryTargets
+    import ..LibZenohC
+
+    abstract type QueryTarget end
+
+    struct BestMatching <: QueryTarget end
+    struct All          <: QueryTarget end
+    struct AllComplete  <: QueryTarget end
+
+    const BEST_MATCHING = BestMatching()
+    const ALL           = All()
+    const ALL_COMPLETE  = AllComplete()
+    # libzenoh: Z_QUERY_TARGET_DEFAULT == Z_QUERY_TARGET_BEST_MATCHING.
+    const DEFAULT       = BEST_MATCHING
+end
+
+const QueryTarget = QueryTargets.QueryTarget
+
+_raw(::QueryTargets.BestMatching) = LibZenohC.Z_QUERY_TARGET_BEST_MATCHING
+_raw(::QueryTargets.All)          = LibZenohC.Z_QUERY_TARGET_ALL
+_raw(::QueryTargets.AllComplete)  = LibZenohC.Z_QUERY_TARGET_ALL_COMPLETE
+
+Base.show(io::IO, ::QueryTargets.BestMatching) = print(io, "QueryTargets.BEST_MATCHING")
+Base.show(io::IO, ::QueryTargets.All)          = print(io, "QueryTargets.ALL")
+Base.show(io::IO, ::QueryTargets.AllComplete)  = print(io, "QueryTargets.ALL_COMPLETE")
+
+# ── QueryConsolidation ──────────────────────────────────────────────────
+#
+# Reply de-duplication strategy. `_raw` yields the libzenoh
+# `z_query_consolidation_t` value (a struct built by the C helpers), so
+# these singletons drop straight into the options builders. As with
+# QueryTarget, a `Symbol` shorthand (`:none`, …) is accepted too.
+
+module QueryConsolidations
+    import ..LibZenohC
+
+    abstract type QueryConsolidation end
+
+    struct Auto      <: QueryConsolidation end
+    struct None      <: QueryConsolidation end
+    struct Monotonic <: QueryConsolidation end
+    struct Latest    <: QueryConsolidation end
+
+    const AUTO      = Auto()
+    const NONE      = None()
+    const MONOTONIC = Monotonic()
+    const LATEST    = Latest()
+    const DEFAULT   = AUTO
+end
+
+const QueryConsolidation = QueryConsolidations.QueryConsolidation
+
+_raw(::QueryConsolidations.Auto)      = LibZenohC.z_query_consolidation_auto()
+_raw(::QueryConsolidations.None)      = LibZenohC.z_query_consolidation_none()
+_raw(::QueryConsolidations.Monotonic) = LibZenohC.z_query_consolidation_monotonic()
+_raw(::QueryConsolidations.Latest)    = LibZenohC.z_query_consolidation_latest()
+
+Base.show(io::IO, ::QueryConsolidations.Auto)      = print(io, "QueryConsolidations.AUTO")
+Base.show(io::IO, ::QueryConsolidations.None)      = print(io, "QueryConsolidations.NONE")
+Base.show(io::IO, ::QueryConsolidations.Monotonic) = print(io, "QueryConsolidations.MONOTONIC")
+Base.show(io::IO, ::QueryConsolidations.Latest)    = print(io, "QueryConsolidations.LATEST")
+
+export Locality, Localities, Priority, Priorities,
+    CongestionControl, CongestionControls, ReplyKeyexpr, ReplyKeyexprs,
+    QueryTarget, QueryTargets, QueryConsolidation, QueryConsolidations

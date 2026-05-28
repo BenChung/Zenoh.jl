@@ -129,3 +129,5 @@ module Encodings
     const ZENOH_SERIALIZED                 = Encoding("zenoh/serialized")
     const ZENOH_STRING                     = Encoding("zenoh/string")
 end
+
+export Encoding, Encodings

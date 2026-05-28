@@ -37,3 +37,5 @@ function _add_finalizer(z::ZSlice{Base.RefValue{LibZenohC.z_owned_slice_t}})
     finalizer(r -> LibZenohC.z_slice_drop(_move(r)), z.s)
     return z
 end
+
+export ZSlice
