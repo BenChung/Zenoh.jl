@@ -40,23 +40,30 @@ _loaned_query(q::Query{Base.RefValue{LibZenohC.z_owned_query_t}}) = _loan(q.q)
 # ── Query accessors ────────────────────────────────────────────────────
 
 function keyexpr(q::Query)
-    ke = LibZenohC.z_query_keyexpr(_loaned_query(q))
-    view = Ref{LibZenohC.z_view_string_t}()
-    LibZenohC.z_keyexpr_as_view_string(ke, view)
-    loaned = LibZenohC.z_view_string_loan(view)
-    return unsafe_string(LibZenohC.z_string_data(loaned), LibZenohC.z_string_len(loaned))
+    # The view string borrows from the query; keep `q` alive until copied.
+    GC.@preserve q begin
+        ke = LibZenohC.z_query_keyexpr(_loaned_query(q))
+        view = Ref{LibZenohC.z_view_string_t}()
+        LibZenohC.z_keyexpr_as_view_string(ke, view)
+        loaned = LibZenohC.z_view_string_loan(view)
+        return unsafe_string(LibZenohC.z_string_data(loaned), LibZenohC.z_string_len(loaned))
+    end
 end
 
 function parameters(q::Query)
-    view = Ref{LibZenohC.z_view_string_t}()
-    LibZenohC.z_query_parameters(_loaned_query(q), view)
-    loaned = LibZenohC.z_view_string_loan(view)
-    return unsafe_string(LibZenohC.z_string_data(loaned), LibZenohC.z_string_len(loaned))
+    GC.@preserve q begin
+        view = Ref{LibZenohC.z_view_string_t}()
+        LibZenohC.z_query_parameters(_loaned_query(q), view)
+        loaned = LibZenohC.z_view_string_loan(view)
+        return unsafe_string(LibZenohC.z_string_data(loaned), LibZenohC.z_string_len(loaned))
+    end
 end
 
 function payload(q::Query)
     p = LibZenohC.z_query_payload(_loaned_query(q))
-    return p == C_NULL ? nothing : ZBytes(p)
+    # Pass `q` as owner so the loaned ZBytes keeps the query (and the
+    # borrowed buffer) alive while reachable.
+    return p == C_NULL ? nothing : ZBytes(p, q)
 end
 
 function encoding(q::Query)
@@ -66,7 +73,7 @@ end
 
 function attachment(q::Query)
     a = LibZenohC.z_query_attachment(_loaned_query(q))
-    return a == C_NULL ? nothing : ZBytes(a)
+    return a == C_NULL ? nothing : ZBytes(a, q)
 end
 
 accepts_replies(q::Query) = LibZenohC.z_query_accepts_replies(_loaned_query(q))
@@ -90,7 +97,10 @@ function _make_reply_opts(;
     isnothing(congestion_control) || (optsP.congestion_control = _raw(congestion_control))
     isnothing(priority)           || (optsP.priority           = _raw(priority))
     isnothing(is_express)         || (optsP.is_express         = is_express)
-    return opts, enc_ref, attach_ref
+    # `timestamp` is returned so the caller can GC.@preserve it across the
+    # reply: optsP.timestamp is a borrowed pointer into the ZTimestamp's
+    # Ref (unlike encoding/attachment, which are moved-owned).
+    return opts, enc_ref, attach_ref, timestamp
 end
 
 function _make_reply_err_opts(; encoding=nothing)
@@ -117,7 +127,8 @@ function _make_reply_del_opts(;
     isnothing(congestion_control) || (optsP.congestion_control = _raw(congestion_control))
     isnothing(priority)           || (optsP.priority           = _raw(priority))
     isnothing(is_express)         || (optsP.is_express         = is_express)
-    return opts, attach_ref
+    # See _make_reply_opts: timestamp is borrowed, returned for preservation.
+    return opts, attach_ref, timestamp
 end
 
 # ── Public reply methods ───────────────────────────────────────────────
@@ -134,8 +145,8 @@ Keyword arguments: `encoding`, `timestamp`, `attachment`,
 """
 function reply(q::Query, payload, k::Keyexpr = Keyexpr(keyexpr(q)); kwargs...)
     bytes = ZBytes(payload)
-    opts, enc_ref, attach_ref = _make_reply_opts(; kwargs...)
-    GC.@preserve enc_ref attach_ref begin
+    opts, enc_ref, attach_ref, ts = _make_reply_opts(; kwargs...)
+    GC.@preserve enc_ref attach_ref ts begin
         rtc = LibZenohC.z_query_reply(_loaned_query(q), _loan(k), _move(bytes), opts)
         _handle_result(rtc)
     end
@@ -164,8 +175,8 @@ Keyword arguments: `timestamp`, `attachment`, `congestion_control`,
 `priority`, `is_express`.
 """
 function reply_del(q::Query, k::Keyexpr = Keyexpr(keyexpr(q)); kwargs...)
-    opts, attach_ref = _make_reply_del_opts(; kwargs...)
-    GC.@preserve attach_ref begin
+    opts, attach_ref, ts = _make_reply_del_opts(; kwargs...)
+    GC.@preserve attach_ref ts begin
         rtc = LibZenohC.z_query_reply_del(_loaned_query(q), _loan(k), opts)
         _handle_result(rtc)
     end

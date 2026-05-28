@@ -68,7 +68,11 @@ function _make_put_opts(::Type{T};
     isnothing(enc_ref)    || (optsP.encoding   = _move(enc_ref))
     isnothing(attach_ref) || (optsP.attachment = _move(attach_ref))
 
-    return opts, enc_ref, attach_ref
+    # `timestamp` is returned so the caller can GC.@preserve it across the
+    # put: optsP.timestamp is a *borrowed* pointer into the ZTimestamp's
+    # Ref (unlike encoding/attachment, which are moved-owned), so the
+    # ZTimestamp must outlive the z_put/z_publisher_put call.
+    return opts, enc_ref, attach_ref, timestamp
 end
 
 # Default for `shm=` kwarg routing. shm.jl specializes on AbstractShmProvider
@@ -77,9 +81,9 @@ _shm_zbytes(::Nothing, payload) = ZBytes(payload)
 
 function put(p::Publisher, payload; shm=nothing, kwargs...)
     bytes = _shm_zbytes(shm, payload)
-    opts, enc_ref, attach_ref = _make_put_opts(LibZenohC.z_publisher_put_options_t; kwargs...)
+    opts, enc_ref, attach_ref, ts = _make_put_opts(LibZenohC.z_publisher_put_options_t; kwargs...)
 
-    GC.@preserve enc_ref attach_ref begin
+    GC.@preserve enc_ref attach_ref ts begin
         rtc = LibZenohC.z_publisher_put(_loan(p.pub), _move(bytes), opts)
         _handle_result(rtc)
     end
@@ -93,14 +97,14 @@ function put(s::Session, k::Keyexpr, payload;
         allowed_destination::Union{Nothing, Locality}         = nothing,
         kwargs...)
     bytes = _shm_zbytes(shm, payload)
-    opts, enc_ref, attach_ref = _make_put_opts(LibZenohC.z_put_options_t; kwargs...)
+    opts, enc_ref, attach_ref, ts = _make_put_opts(LibZenohC.z_put_options_t; kwargs...)
     optsP = Base.unsafe_convert(Ptr{LibZenohC.z_put_options_t}, opts)
     isnothing(congestion_control)  || (optsP.congestion_control  = _raw(congestion_control))
     isnothing(priority)            || (optsP.priority            = _raw(priority))
     isnothing(is_express)          || (optsP.is_express          = is_express)
     isnothing(allowed_destination) || (optsP.allowed_destination = _raw(allowed_destination))
 
-    GC.@preserve enc_ref attach_ref begin
+    GC.@preserve enc_ref attach_ref ts begin
         rtc = LibZenohC.z_put(_loan(s), _loan(k), _move(bytes), opts)
         _handle_result(rtc)
     end

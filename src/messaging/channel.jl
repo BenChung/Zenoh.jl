@@ -23,12 +23,14 @@ is_ok(r::Reply) = LibZenohC.z_reply_is_ok(_loaned_reply(r))
 
 function sample(r::Reply)
     is_ok(r) || error("Reply is error; check is_ok(r) first")
-    return Sample(LibZenohC.z_reply_ok(_loaned_reply(r)))
+    # Pass `r` as owner: the returned Sample borrows from the reply, so it
+    # must keep the reply alive while reachable.
+    return Sample(LibZenohC.z_reply_ok(_loaned_reply(r)), r)
 end
 
 function error_payload(r::Reply)
     is_ok(r) && error("Reply is ok; no error payload")
-    return ZBytes(LibZenohC.z_reply_err_payload(LibZenohC.z_reply_err(_loaned_reply(r))))
+    return ZBytes(LibZenohC.z_reply_err_payload(LibZenohC.z_reply_err(_loaned_reply(r))), r)
 end
 
 function error_encoding(r::Reply)

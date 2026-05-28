@@ -16,8 +16,11 @@ struct ZSlice{S <: Union{Base.RefValue{LibZenohC.z_owned_slice_t}, Ptr{LibZenohC
             return _add_finalizer(new{Base.RefValue{LibZenohC.z_owned_slice_t}}(ref))
         else
             Base.preserve_handle(buf)
-            _handle_result(LibZenohC.z_slice_from_buf(ref, buf, length(buf),
-                @cfunction(_release, Ptr{Cvoid}, (Ptr{Cvoid}, Ptr{Cvoid})), Base.pointer_from_objref(buf)))
+            rtc = LibZenohC.z_slice_from_buf(ref, buf, length(buf),
+                @cfunction(_release, Ptr{Cvoid}, (Ptr{Cvoid}, Ptr{Cvoid})), Base.pointer_from_objref(buf))
+            # On failure the deleter never fires, so unpin to avoid leaking.
+            rtc == LibZenohC.Z_OK || Base.unpreserve_handle(buf)
+            _handle_result(rtc)
             return _add_finalizer(new{Base.RefValue{LibZenohC.z_owned_slice_t}}(ref))
         end
     end

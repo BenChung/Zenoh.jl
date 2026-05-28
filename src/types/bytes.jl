@@ -1,13 +1,17 @@
 # ZBytes — owned/loaned byte payload, plus the IO/iterator views used to
 # read it back out.
 #
-# The `_release` callback + `_refs_in_flight` machinery is the deleter
-# libzenohc invokes when it's done with an externally-allocated buffer
-# the ZBytes wraps. `Base.preserve_handle` pins the Julia source object
-# until the C side releases it; `_release` unpreserves on completion.
-
-const _refs_in_flight = Dict{UInt64, Ref}()
-const _refptr = Ref{UInt64}(0)
+# `_release` is the deleter libzenohc invokes when it's done with an
+# externally-allocated buffer the ZBytes wraps. `Base.preserve_handle`
+# pins the Julia source object until the C side releases it; `_release`
+# unpreserves on completion.
+#
+# NOTE: libzenohc may call `_release` from one of its own runtime threads
+# (e.g. once a zero-copy `put` finishes transmitting), so this runs the
+# Julia-heap-touching `unsafe_pointer_to_objref` / `unpreserve_handle`
+# off a foreign thread. That relies on the runtime auto-adopting the
+# thread on cfunction entry; it is the one place we knowingly diverge
+# from callback.jl's "no Julia heap on foreign threads" discipline.
 
 function _release(data::Ptr{Cvoid}, ctx::Ptr{Cvoid})
     Base.unpreserve_handle(Base.unsafe_pointer_to_objref(ctx))
@@ -16,24 +20,35 @@ end
 
 struct ZBytes{R <: Union{Base.RefValue{LibZenohC.z_owned_bytes_t}, Ptr{LibZenohC.z_loaned_bytes_t}}}
         b::R
+        # For the loaned form (`b::Ptr`), `owner` holds the Julia value the
+        # pointer borrows from (a Sample/Query/Reply) so the underlying
+        # buffer outlives this ZBytes. `nothing` for owned ZBytes, which
+        # carry their own lifetime via `b`.
+        owner::Any
         function ZBytes(r::Ref{T}) where T
-            out = new{Base.RefValue{LibZenohC.z_owned_bytes_t}}(Ref{LibZenohC.z_owned_bytes_t}())
+            out = new{Base.RefValue{LibZenohC.z_owned_bytes_t}}(Ref{LibZenohC.z_owned_bytes_t}(), nothing)
             Base.preserve_handle(r)
             rtc = LibZenohC.z_bytes_from_buf(out.b, Base.unsafe_convert(Ptr{UInt8}, Base.unsafe_convert(Ptr{T}, r)), sizeof(T),
                 @cfunction(_release, Ptr{Cvoid}, (Ptr{Cvoid}, Ptr{Cvoid})), Base.pointer_from_objref(r))
+            # On failure the deleter never fires, so unpin here to avoid
+            # leaking the preserved handle.
+            rtc == LibZenohC.Z_OK || Base.unpreserve_handle(r)
             _handle_result(rtc)
             return out
         end
     function ZBytes(r::Vector{T}) where T
-        out = new{Base.RefValue{LibZenohC.z_owned_bytes_t}}(Ref{LibZenohC.z_owned_bytes_t}())
+        out = new{Base.RefValue{LibZenohC.z_owned_bytes_t}}(Ref{LibZenohC.z_owned_bytes_t}(), nothing)
         Base.preserve_handle(r)
         rtc = LibZenohC.z_bytes_from_buf(out.b, r, length(r)*sizeof(T),
             @cfunction(_release, Ptr{Cvoid}, (Ptr{Cvoid}, Ptr{Cvoid})), Base.pointer_from_objref(r))
+        rtc == LibZenohC.Z_OK || Base.unpreserve_handle(r)
         _handle_result(rtc)
         return out
     end
-    function ZBytes(p::Ptr{LibZenohC.z_loaned_bytes_t})
-        return new{Ptr{LibZenohC.z_loaned_bytes_t}}(p)
+    # `owner` is the value the loaned pointer borrows from; pass it so the
+    # ZBytes keeps the source buffer alive (see field doc above).
+    function ZBytes(p::Ptr{LibZenohC.z_loaned_bytes_t}, owner=nothing)
+        return new{Ptr{LibZenohC.z_loaned_bytes_t}}(p, owner)
     end
     function ZBytes(s::String)
         # Box the String in a RefValue so we have a stable, mutable handle to
@@ -45,11 +60,12 @@ struct ZBytes{R <: Union{Base.RefValue{LibZenohC.z_owned_bytes_t}, Ptr{LibZenohC
         b = Ref{LibZenohC.z_owned_bytes_t}()
         rtc = GC.@preserve s LibZenohC.z_bytes_from_str(b, pointer(cstr),
             @cfunction(_release, Ptr{Cvoid}, (Ptr{Cvoid}, Ptr{Cvoid})), Base.pointer_from_objref(box))
+        rtc == LibZenohC.Z_OK || Base.unpreserve_handle(box)
         _handle_result(rtc)
-        return new{Base.RefValue{LibZenohC.z_owned_bytes_t}}(b)
+        return new{Base.RefValue{LibZenohC.z_owned_bytes_t}}(b, nothing)
     end
     function ZBytes(s::Symbol)
-        out = new{Base.RefValue{LibZenohC.z_owned_bytes_t}}(Ref{LibZenohC.z_owned_bytes_t}())
+        out = new{Base.RefValue{LibZenohC.z_owned_bytes_t}}(Ref{LibZenohC.z_owned_bytes_t}(), nothing)
         rtc = LibZenohC.z_bytes_from_static_str(out.b, Base.unsafe_convert(Ptr{UInt8}, s))
         _handle_result(rtc)
         return out
@@ -57,7 +73,7 @@ struct ZBytes{R <: Union{Base.RefValue{LibZenohC.z_owned_bytes_t}, Ptr{LibZenohC
     # Wrap a z_owned_bytes_t that an external builder (z_bytes_from_shm,
     # z_bytes_from_shm_mut, …) has already populated. shm.jl uses this.
     function ZBytes(b::Base.RefValue{LibZenohC.z_owned_bytes_t}, ::Val{:owned})
-        return new{Base.RefValue{LibZenohC.z_owned_bytes_t}}(b)
+        return new{Base.RefValue{LibZenohC.z_owned_bytes_t}}(b, nothing)
     end
 end
 Base.length(z::ZBytes{Base.RefValue{LibZenohC.z_owned_bytes_t}}) = LibZenohC.z_bytes_len(_loan(z.b))
