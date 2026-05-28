@@ -96,6 +96,24 @@ function Base.open(f::Function, s::Session, k::Keyexpr;
     end
 end
 
+"""
+Subscribe to keyexpr `k` in session `s` with a buffered channel handler.
+Returns a `SubscriberHandler` that can be iterated or polled with
+`take!`/`tryrecv!`. Call `close(sub)` to undeclare the subscriber;
+iteration will then terminate once buffered samples are drained.
+
+`allowed_origin` accepts a `Locality` singleton (`Localities.ANY` etc.).
+"""
+function Base.open(s::Session, k::Keyexpr;
+        channel::Symbol = :fifo, capacity::Integer = 16,
+        allowed_origin::Union{Nothing, Locality} = nothing)
+    opts = _make_subscriber_opts(allowed_origin)
+    _open_buffered_sub(SubscriberHandler, k, channel, capacity) do sub, closure
+        GC.@preserve opts LibZenohC.z_declare_subscriber(_loan(s), sub, _loan(k),
+            _move(closure), _sub_opts_arg(opts))
+    end
+end
+
 function Base.close(sub::AbstractCallbackSubscriber)
     sub.closed && return
     sub.closed = true

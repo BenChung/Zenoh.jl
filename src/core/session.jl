@@ -1,7 +1,9 @@
-struct Session 
+struct Session
     s::Base.RefValue{LibZenohC.z_owned_session_t}
     Session() = new(Ref{LibZenohC.z_owned_session_t}())
 end
+
+_loan(s::Session) = _loan(s.s)
 
 """
 Opens a new Zenoh session with a given Zenoh config. Copies the config.

@@ -77,3 +77,10 @@ end
     end
     eval(quote $(dfns...) end)
 end
+
+# Read a libzenoh-owned z_string into a Julia String. The caller is
+# responsible for dropping the owned string afterwards (typical pattern:
+# build into a Ref, `_string(ref)`, then `_drop(_move(ref))`).
+function _string(r::Ref{LibZenohC.z_owned_string_t})
+    return unsafe_string(LibZenohC.z_string_data(_loan(r)), LibZenohC.z_string_len(_loan(r)))
+end

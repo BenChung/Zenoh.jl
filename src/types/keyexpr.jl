@@ -1,7 +1,35 @@
-# Keyexpr utilities — relations, composition, canonicalization.
-#
-# The Keyexpr struct (and its from-string constructors) lives in
-# Zenoh.jl. This file layers user-facing operations on top.
+# Keyexpr — owned key expression handle plus relations, composition,
+# canonicalization, and the `kexpr"…"` string macro.
+
+struct Keyexpr
+    k::Base.RefValue{LibZenohC.z_owned_keyexpr_t}
+    function Keyexpr(s::String; kwargs...)
+        return Keyexpr(Base.unsafe_convert(Cstring, s); kwargs...)
+    end
+    function Keyexpr(s::Cstring; autocanonize=false)
+        k = Ref{LibZenohC.z_owned_keyexpr_t}()
+        res = new(k)
+        if autocanonize
+            rtc = LibZenohC.z_keyexpr_from_str_autocanonize(res.k, pointer(s)) # copies but we shouldn't do much of this
+        else
+            rtc = LibZenohC.z_keyexpr_from_str(res.k, pointer(s))
+        end
+        _handle_result(rtc)
+        finalizer(k -> LibZenohC.z_keyexpr_drop(_move(k)), k)
+        return res
+    end
+    # Wrap a z_owned_keyexpr_t that a C builder (z_keyexpr_concat/join, …)
+    # has already populated; just attach the drop finalizer.
+    function Keyexpr(k::Base.RefValue{LibZenohC.z_owned_keyexpr_t}, ::Val{:owned})
+        finalizer(k -> LibZenohC.z_keyexpr_drop(_move(k)), k)
+        return new(k)
+    end
+end
+
+_loan(s::Keyexpr) = _loan(s.k)
+
+export Keyexpr, @kexpr_str
+export includes, intersects, concat, canonize, is_canon
 
 function _as_view_string(k::Keyexpr)
     view = Ref{LibZenohC.z_view_string_t}()
