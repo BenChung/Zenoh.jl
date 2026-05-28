@@ -204,25 +204,52 @@ function _make_queryable_opts(;
     return opts
 end
 
-# ── Callback-form Queryable ────────────────────────────────────────────
+# ── Queryable: callback + channel forms, one type ──────────────────────
+#
+# A Queryable carries mode-specific state in a `backing`, and dispatch
+# keys on the backing type:
+#   • CallbackBacking      — single-slot CallbackCtx + consume task, for
+#                            the reactive `Queryable(f, s, k)` form.
+#   • ChannelBacking{M, H} — a libzenoh FIFO/ring channel handler, for the
+#                            buffered `Queryable(s, k; channel=M)` form.
+# This keeps `Queryable(s, k; channel=…)` returning a `Queryable` (so
+# `T(...)::T` holds) instead of a separate handler type; `QueryableHandler`
+# remains as an alias for the channel form.
+
+struct CallbackBacking
+    ctx::CallbackCtx{LibZenohC.z_owned_query_t}
+    async_cond::Base.AsyncCondition
+    task::Task
+end
+
+struct ChannelBacking{Mode, H}
+    h::Base.RefValue{H}
+end
 
 """
     Queryable
 
-Callback-form queryable returned by `Queryable(f, s, k)`. Single-slot
-latest-wins: queries arriving while the slot is still occupied overwrite
-the previous one. **For real query workloads prefer the channel form**
-`Queryable(s, k; channel=:fifo)` — overwriting in-flight queries means
-the client gets a timeout, not a reply.
+The server side of get/reply, in two forms chosen by how it's declared:
+
+- callback — `Queryable(f, s, k)` invokes `f(::Query)` on a dedicated
+  Julia task per query. Single-slot latest-wins: queries arriving while
+  the slot is still occupied overwrite the previous one. **For real query
+  workloads prefer the channel form** — overwriting an in-flight query
+  means the client gets a timeout, not a reply.
+- channel — `Queryable(s, k; channel=:fifo|:ring)` buffers queries; iterate
+  or `take!`/`tryrecv!` to consume them. Also reachable as `QueryableHandler`.
+
+Call `close(q)` to undeclare; idempotent in both forms.
 """
-mutable struct Queryable
+mutable struct Queryable{B}
     qable::Base.RefValue{LibZenohC.z_owned_queryable_t}
-    ctx::CallbackCtx{LibZenohC.z_owned_query_t}
-    async_cond::Base.AsyncCondition
-    task::Task
     keyexpr::Keyexpr     # GC pin
+    backing::B
     closed::Bool
 end
+
+# Channel form alias — the buffered Queryable's historical name.
+const QueryableHandler{H, Mode} = Queryable{ChannelBacking{Mode, H}}
 
 """
     Queryable(f, s::Session, k::Keyexpr; complete=nothing,
@@ -230,7 +257,7 @@ end
 
 Declare a queryable on keyexpr `k` and invoke `f(::Query)` on a dedicated
 Julia task per query that fits through the single-slot handoff. See
-`Queryable` docs for the latest-wins caveat.
+`Queryable` for the latest-wins caveat.
 
 `f` must finish replying (or choose not to) before returning. The `Query`
 handle is dropped as soon as `f` returns, which sends the final-ack the
@@ -268,60 +295,26 @@ function Queryable(f::Function, s::Session, k::Keyexpr;
         end
     end
     task = Threads.@spawn consume(wrapped, Query, ctx, async_cond, should_close_on_error)
-    return Queryable(qable, ctx, async_cond, task, k, false)
-end
-
-# NB: like the callback Subscriber, the callback Queryable has no GC
-# finalizer — its ctx is reachable only via this struct and the consume
-# task (a reference cycle), and teardown must `wait(task)`, neither of
-# which a finalizer can do safely. Relies on explicit `close()`. The
-# channel QueryableHandler (no ctx/task) does get a finalizer.
-function Base.close(q::Queryable)
-    q.closed && return
-    q.closed = true
-
-    signal_closing!(q.ctx, q.async_cond)
-
-    # Blocks until libzenohc has drained any in-flight callbacks (they
-    # bail on the closing flag) and invoked our drop trampoline.
-    _handle_result(LibZenohC.z_undeclare_queryable(_move(q.qable)))
-
-    wait(q.task)
-
-    _teardown_callback(Val(:query), q.ctx, q.async_cond)
-    return nothing
-end
-
-# ── Channel-form QueryableHandler ──────────────────────────────────────
-
-"""
-    QueryableHandler
-
-Buffered queryable returned by `Queryable(s, k; channel=:fifo|:ring, capacity=N)`.
-Iterate or use `take!`/`tryrecv!` to consume `Query`s. Iteration
-terminates after `close(qh)`. Blocking recv runs on a libuv worker
-thread, so other Julia tasks (including `close`) run concurrently.
-
-**Iteration finalizes the previous `Query`** at the start of each next-call,
-matching the callback-form behavior. The drop is what sends the final-ack
-the originating `get` is waiting on; without it every reply looks
-timeout-late. As a consequence, don't accumulate queries across iterations
-(`collect(qh)` will yield handles that have already been dropped); reply
-inline and let the loop continue. For deferred handling, use `take!` and
-finalize manually.
-"""
-struct QueryableHandler{HType, Mode}
-    qable::Base.RefValue{LibZenohC.z_owned_queryable_t}
-    h::Base.RefValue{HType}
-    keyexpr::Keyexpr
+    return Queryable(qable, k, CallbackBacking(ctx, async_cond, task), false)
 end
 
 """
     Queryable(s::Session, k::Keyexpr; channel=:fifo, capacity=16,
               complete=nothing, allowed_origin=nothing)
 
-Declare a queryable with a buffered channel handler. Returns a
-`QueryableHandler`. Iterate / `take!` / `tryrecv!` to receive `Query`s.
+Declare a queryable with a buffered channel handler. Returns a channel-form
+`Queryable` (aka `QueryableHandler`); iterate / `take!` / `tryrecv!` to
+receive `Query`s. Iteration terminates after `close(q)`. Blocking recv runs
+on a libuv worker thread, so other Julia tasks (including `close`) run
+concurrently.
+
+**Iteration finalizes the previous `Query`** at the start of each next-call,
+matching the callback-form behavior. The drop is what sends the final-ack
+the originating `get` is waiting on; without it every reply looks
+timeout-late. As a consequence, don't accumulate queries across iterations
+(`collect` will yield handles that have already been dropped); reply inline
+and let the loop continue. For deferred handling, use `take!` and finalize
+manually.
 
 `allowed_origin` accepts a `Locality` singleton (`Localities.ANY`,
 `SESSION_LOCAL`, `REMOTE`).
@@ -336,15 +329,40 @@ function Queryable(s::Session, k::Keyexpr;
     rtc = GC.@preserve opts LibZenohC.z_declare_queryable(
         _loan(s), qable, _loan(k), _move(closure), opts)
     _handle_result(rtc)
-    # GC safety net: drop the queryable if the handler is collected without
-    # an explicit close(). libzenoh owns the channel here (no ctx/task), so
-    # a plain drop is safe; no-op once close() has moved the handle out.
+    # GC safety net: drop the queryable if it's collected without an explicit
+    # close(). libzenoh owns the channel here (no ctx/task), so a plain drop
+    # is safe; no-op once close() has moved the handle out.
     finalizer(x -> LibZenohC.z_queryable_drop(_move(x)), qable)
-    return QueryableHandler{eltype(typeof(handler)), channel}(qable, handler, k)
+    backing = ChannelBacking{channel, eltype(typeof(handler))}(handler)
+    return Queryable(qable, k, backing, false)
 end
 
-function Base.iterate(qh::QueryableHandler{H, M},
-        prev::Union{Nothing, Query}=nothing) where {H, M}
+# NB: the callback-form Queryable has no GC finalizer — its ctx is reachable
+# only via this struct and the consume task (a reference cycle), and teardown
+# must `wait(task)`, neither of which a finalizer can do safely. It relies on
+# explicit `close()`. The channel form (no ctx/task) gets a finalizer above.
+function Base.close(q::Queryable{CallbackBacking})
+    q.closed && return
+    q.closed = true
+    b = q.backing
+    signal_closing!(b.ctx, b.async_cond)
+    # Blocks until libzenohc has drained any in-flight callbacks (they
+    # bail on the closing flag) and invoked our drop trampoline.
+    _handle_result(LibZenohC.z_undeclare_queryable(_move(q.qable)))
+    wait(b.task)
+    _teardown_callback(Val(:query), b.ctx, b.async_cond)
+    return nothing
+end
+
+function Base.close(q::Queryable{<:ChannelBacking})
+    q.closed && return
+    q.closed = true
+    _handle_result(LibZenohC.z_undeclare_queryable(_move(q.qable)))
+    return nothing
+end
+
+function Base.iterate(q::Queryable{ChannelBacking{M, H}},
+        prev::Union{Nothing, Query}=nothing) where {M, H}
     # Drop the previous query before blocking on the next recv. The
     # z_query_drop is what sends the final-ack the originating get is
     # waiting on; relying on GC to do this defers the ack until at best
@@ -355,11 +373,11 @@ function Base.iterate(qh::QueryableHandler{H, M},
     # `finalize(query.q)` immediately after the user's `f` returns.
     prev === nothing || finalize(prev.q)
     owned = Ref{LibZenohC.z_owned_query_t}()
-    rtc = GC.@preserve qh owned _recv(Val(:query), Val(M), _loan(qh.h),
+    rtc = GC.@preserve q owned _recv(Val(:query), Val(M), _loan(q.backing.h),
         Base.unsafe_convert(Ptr{LibZenohC.z_owned_query_t}, owned))
     if rtc == LibZenohC.Z_OK
-        q = Query(owned)
-        return (q, q)
+        qy = Query(owned)
+        return (qy, qy)
     end
     rtc == LibZenohC.Z_CHANNEL_DISCONNECTED && return nothing
     throw(ZenohError(rtc))
@@ -370,28 +388,24 @@ end
 # caller owns its lifetime. To unblock the originating `get` promptly,
 # call `finalize(q.q)` after replying — otherwise the final-ack waits on
 # GC, and the get blocks for its full timeout window.
-function Base.take!(qh::QueryableHandler{H, M}) where {H, M}
+function Base.take!(q::Queryable{ChannelBacking{M, H}}) where {M, H}
     owned = Ref{LibZenohC.z_owned_query_t}()
-    rtc = GC.@preserve qh owned _recv(Val(:query), Val(M), _loan(qh.h),
+    rtc = GC.@preserve q owned _recv(Val(:query), Val(M), _loan(q.backing.h),
         Base.unsafe_convert(Ptr{LibZenohC.z_owned_query_t}, owned))
     rtc == LibZenohC.Z_OK && return Query(owned)
     throw(ZenohError(rtc))
 end
 
-function tryrecv!(qh::QueryableHandler{H, M}) where {H, M}
+function tryrecv!(q::Queryable{ChannelBacking{M, H}}) where {M, H}
     owned = Ref{LibZenohC.z_owned_query_t}()
-    rtc = _try_recv(Val(:query), Val(M), _loan(qh.h), owned)
+    rtc = _try_recv(Val(:query), Val(M), _loan(q.backing.h), owned)
     rtc == LibZenohC.Z_OK && return Query(owned)
     rtc == LibZenohC.Z_CHANNEL_NODATA && return nothing
     throw(ZenohError(rtc))
 end
 
-function Base.close(qh::QueryableHandler)
-    _handle_result(LibZenohC.z_undeclare_queryable(_move(qh.qable)))
-end
-
-Base.IteratorSize(::Type{<:QueryableHandler}) = Base.SizeUnknown()
-Base.eltype(::Type{<:QueryableHandler}) = Query
+Base.IteratorSize(::Type{<:Queryable{B}}) where {B<:ChannelBacking} = Base.SizeUnknown()
+Base.eltype(::Type{<:Queryable{B}}) where {B<:ChannelBacking} = Query
 
 export Query, Queryable, QueryableHandler, reply, reply_err, reply_del,
     parameters, accepts_replies

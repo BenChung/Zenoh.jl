@@ -1027,8 +1027,17 @@ try
         try
             qh = Zenoh.Queryable(s, Zenoh.Keyexpr("test/queryable/idle");
                 channel=:ring, capacity=2)
+            # Channel form is a Queryable (T(...)::T) and the QueryableHandler alias.
+            @test qh isa Zenoh.Queryable
+            @test qh isa Zenoh.QueryableHandler
             # No query in flight → tryrecv! returns nothing (doesn't block).
             @test Zenoh.tryrecv!(qh) === nothing
+            # close is idempotent on the channel form.
+            close(qh)
+            @test qh.closed
+            close(qh)
+            @test qh.closed
+            qh = nothing
         finally
             !isnothing(qh) && close(qh)
             close(s)
