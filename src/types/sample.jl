@@ -60,10 +60,11 @@ end
 congestion_control(s::Sample) = _congestion_control_from_raw(LibZenohC.z_sample_congestion_control(_loaned_sample(s)))
 priority(s::Sample) = _priority_from_raw(LibZenohC.z_sample_priority(_loaned_sample(s)))
 express(s::Sample) = LibZenohC.z_sample_express(_loaned_sample(s))
+reliability(s::Sample) = _reliability_from_raw(LibZenohC.z_sample_reliability(_loaned_sample(s)))
 
 function encoding(s::Sample)
     return _from_loaned_encoding(LibZenohC.z_sample_encoding(_loaned_sample(s)))
 end
 
 export Sample, payload, keyexpr, encoding, attachment, timestamp, kind,
-    priority, congestion_control, express
+    priority, congestion_control, express, reliability

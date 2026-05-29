@@ -140,6 +140,48 @@ end
 Base.show(io::IO, ::CongestionControls.Block) = print(io, "CongestionControls.BLOCK")
 Base.show(io::IO, ::CongestionControls.Drop)  = print(io, "CongestionControls.DROP")
 
+# ── Reliability ─────────────────────────────────────────────────────────
+#
+# Writer-side QoS: whether the network layer retransmits lost messages.
+# Fixed on the sender — set at `Publisher` declare time or per session
+# `put`, and reported back on each inbound `Sample` via `reliability(::Sample)`.
+# (A publisher's reliability can't be overridden per-`put`: zenoh's
+# `z_publisher_put_options_t` carries no reliability field.)
+
+module Reliabilities
+    import ..LibZenohC
+
+    abstract type Reliability end
+
+    struct BestEffort <: Reliability end
+    struct Reliable   <: Reliability end
+
+    const BEST_EFFORT = BestEffort()
+    const RELIABLE    = Reliable()
+    # libzenoh: Z_RELIABILITY_DEFAULT == Z_RELIABILITY_RELIABLE.
+    const DEFAULT     = RELIABLE
+end
+
+const Reliability = Reliabilities.Reliability
+
+_raw(::Reliabilities.BestEffort) = LibZenohC.Z_RELIABILITY_BEST_EFFORT
+_raw(::Reliabilities.Reliable)   = LibZenohC.Z_RELIABILITY_RELIABLE
+
+function _reliability_from_raw(v::LibZenohC.z_reliability_t)
+    v == LibZenohC.Z_RELIABILITY_BEST_EFFORT && return Reliabilities.BEST_EFFORT
+    v == LibZenohC.Z_RELIABILITY_RELIABLE    && return Reliabilities.RELIABLE
+    throw(ArgumentError("unknown z_reliability_t value: $v"))
+end
+
+Base.show(io::IO, ::Reliabilities.BestEffort) = print(io, "Reliabilities.BEST_EFFORT")
+Base.show(io::IO, ::Reliabilities.Reliable)   = print(io, "Reliabilities.RELIABLE")
+
+# Config-builder bridge: let the same singletons drop into a typed
+# `ConfigSection` field (`PublicationRule`/`QosOverwriteValues`), emitting
+# the zenoh config token rather than requiring a raw `:reliable` symbol.
+_to_json5(::Reliabilities.Reliable)   = _to_json5("reliable")
+_to_json5(::Reliabilities.BestEffort) = _to_json5("best_effort")
+
 # ── ReplyKeyexpr ────────────────────────────────────────────────────────
 
 module ReplyKeyexprs
@@ -240,5 +282,6 @@ Base.show(io::IO, ::QueryConsolidations.Monotonic) = print(io, "QueryConsolidati
 Base.show(io::IO, ::QueryConsolidations.Latest)    = print(io, "QueryConsolidations.LATEST")
 
 export Locality, Localities, Priority, Priorities,
-    CongestionControl, CongestionControls, ReplyKeyexpr, ReplyKeyexprs,
+    CongestionControl, CongestionControls, Reliability, Reliabilities,
+    ReplyKeyexpr, ReplyKeyexprs,
     QueryTarget, QueryTargets, QueryConsolidation, QueryConsolidations

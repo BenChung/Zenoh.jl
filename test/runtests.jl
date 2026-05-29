@@ -881,6 +881,10 @@ try
         @test Zenoh.ReplyKeyexprs.MATCHING_QUERY isa Zenoh.ReplyKeyexpr
         @test Zenoh.ReplyKeyexprs.DEFAULT === Zenoh.ReplyKeyexprs.MATCHING_QUERY
 
+        @test Zenoh.Reliabilities.BEST_EFFORT isa Zenoh.Reliability
+        @test Zenoh.Reliabilities.RELIABLE    isa Zenoh.Reliability
+        @test Zenoh.Reliabilities.DEFAULT === Zenoh.Reliabilities.RELIABLE
+
         # Singletons survive the raw round-trip.
         @test Zenoh._priority_from_raw(Zenoh._raw(Zenoh.Priorities.REAL_TIME)) ===
               Zenoh.Priorities.REAL_TIME
@@ -890,11 +894,23 @@ try
               Zenoh.CongestionControls.BLOCK
         @test Zenoh._reply_keyexpr_from_raw(Zenoh._raw(Zenoh.ReplyKeyexprs.ANY)) ===
               Zenoh.ReplyKeyexprs.ANY
+        @test Zenoh._reliability_from_raw(Zenoh._raw(Zenoh.Reliabilities.BEST_EFFORT)) ===
+              Zenoh.Reliabilities.BEST_EFFORT
+        @test Zenoh._reliability_from_raw(Zenoh._raw(Zenoh.Reliabilities.RELIABLE)) ===
+              Zenoh.Reliabilities.RELIABLE
 
         @test occursin("Priorities.REAL_TIME",      sprint(show, Zenoh.Priorities.REAL_TIME))
         @test occursin("Localities.REMOTE",         sprint(show, Zenoh.Localities.REMOTE))
         @test occursin("CongestionControls.BLOCK",  sprint(show, Zenoh.CongestionControls.BLOCK))
         @test occursin("ReplyKeyexprs.ANY",         sprint(show, Zenoh.ReplyKeyexprs.ANY))
+        @test occursin("Reliabilities.RELIABLE",    sprint(show, Zenoh.Reliabilities.RELIABLE))
+
+        # Config-builder bridge: singletons serialize to the zenoh config token.
+        @test Zenoh._to_json5(Zenoh.Reliabilities.RELIABLE)    == "\"reliable\""
+        @test Zenoh._to_json5(Zenoh.Reliabilities.BEST_EFFORT) == "\"best_effort\""
+        rule = Zenoh.PublicationRule(key_exprs = ["a/**"],
+                                     reliability = Zenoh.Reliabilities.BEST_EFFORT)
+        @test occursin("\"reliability\":\"best_effort\"", Zenoh._to_json5(rule))
     end
 
     @timed_testset "QoS end-to-end (session put → subscriber)" begin
@@ -908,24 +924,28 @@ try
             received_prio    = Channel{Zenoh.Priority}(1)
             received_cc      = Channel{Zenoh.CongestionControl}(1)
             received_express = Channel{Bool}(1)
+            received_reliab  = Channel{Zenoh.Reliability}(1)
             received_done    = Channel{Bool}(1)
 
             sub = open((sample) -> begin
                 put!(received_prio,    Zenoh.priority(sample))
                 put!(received_cc,      Zenoh.congestion_control(sample))
                 put!(received_express, Zenoh.express(sample))
+                put!(received_reliab,  Zenoh.reliability(sample))
                 put!(received_done, true)
             end, s, test_key)
 
             Zenoh.put(s, test_key, "qos payload";
                 priority           = Zenoh.Priorities.REAL_TIME,
                 congestion_control = Zenoh.CongestionControls.BLOCK,
-                express            = true)
+                express            = true,
+                reliability        = Zenoh.Reliabilities.BEST_EFFORT)
 
             @test take!(received_done)
             @test take!(received_prio)    === Zenoh.Priorities.REAL_TIME
             @test take!(received_cc)      === Zenoh.CongestionControls.BLOCK
             @test take!(received_express) === true
+            @test take!(received_reliab)  === Zenoh.Reliabilities.BEST_EFFORT
         finally
             !isnothing(sub) && close(sub)
             close(s)
@@ -943,22 +963,26 @@ try
             test_key = Zenoh.Keyexpr("test/qos/publisher")
             received_prio = Channel{Zenoh.Priority}(1)
             received_cc   = Channel{Zenoh.CongestionControl}(1)
+            received_reliab = Channel{Zenoh.Reliability}(1)
             received_done = Channel{Bool}(1)
 
             sub = open((sample) -> begin
                 put!(received_prio, Zenoh.priority(sample))
                 put!(received_cc,   Zenoh.congestion_control(sample))
+                put!(received_reliab, Zenoh.reliability(sample))
                 put!(received_done, true)
             end, s, test_key)
 
             pub = Zenoh.Publisher(s, test_key;
                 priority           = Zenoh.Priorities.INTERACTIVE_HIGH,
-                congestion_control = Zenoh.CongestionControls.BLOCK)
+                congestion_control = Zenoh.CongestionControls.BLOCK,
+                reliability        = Zenoh.Reliabilities.BEST_EFFORT)
             Zenoh.put(pub, "pub qos payload")
 
             @test take!(received_done)
             @test take!(received_prio) === Zenoh.Priorities.INTERACTIVE_HIGH
             @test take!(received_cc)   === Zenoh.CongestionControls.BLOCK
+            @test take!(received_reliab) === Zenoh.Reliabilities.BEST_EFFORT
         finally
             !isnothing(sub) && close(sub)
             !isnothing(pub) && close(pub)

@@ -13,6 +13,7 @@ mutable struct Publisher
             congestion_control::Union{Nothing, CongestionControl}         = nothing,
             priority::Union{Nothing, Priority}                            = nothing,
             express::Union{Nothing, Bool}                                 = nothing,
+            reliability::Union{Nothing, Reliability}                      = nothing,
             allowed_destination::Union{Nothing, Locality}                 = nothing)
         opts = Ref{LibZenohC.z_publisher_options_t}()
         LibZenohC.z_publisher_options_default(opts)
@@ -23,6 +24,7 @@ mutable struct Publisher
         isnothing(congestion_control)  || (optsP.congestion_control  = _raw(congestion_control))
         isnothing(priority)            || (optsP.priority            = _raw(priority))
         isnothing(express)             || (optsP.is_express          = express)
+        isnothing(reliability)         || (optsP.reliability         = _raw(reliability))
         isnothing(allowed_destination) || (optsP.allowed_destination = _raw(allowed_destination))
 
         pub = Ref{LibZenohC.z_owned_publisher_t}()
@@ -101,6 +103,7 @@ function put(s::Session, k::Keyexpr, payload;
         congestion_control::Union{Nothing, CongestionControl} = nothing,
         priority::Union{Nothing, Priority}                    = nothing,
         express::Union{Nothing, Bool}                         = nothing,
+        reliability::Union{Nothing, Reliability}              = nothing,
         allowed_destination::Union{Nothing, Locality}         = nothing,
         kwargs...)
     bytes = _shm_zbytes(shm, payload)
@@ -109,6 +112,7 @@ function put(s::Session, k::Keyexpr, payload;
     isnothing(congestion_control)  || (optsP.congestion_control  = _raw(congestion_control))
     isnothing(priority)            || (optsP.priority            = _raw(priority))
     isnothing(express)             || (optsP.is_express          = express)
+    isnothing(reliability)         || (optsP.reliability         = _raw(reliability))
     isnothing(allowed_destination) || (optsP.allowed_destination = _raw(allowed_destination))
 
     GC.@preserve enc_ref attach_ref ts begin
