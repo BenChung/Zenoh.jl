@@ -19,6 +19,7 @@ include("types/bytes.jl")           # ZBytes, ZBytesReader, slice iterators
 include("types/slice.jl")           # ZSlice
 include("types/keyexpr.jl")         # Keyexpr struct + ops + kexpr"…" macro
 include("types/sample.jl")          # Sample + accessors
+include("types/serializer.jl")      # ZSerializer/ZDeserializer (ze_* structured codec)
 include("types/timestamp.jl")       # ZTimestamp
 
 # Pub/sub + query/queryable

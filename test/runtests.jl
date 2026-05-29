@@ -187,6 +187,40 @@ try
         @test length(cs) == 5
     end
 
+    @timed_testset "Serializer" begin
+        # Scalar round-trip.
+        @test Zenoh.deserialize(Int64, Zenoh.serialize(Int64(42))) == 42
+
+        # 16-byte array, length-prefixed (Vector{UInt8} ↔ buf/slice).
+        d = collect(UInt8, 1:16)
+        @test Zenoh.deserialize(Vector{UInt8}, Zenoh.serialize(d)) == d
+
+        # 16-byte array, fixed no-prefix (NTuple{16,UInt8} ↔ N× uint8).
+        t = ntuple(i -> UInt8(i), 16)
+        @test Zenoh.deserialize(NTuple{16,UInt8}, Zenoh.serialize(t)) === t
+
+        # Composite: int64 + 16-byte array in one payload.
+        p = (Int64(-7), collect(UInt8, 1:16))
+        @test Zenoh.deserialize(Tuple{Int64,Vector{UInt8}}, Zenoh.serialize(p)) == p
+
+        # Handle API (write/read) + cursor exhaustion.
+        s = Zenoh.ZSerializer()
+        write(s, Int64(7))
+        write(s, ntuple(i -> UInt8(i), 16))
+        zb = finish(s)
+        de = Zenoh.ZDeserializer(zb)
+        @test read(de, Int64) == 7
+        @test read(de, NTuple{16,UInt8}) === ntuple(i -> UInt8(i), 16)
+        @test Zenoh.is_done(de)
+
+        # Lifecycle: close is idempotent; finish/write after finish error.
+        s2 = Zenoh.ZSerializer(); close(s2); close(s2); @test true
+        s3 = Zenoh.ZSerializer(); finish(s3)
+        @test_throws ErrorException finish(s3)
+        s4 = Zenoh.ZSerializer(); finish(s4)
+        @test_throws ErrorException write(s4, Int64(1))
+    end
+
     @timed_testset "Keyexpr macro" begin
         k = kexpr"test/macro"
         @test k isa Zenoh.Keyexpr
@@ -348,6 +382,32 @@ try
             if !isnothing(pub)
                 close(pub)
             end
+            close(s)
+        end
+    end
+
+    @timed_testset "Serializer over session (deserialize from Sample)" begin
+        # Encapsulation in practice: put(serialize(...)) on one side, then
+        # deserialize(T, sample) straight off the received Sample — exercising
+        # the loaned-payload deserialize path, and naming no ZBytes anywhere.
+        c = Zenoh.Config(; str = """{connect: { endpoints: ["tcp/localhost:19148"]}}""")
+        s = open(c)
+        sub = nothing
+        pub = nothing
+        try
+            test_key = Zenoh.Keyexpr("test/serializer/session")
+            got = Channel{Tuple{Int64,Vector{UInt8}}}(1)
+            sub = open(sample -> put!(got, Zenoh.deserialize(Tuple{Int64,Vector{UInt8}}, sample)),
+                       s, test_key)
+            pub = Zenoh.Publisher(s, test_key)
+
+            payload = (Int64(2024), collect(UInt8, 1:16))
+            Zenoh.put(pub, Zenoh.serialize(payload))
+
+            @test take!(got) == payload
+        finally
+            !isnothing(sub) && close(sub)
+            !isnothing(pub) && close(pub)
             close(s)
         end
     end
