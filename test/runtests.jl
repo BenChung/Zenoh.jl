@@ -111,12 +111,59 @@ try
             @test read(r, Float64) == 2.0
         end
         zb = Zenoh.ZBytes(:hi)
-        open(zb, Val(:read)) do r 
+        open(zb, Val(:read)) do r
             @test read(r, String) == "hi"
         end
-        open(zb, Val(:readslice)) do r 
+        open(zb, Val(:readslice)) do r
             @test read(r, String) == "hi"
         end
+
+        # Extraction conversions
+        @test String(Zenoh.ZBytes("hello")) == "hello"
+        @test Vector{UInt8}(Zenoh.ZBytes("hello")) == Vector{UInt8}("hello")
+        @test Vector{UInt8}(Zenoh.ZBytes(UInt8[1, 2, 3])) == UInt8[1, 2, 3]
+        @test isempty(Zenoh.ZBytes())
+        @test !isempty(Zenoh.ZBytes("x"))
+        @test length(Zenoh.ZBytes()) == 0
+
+        # Copy constructors: source need not be kept alive
+        @test String(Zenoh.ZBytes("copied"; copy=true)) == "copied"
+        @test Vector{UInt8}(Zenoh.ZBytes(UInt8[9, 8, 7]; copy=true)) == UInt8[9, 8, 7]
+
+        # ZBytesWriter: explicit finish
+        w = Zenoh.ZBytesWriter()
+        write(w, "ab")
+        write(w, UInt8[0x63])  # "c"
+        @test String(finish(w)) == "abc"
+
+        # append! splices a ZBytes onto the writer
+        w = Zenoh.ZBytesWriter()
+        write(w, "head-")
+        append!(w, Zenoh.ZBytes("tail"))
+        @test String(finish(w)) == "head-tail"
+
+        # do-block open form returns the finished payload
+        zb = open(Zenoh.ZBytes, Val(:write)) do w
+            write(w, "x")
+            write(w, "y")
+        end
+        @test String(zb) == "xy"
+
+        # round-trip a binary value through the writer
+        zb = open(Zenoh.ZBytes, Val(:write)) do w
+            write(w, Int64(42))
+            write(w, 3.5)
+        end
+        open(zb, Val(:read)) do r
+            @test read(r, Int64) == 42
+            @test read(r, Float64) == 3.5
+        end
+
+        # close() drops an unfinished writer (explicit, main-task cleanup)
+        w = Zenoh.ZBytesWriter()
+        write(w, "discarded")
+        close(w)
+        @test true  # no crash; resource freed without a finalizer
     end
 
     @timed_testset "ZSlice" begin

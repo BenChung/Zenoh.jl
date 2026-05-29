@@ -39,7 +39,7 @@ Last refreshed against **libzenohc_jll 1.9.0**.
 | Session-level put | `put(s, k, payload; timestamp, encoding)` | `z_put` |
 | Sample (owned/loaned) | `Sample{Owned|Loaned}`; `payload`, `timestamp`, `kind`, `keyexpr`, `attachment`, `encoding`, `congestion_control`, `priority`, `express` | `z_sample_{payload,timestamp,kind,keyexpr,attachment,encoding,congestion_control,priority,express}`, `z_sample_drop` |
 | Encoding | `Encoding`, `Encodings.*` (53 constants), schema kwarg, MIME/String coercion | `z_encoding_from_str`, `z_encoding_set_schema_from_str`, `z_encoding_to_string`, `z_encoding_loan_mut` |
-| ZBytes | constructors + `length`/iterate/`open(::Val{:read,:readslice})` | `z_bytes_from_{buf,str,static_str}`, `z_bytes_len`, `z_bytes_get_{reader,slice_iterator}`, `z_bytes_slice_iterator_next`, `z_bytes_reader_*` |
+| ZBytes | constructors (incl. empty `ZBytes()` + `copy=true`) + `length`/`isempty`/iterate/`open(::Val{:read,:readslice})` + extraction `String`/`Vector{UInt8}` + `ZBytesWriter` (`write`/`append!`/`finish`/`close`, `open(ZBytes, ::Val{:write})`) | `z_bytes_from_{buf,str,static_str}`, `z_bytes_{empty,copy_from_buf,is_empty,len,to_string,to_slice}`, `z_bytes_get_{reader,slice_iterator}`, `z_bytes_slice_iterator_next`, `z_bytes_reader_*`, `z_bytes_writer_{empty,write_all,append,finish,drop}` |
 | ZSlice | `ZSlice()`, `ZSlice(::Vector{UInt8}; copy)`, `length`, `isempty` | `z_slice_{empty,copy_from_buf,from_buf,len,is_empty,data}`, `z_view_slice_loan` |
 | Timestamps | `ZTimestamp(::Session/::Ptr)`, `zid`, `ntp64_time` | `z_timestamp_{new,id,ntp64_time}` |
 | Liveliness | `LivelinessToken`, `LivelinessSubscriber`, `LivelinessSubscriberHandler`, `liveliness_get` (channel + callback) | `z_liveliness_declare_token`, `z_liveliness_undeclare_token`, `z_liveliness_token_{options_default,drop}`, `z_liveliness_declare_subscriber`, `z_liveliness_subscriber_options_default`, `z_liveliness_get`, `z_liveliness_get_options_default` |
@@ -64,8 +64,8 @@ Counts below are public (non-plumbing) entrypoints in each area.
 | Liveliness | 1 | Mostly done. Remaining: `z_liveliness_declare_background_subscriber` (no handle returned; needs session-scoped closure lifetime). |
 | Matching listeners | 3 | Publisher form is wrapped (`MatchingListener` + `matching_status`). Remaining: `z_publisher_declare_background_matching_listener`, and the entire querier counterpart (`z_querier_declare_matching_listener`, `z_querier_get_matching_status`, background variant) — blocked on the unwrapped `Querier`. |
 | Closures (high-level) | 5 | `z_closure_{sample,reply,query,hello}` are stamped out by `@closure_kind :owned` and `z_closure_matching_status` by `@closure_kind :pod` in `closure_kinds.jl`; `z_closure_zid` is hand-wired. Missing: `zc_closure_log`. |
-| ZBytes writer | 4 | Build payloads incrementally; mirror of `ZBytesReader`. `z_bytes_writer_{empty,append,write_all,finish}` + `z_bytes_empty`. |
-| ZBytes alternate constructors | 7 | `z_bytes_from_{slice,static_buf,string}`, `z_bytes_copy_from_{buf,slice,str,string}`, `z_bytes_{is_empty,to_slice,to_string}`. |
+| ZBytes writer | 0 | Done. `ZBytesWriter` (`write`/`append!`/`finish`/`close` + `open(ZBytes, ::Val{:write})` do-block) wraps `z_bytes_writer_{empty,write_all,append,finish,drop}`; empty `ZBytes()` wraps `z_bytes_empty`. |
+| ZBytes alternate constructors | 4 | Done: `z_bytes_copy_from_buf` (`copy=true`), `z_bytes_is_empty` (`isempty`), `z_bytes_to_slice` (`Vector{UInt8}`), `z_bytes_to_string` (`String`). Still unwrapped: `z_bytes_from_{slice,static_buf,string}`, `z_bytes_copy_from_{slice,str,string}`. |
 | View types (`z_view_keyexpr_*`, `z_view_string_*`, `z_view_slice_*`) | 15 | Non-owning constructors that avoid allocation; not currently wrapped. |
 | String / string array | 12 | `z_string_*` (used internally via `_string` helper), `z_string_array_*` — no `ZString` / `ZStringArray` wrappers. |
 | Keyexpr utilities | 0 | Done. `concat`, `Base.join`, `==`/`hash`, `includes`, `intersects`, `canonize`, `is_canon`, and `String`/`show` cover the nine `z_keyexpr_*` ops actually exported by `libzenohc 1.9.0` (the previously listed `z_keyexpr_relation_to` isn't in the bindings). Substring variants (`z_keyexpr_from_substr{,_autocanonize}`, `z_keyexpr_canonize_null_terminated`) and the `z_view_keyexpr_*` non-owning constructors remain unwrapped — see "View types" row. |
@@ -99,7 +99,18 @@ Biggest user-visible payoff first:
 8. **Serializer / Deserializer** (`ze_*`) — large but cohesive; can be its own layer on top of `ZBytes`.
 9. ~~**Matching listeners**~~ — done for publishers (foreground); querier
    counterpart + background variant deferred.
-10. **ZBytes writer + view types + ~~keyexpr ops~~** — keyexpr ops done; writer + view types still nice-to-have polish.
+10. **~~ZBytes writer~~ + view types + ~~keyexpr ops~~** — keyexpr ops + writer done; view types still nice-to-have polish.
+
+> **Note — ZBytes ownership / no finalizer.** Owned `ZBytes` deliberately
+> carry no GC finalizer. A `z_bytes_drop` finalizer was prototyped as a leak
+> safety net but reverted: it invokes the zero-copy deleter (`_release`,
+> which touches the Julia heap) from the finalizer thread, and dropping an
+> SHM-backed payload off-thread corrupts zenoh's SHM segment bookkeeping —
+> wedging SHM delivery under GC pressure. The pub/sub/query paths all `_move`
+> their bytes into the C call, so they never leak; a standalone owned `ZBytes`
+> that is built and only read (never moved) is not auto-reclaimed. `ZBytesWriter`
+> follows the same rule — `finish` consumes it, `close` drops an unfinished one,
+> both on the caller's task.
 
 SHM remains a separate, larger project — none of those entrypoints are public
 yet in this binding generation pass.

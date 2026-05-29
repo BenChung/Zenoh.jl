@@ -36,8 +36,23 @@ struct ZBytes{R <: Union{Base.RefValue{LibZenohC.z_owned_bytes_t}, Ptr{LibZenohC
             _handle_result(rtc)
             return out
         end
-    function ZBytes(r::Vector{T}) where T
+    # Empty payload. Owned, but holds nothing — handy as a writer seed or a
+    # zero-length reply body.
+    function ZBytes()
         out = new{Base.RefValue{LibZenohC.z_owned_bytes_t}}(Ref{LibZenohC.z_owned_bytes_t}(), nothing)
+        LibZenohC.z_bytes_empty(out.b)
+        return out
+    end
+    # `copy=false` (default): zero-copy — pin `r` and hand libzenoh a deleter
+    # so the buffer is freed only once the C side is done with it. `copy=true`:
+    # libzenoh takes its own copy immediately, so `r` need not outlive the
+    # ZBytes (mirrors `ZSlice(buf; copy=true)`).
+    function ZBytes(r::Vector{T}; copy::Bool=false) where T
+        out = new{Base.RefValue{LibZenohC.z_owned_bytes_t}}(Ref{LibZenohC.z_owned_bytes_t}(), nothing)
+        if copy
+            GC.@preserve r _handle_result(LibZenohC.z_bytes_copy_from_buf(out.b, r, length(r)*sizeof(T)))
+            return out
+        end
         Base.preserve_handle(r)
         rtc = LibZenohC.z_bytes_from_buf(out.b, r, length(r)*sizeof(T),
             @cfunction(_release, Ptr{Cvoid}, (Ptr{Cvoid}, Ptr{Cvoid})), Base.pointer_from_objref(r))
@@ -62,7 +77,13 @@ struct ZBytes{R <: Union{Base.RefValue{LibZenohC.z_owned_bytes_t}, Ptr{LibZenohC
     function ZBytes(p::Ptr{LibZenohC.z_loaned_bytes_t}, owner=nothing)
         return new{Ptr{LibZenohC.z_loaned_bytes_t}}(p, owner)
     end
-    function ZBytes(s::String)
+    function ZBytes(s::String; copy::Bool=false)
+        # `copy=true`: libzenoh takes its own copy, so we don't pin `s`.
+        if copy
+            b = Ref{LibZenohC.z_owned_bytes_t}()
+            GC.@preserve s _handle_result(LibZenohC.z_bytes_copy_from_buf(b, Base.unsafe_convert(Ptr{UInt8}, s), sizeof(s)))
+            return new{Base.RefValue{LibZenohC.z_owned_bytes_t}}(b, nothing)
+        end
         # Box the String in a RefValue so we have a stable, mutable handle to
         # pass as ctx to the C deleter. preserve_handle/unpreserve_handle pin
         # the box (and transitively the String) until libzenoh releases it.
@@ -88,6 +109,21 @@ struct ZBytes{R <: Union{Base.RefValue{LibZenohC.z_owned_bytes_t}, Ptr{LibZenohC
         return new{Base.RefValue{LibZenohC.z_owned_bytes_t}}(b, nothing)
     end
 end
+# NOTE on ownership: owned ZBytes deliberately carry NO GC finalizer.
+#
+# An earlier revision attached a `z_bytes_drop` finalizer as a leak safety
+# net for owned ZBytes that are never moved into a put/reply/get. It was
+# reverted: `z_bytes_drop` invokes the zero-copy deleter (`_release`, which
+# touches the Julia heap) from the GC/finalizer thread, and dropping an
+# SHM-backed payload off-thread corrupts zenoh's SHM segment bookkeeping —
+# observably wedging SHM delivery (a session-fast-path round-trip hangs)
+# under GC pressure. A hang risk is unacceptable, so the net is gone.
+#
+# Consequence (same as upstream behavior): the pub/sub/query paths all
+# `_move` their bytes into a C call, so they never leak. A standalone owned
+# ZBytes that is built and then merely read (never moved) is not auto-
+# reclaimed; move it into a `put`/`reply`/`append!` to hand off ownership.
+
 Base.length(z::ZBytes{Base.RefValue{LibZenohC.z_owned_bytes_t}}) = LibZenohC.z_bytes_len(_loan(z.b))
 Base.length(z::ZBytes{Ptr{LibZenohC.z_loaned_bytes_t}}) = LibZenohC.z_bytes_len(z.b)
 
@@ -95,6 +131,35 @@ _move(p::ZBytes) = _move(p.b)
 
 _loaned_bytes(b::ZBytes{Base.RefValue{LibZenohC.z_owned_bytes_t}}) = _loan(b.b)
 _loaned_bytes(b::ZBytes{Ptr{LibZenohC.z_loaned_bytes_t}}) = b.b
+
+Base.isempty(z::ZBytes) = LibZenohC.z_bytes_is_empty(_loaned_bytes(z))
+
+# Materialize the whole payload into a Julia String. Copies out of the
+# (possibly multi-slice) payload, so the result is independent of `z`.
+function Base.String(z::ZBytes)
+    s = Ref{LibZenohC.z_owned_string_t}()
+    _handle_result(LibZenohC.z_bytes_to_string(_loaned_bytes(z), s))
+    try
+        return _string(s)
+    finally
+        _drop(_move(s))
+    end
+end
+
+# Materialize the whole payload into an owned Julia byte vector.
+function Base.Vector{UInt8}(z::ZBytes)
+    sl = Ref{LibZenohC.z_owned_slice_t}()
+    _handle_result(LibZenohC.z_bytes_to_slice(_loaned_bytes(z), sl))
+    try
+        loaned = _loan(sl)
+        n = LibZenohC.z_slice_len(loaned)
+        out = Vector{UInt8}(undef, n)
+        n == 0 || GC.@preserve out unsafe_copyto!(pointer(out), LibZenohC.z_slice_data(loaned), n)
+        return out
+    finally
+        LibZenohC.z_slice_drop(_move(sl))
+    end
+end
 
 struct ZBytesReader{Z <: ZBytes} <: IO
     z::Z
@@ -232,4 +297,77 @@ end
 function Base.close(z::ZBytesSliceReader)
 end
 
-export ZBytes
+# ZBytesWriter — the write-side mirror of ZBytesReader. Build a payload
+# incrementally with `write`/`append!`, then `finish` it into a ZBytes.
+#
+# The writer owns a C resource (`z_owned_bytes_writer_t`) that `finish`
+# consumes (moves) out. It deliberately carries NO GC finalizer: dropping a
+# zenoh handle from the finalizer thread risks blocking on zenoh-internal
+# locks (see the ownership note above ZBytes), and a hang risk is
+# unacceptable. So cleanup is explicit and always runs on the caller's task:
+# `finish` consumes the writer; `close` drops an unfinished one. The do-block
+# form below guarantees one of these always fires. The only way to leak the
+# writer is to build one with the bare constructor and then drop the
+# reference without `finish`/`close` — a misuse, not a normal path.
+mutable struct ZBytesWriter <: IO
+    w::Base.RefValue{LibZenohC.z_owned_bytes_writer_t}
+    done::Bool
+    function ZBytesWriter()
+        w = Ref{LibZenohC.z_owned_bytes_writer_t}()
+        _handle_result(LibZenohC.z_bytes_writer_empty(w))
+        return new(w, false)
+    end
+end
+
+# Backs `write(w, x)` for every type Base lowers to a raw byte write.
+function Base.unsafe_write(w::ZBytesWriter, p::Ptr{UInt8}, n::UInt)
+    w.done && error("write to a finished ZBytesWriter")
+    _handle_result(LibZenohC.z_bytes_writer_write_all(_loan_mut(w.w), p, n))
+    return Int(n)
+end
+
+# Splice an existing ZBytes onto the tail of the writer. This *moves* `z`
+# (zero-copy when possible), so `z` must not be used afterward.
+function Base.append!(w::ZBytesWriter, z::ZBytes)
+    w.done && error("append! to a finished ZBytesWriter")
+    _handle_result(LibZenohC.z_bytes_writer_append(_loan_mut(w.w), _move(z)))
+    return w
+end
+
+# Consume the writer and produce the assembled payload.
+function finish(w::ZBytesWriter)
+    w.done && error("ZBytesWriter already finished")
+    b = Ref{LibZenohC.z_owned_bytes_t}()
+    LibZenohC.z_bytes_writer_finish(_move(w.w), b)
+    w.done = true
+    return ZBytes(b, Val(:owned))
+end
+
+# Drop an unfinished writer's C resource explicitly (no-op once finished).
+# Runs on the caller's task, so unlike a finalizer it can't deadlock with
+# zenoh internals. Call it to discard a writer you won't `finish`.
+function Base.close(w::ZBytesWriter)
+    w.done && return nothing
+    w.done = true
+    LibZenohC.z_bytes_writer_drop(_move(w.w))
+    return nothing
+end
+
+# Do-block form mirroring `open(z, Val(:read))`: returns the finished ZBytes.
+# Guarantees the writer is cleaned up — `finish` on success, `close` if `f`
+# throws — so this form can never leak the writer.
+#   bytes = open(ZBytes, Val(:write)) do w
+#       write(w, "header"); write(w, payload)
+#   end
+function Base.open(f::Function, ::Type{ZBytes}, ::Val{:write})
+    w = ZBytesWriter()
+    try
+        f(w)
+        return finish(w)
+    catch
+        close(w)
+        rethrow()
+    end
+end
+
+export ZBytes, ZBytesWriter, finish
