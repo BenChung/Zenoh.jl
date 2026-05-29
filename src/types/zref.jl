@@ -157,6 +157,66 @@ function zref(sample::Sample, ::Type{T}) where {T}
     return ZRef{T, typeof(box)}(box, Base.unsafe_convert(Ptr{T}, box), false)
 end
 
+# --- payload as Memory{T} (serialization buffers) --------------------
+
+"""
+    as_memory(z::ZBytes, T=UInt8) -> Memory{T}
+
+Copy the payload into a freshly-allocated, owned `Memory{T}` — safe to keep past
+the originating sample/callback, and ready to hand to a (de)serializer. The byte
+length must be a multiple of `sizeof(T)`. For zero-copy access scoped to a block,
+use [`with_memory`](@ref). To go the other way (publish a `Memory`), `ZBytes(m)`.
+"""
+function as_memory(z::ZBytes, ::Type{T}=UInt8) where {T}
+    isbitstype(T) || throw(ArgumentError("as_memory requires an isbits type, got $T"))
+    nb = Int(length(z))
+    nb % sizeof(T) == 0 ||
+        throw(ArgumentError("payload ($nb bytes) is not a multiple of sizeof($T)=$(sizeof(T))"))
+    mem = Memory{T}(undef, nb ÷ sizeof(T))
+    nb == 0 && return mem
+    GC.@preserve mem begin
+        rdr = open(z, Val(:read))
+        Base.unsafe_read(rdr, Ptr{UInt8}(pointer(mem)), UInt(nb))
+    end
+    return mem
+end
+
+"""
+    with_memory(f, z::ZBytes, T=UInt8)
+
+Call `f(mem::Memory{T})` with a view of the payload — zero-copy when it is
+SHM-backed or a single contiguous, `T`-aligned network slice, otherwise over a
+one-time copy. The view borrows from `z` and is valid **only for the duration of
+`f`**: do not retain `mem` (or pointers into it) afterwards — copy out (e.g. with
+[`as_memory`](@ref)) if you need it to persist. Returns `f`'s result.
+"""
+function with_memory(f, z::ZBytes, ::Type{T}=UInt8) where {T}
+    isbitstype(T) || throw(ArgumentError("with_memory requires an isbits type, got $T"))
+    nb = Int(length(z))
+    nb % sizeof(T) == 0 ||
+        throw(ArgumentError("payload ($nb bytes) is not a multiple of sizeof($T)=$(sizeof(T))"))
+    n = nb ÷ sizeof(T)
+
+    # Zero-copy tier 1 — SHM segment.
+    shm = as_shm(z)
+    if shm !== nothing && length(shm) >= nb && _aligned(pointer(shm), T)
+        return GC.@preserve shm f(unsafe_wrap(Memory{T}, Ptr{T}(pointer(shm)), n))
+    end
+
+    # Zero-copy tier 2 — single contiguous, aligned network slice.
+    view = Ref{LibZenohC.z_view_slice_t}()
+    if LibZenohC.z_bytes_get_contiguous_view(_loaned_bytes(z), view) == LibZenohC.Z_OK
+        sl = LibZenohC.z_view_slice_loan(view)
+        p  = LibZenohC.z_slice_data(sl)
+        if LibZenohC.z_slice_len(sl) >= nb && _aligned(p, T)
+            return GC.@preserve z view f(unsafe_wrap(Memory{T}, Ptr{T}(p), n))
+        end
+    end
+
+    # Tier 3 — fragmented or misaligned: one copy.
+    return f(as_memory(z, T))
+end
+
 # --- accessors -------------------------------------------------------
 
 @inline function _check_live(r::ZRef)
@@ -227,4 +287,4 @@ function put(s::Session, k::Keyexpr, r::ZRef;
     end
 end
 
-export ZRef, zref, isborrowed
+export ZRef, zref, isborrowed, as_memory, with_memory

@@ -45,6 +45,18 @@ struct ZBytes{R <: Union{Base.RefValue{LibZenohC.z_owned_bytes_t}, Ptr{LibZenohC
         _handle_result(rtc)
         return out
     end
+    # Serialize a Memory{T} buffer for sending — borrowed (zero-copy) like the
+    # Vector form; the Memory is pinned until libzenoh releases it.
+    function ZBytes(m::Memory{T}) where T
+        out = new{Base.RefValue{LibZenohC.z_owned_bytes_t}}(Ref{LibZenohC.z_owned_bytes_t}(), nothing)
+        Base.preserve_handle(m)
+        rtc = GC.@preserve m LibZenohC.z_bytes_from_buf(out.b,
+            Ptr{UInt8}(pointer(m)), length(m)*sizeof(T),
+            @cfunction(_release, Ptr{Cvoid}, (Ptr{Cvoid}, Ptr{Cvoid})), Base.pointer_from_objref(m))
+        rtc == LibZenohC.Z_OK || Base.unpreserve_handle(m)
+        _handle_result(rtc)
+        return out
+    end
     # `owner` is the value the loaned pointer borrows from; pass it so the
     # ZBytes keeps the source buffer alive (see field doc above).
     function ZBytes(p::Ptr{LibZenohC.z_loaned_bytes_t}, owner=nothing)

@@ -1562,6 +1562,42 @@ try
         end
     end
 
+    @timed_testset "ZBytes <-> Memory (serialization buffers)" timeout=20 begin
+        # Serialize: build a Memory{Float64}, wrap as ZBytes (borrowed).
+        vals = [1.5, 2.5, 3.5, 4.5]
+        src = Memory{Float64}(undef, 4)
+        for i in 1:4; src[i] = vals[i]; end
+        zb = Zenoh.ZBytes(src)
+        @test length(zb) == 4 * sizeof(Float64)
+
+        # Deserialize: owned copy as Memory{Float64}.
+        m = Zenoh.as_memory(zb, Float64)
+        @test m isa Memory{Float64}
+        @test collect(m) == vals
+
+        # Default eltype is UInt8.
+        mb = Zenoh.as_memory(zb)
+        @test mb isa Memory{UInt8}
+        @test length(mb) == 32
+
+        # Scoped (zero-copy-or-copy) view; result of f is returned.
+        s = with_memory(zb, Float64) do mem
+            @test mem isa Memory{Float64}
+            @test length(mem) == 4
+            sum(mem)
+        end
+        @test s == sum(vals)
+
+        # Length must divide sizeof(T).
+        odd = Zenoh.ZBytes(UInt8[1, 2, 3, 4, 5])
+        @test_throws ArgumentError Zenoh.as_memory(odd, Float64)
+        @test_throws ArgumentError with_memory(identity, odd, Float64)
+
+        # Round-trip a Memory through ZBytes and back unchanged (bytewise).
+        rt = Zenoh.as_memory(Zenoh.ZBytes(Zenoh.as_memory(zb)), Float64)
+        @test collect(rt) == vals
+    end
+
     @timed_testset "SHM capability discovery" timeout=20 begin
         # Opened without shm_clients: SHM never requested.
         c0 = Zenoh.Config(; str = """{connect: { endpoints: ["tcp/localhost:19148"]}}""")
