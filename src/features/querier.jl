@@ -123,6 +123,21 @@ function keyexpr(q::Querier)
 end
 
 """
+    querier_id(q::Querier) -> (; zid, eid)
+
+The querier's global entity id: the Zenoh id of its session (`zid`, a
+`z_id_t` printable via `show`) paired with the session-local entity id
+(`eid::UInt32`).
+"""
+function querier_id(q::Querier)
+    gid = Ref{LibZenohC.z_entity_global_id_t}(LibZenohC.z_querier_id(_loan(q)))
+    GC.@preserve gid begin
+        return (zid = LibZenohC.z_entity_global_id_zid(gid),
+                eid = LibZenohC.z_entity_global_id_eid(gid))
+    end
+end
+
+"""
     get(q::Querier, parameters=""; kwargs...) -> GetHandler
 
 Issue a query on `q`, returning a `GetHandler` over the replies. Mirrors
@@ -144,10 +159,12 @@ function Base.get(q::Querier, parameters::AbstractString="";
     closure = _make_closure_ref(Val(:reply))
     handler = _new_channel(Val(:reply), Val(channel), closure, capacity)
 
-    params = String(parameters)
+    # _substr takes (ptr, len) rather than a null-terminated string, so a
+    # `SubString` view threads through without an intermediate copy.
+    params = parameters isa Union{String, SubString{String}} ? parameters : String(parameters)
     GC.@preserve payload_bytes attach_bytes enc_ref params opts begin
-        rtc = LibZenohC.z_querier_get(_loan(q),
-            pointer(Base.unsafe_convert(Cstring, params)),
+        rtc = LibZenohC.z_querier_get_with_parameters_substr(_loan(q),
+            Ptr{Cchar}(pointer(params)), ncodeunits(params),
             _move(closure), opts)
         _handle_result(rtc)
     end
@@ -173,14 +190,14 @@ function Base.get(f::Function, q::Querier, parameters::AbstractString="";
     opts, payload_bytes, attach_bytes, enc_ref =
         _make_querier_get_opts(; payload, encoding, attachment)
 
-    params = String(parameters)
+    params = parameters isa Union{String, SubString{String}} ? parameters : String(parameters)
     _callback_get(f; should_close_on_error=should_close_on_error) do closure
         GC.@preserve payload_bytes attach_bytes enc_ref params opts begin
-            LibZenohC.z_querier_get(_loan(q),
-                pointer(Base.unsafe_convert(Cstring, params)),
+            LibZenohC.z_querier_get_with_parameters_substr(_loan(q),
+                Ptr{Cchar}(pointer(params)), ncodeunits(params),
                 _move(closure), opts)
         end
     end
 end
 
-export Querier
+export Querier, querier_id

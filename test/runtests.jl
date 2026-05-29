@@ -1329,6 +1329,17 @@ try
 
             @test take!(seen_keyexpr) == "test/querier/channel"
             @test take!(seen_params)  == "k1=v1&k2=v2"
+
+            # querier_id: zid matches the owning session, eid is populated
+            gid = Zenoh.querier_id(qrr)
+            @test gid.zid == Zenoh.zid(s2)
+            @test gid.eid isa UInt32
+
+            # parameters accept a SubString view (exercises the _substr path)
+            sub = SubString("__k3=v3__", 3, 7)   # "k3=v3"
+            @test sub == "k3=v3"
+            @test length(filter(Zenoh.is_ok, collect(Zenoh.get(qrr, sub)))) >= 1
+            @test take!(seen_params) == "k3=v3"
         finally
             !isnothing(qrr) && close(qrr)
             !isnothing(qh)  && close(qh)
