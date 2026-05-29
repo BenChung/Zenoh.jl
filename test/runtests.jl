@@ -3,12 +3,66 @@ include("test_utils.jl")
 router = run(pipeline(`$(Zenohd_jll.zenohd()) -l tcp/localhost:19148`, stdout = stdout), wait=false)
 
 try
-    @timed_testset "Config" begin 
+    @timed_testset "Config" begin
         c = Zenoh.Config()
         ref = Zenoh.toJson(c)
         c["connect/endpoints"] = "[\"tcp/localhost:19148\"]"
         @test c["connect/endpoints"] == "[\"tcp/localhost:19148\"]"
-        @test length(Zenoh.toJson(c)) > length(ref) # lame I know 
+        @test length(Zenoh.toJson(c)) > length(ref) # lame I know
+
+        # Typed setindex! serializes Julia values to JSON5 fragments.
+        @test Zenoh._to_json5(true) == "true"
+        @test Zenoh._to_json5(5000) == "5000"
+        @test Zenoh._to_json5(:peer) == "\"peer\""
+        @test Zenoh._to_json5(["a", "b"]) == "[\"a\",\"b\"]"
+        @test Zenoh._to_json5(Connect(endpoints = ["x"], exit_on_failure = true)) ==
+            "{\"endpoints\":[\"x\"],\"exit_on_failure\":true}"
+        c2 = Zenoh.Config()
+        c2["mode"] = :peer
+        @test c2["mode"] == "\"peer\""
+        c2["scouting/multicast/enabled"] = false
+        @test c2["scouting/multicast/enabled"] == "false"
+    end
+
+    @timed_testset "ZenohConfig" begin
+        c = Config(ZenohConfig(
+            mode = :peer,
+            connect = Connect(endpoints = ["tcp/localhost:19148"]),
+            scouting = Scouting(multicast = Multicast(enabled = false)),
+            timestamping = Timestamping(enabled = true),
+            queries_default_timeout = 5000,
+            open = Open(connect_scouted = false, declares = true),
+            transport = Transport(
+                shared_memory = SharedMemory(enabled = true),
+                link = Link(tx = LinkTx(threads = 4)),
+                auth = Auth(usrpwd = UsrPwd(user = "u", password = "p")),
+            ),
+            qos = Qos(network = [QosOverwrite(
+                messages = ["put"], key_exprs = ["demo/**"],
+                overwrite = QosOverwriteValues(priority = :data_high))]),
+            adminspace = AdminSpace(enabled = true,
+                permissions = Permissions(read = true, write = false)),
+            overrides = Dict("transport/link/rx/buffer_size" => 65536),
+        ))
+        @test c["mode"] == "\"peer\""
+        @test c["connect/endpoints"] == "[\"tcp/localhost:19148\"]"
+        @test c["scouting/multicast/enabled"] == "false"
+        @test c["timestamping/enabled"] == "true"
+        @test c["queries_default_timeout"] == "5000"
+        @test c["open/return_conditions/declares"] == "true"
+        @test c["adminspace/enabled"] == "true"
+        @test occursin("data_high", c["qos/network"]) && startswith(c["qos/network"], "[")
+        @test c["transport/shared_memory/enabled"] == "true"
+        @test c["transport/link/tx/threads"] == "4"
+        @test c["transport/auth/usrpwd/user"] == "\"u\""
+        @test c["transport/link/rx/buffer_size"] == "65536"
+
+        # Unknown mode symbols are rejected.
+        @test_throws ArgumentError Config(ZenohConfig(mode = :bogus))
+
+        # A typed config opens a working session, like the string-built form.
+        s = open(Config(ZenohConfig(connect = Connect(endpoints = ["tcp/localhost:19148"]))))
+        close(s)
     end
 
     struct TestStruct

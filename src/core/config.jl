@@ -36,11 +36,51 @@ function Base.getindex(c::Config, key::String)
 end
 
 """
-Inserts a JSON-serialized value at the key position of the configuration.
+Serialize a Julia value into a JSON5 fragment suitable for insertion into a
+`Config`. This is deliberately minimal — Zenoh's own parser validates and
+canonicalizes the value on insert, so we only need to emit well-formed JSON5 for
+the value types the config builder produces. Note that strings are *quoted* here
+(the nested form); a top-level `AbstractString` passed to `setindex!` is instead
+treated as raw, pre-formatted JSON5 (see below).
 """
-function Base.setindex!(c::Config, value::String, key::String)
-    GC.@preserve key value _handle_result(LibZenohC.zc_config_insert_json5(_loan(c.c), pointer(Base.unsafe_convert(Cstring, key)), pointer(Base.unsafe_convert(Cstring, value))))
+_to_json5(x::Bool) = x ? "true" : "false"
+_to_json5(x::Integer) = string(x)
+_to_json5(x::Real) = string(x)
+_to_json5(x::Symbol) = _to_json5(String(x))
+function _to_json5(s::AbstractString)
+    io = IOBuffer()
+    write(io, '"')
+    for ch in s
+        (ch == '"' || ch == '\\') && write(io, '\\')
+        write(io, ch)
+    end
+    write(io, '"')
+    return String(take!(io))
 end
+_to_json5(x::AbstractVector) = "[" * join(map(_to_json5, x), ",") * "]"
+_to_json5(p::Pair) = _to_json5(string(p.first)) * ":" * _to_json5(p.second)
+_to_json5(d::AbstractDict) = "{" * join((_to_json5(k => v) for (k, v) in d), ",") * "}"
+_to_json5(nt::NamedTuple) =
+    "{" * join((_to_json5(string(k) => getfield(nt, k)) for k in keys(nt)), ",") * "}"
+
+"""
+Inserts a pre-formatted JSON5 string value at the key position of the
+configuration, verbatim. (The value must already be valid JSON5, e.g.
+`c["connect/endpoints"] = "[\\"tcp/localhost:7447\\"]"`.)
+"""
+function Base.setindex!(c::Config, value::AbstractString, key::AbstractString)
+    skey = String(key)
+    sval = String(value)
+    GC.@preserve skey sval _handle_result(LibZenohC.zc_config_insert_json5(_loan(c.c), pointer(Base.unsafe_convert(Cstring, skey)), pointer(Base.unsafe_convert(Cstring, sval))))
+    return value
+end
+
+"""
+Inserts any other Julia value at the key position, serializing it to a JSON5
+fragment first (`true`, `5000`, `:peer`, `["tcp/…"]`, a `Dict`, or a typed
+config section). Lets you write `c["mode"] = :peer` instead of hand-writing JSON.
+"""
+Base.setindex!(c::Config, value, key::AbstractString) = setindex!(c, _to_json5(value), String(key))
 
 """
 Convert a config into an equivalent JSON string.

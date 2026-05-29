@@ -7,6 +7,7 @@ include("../gen/LibZenohC.jl")
 include("core/ownership.jl")        # _move/_loan/_drop/_take + _string
 include("core/result.jl")           # ZenohError, _handle_result
 include("core/config.jl")           # Config
+include("core/config_builder.jl")   # ZenohConfig + typed config sections
 include("core/session.jl")          # Session
 include("core/callback.jl")         # CallbackCtx, _CB_INIT_HOOKS
 include("core/closure_kinds.jl")    # @closure_kind
