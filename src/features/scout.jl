@@ -16,14 +16,14 @@
 A peer announcement delivered by `scout`. Fields:
 
 - `zid::z_id_t` — the peer's Zenoh ID.
-- `whatami::z_whatami_t` — `Z_WHATAMI_ROUTER`, `_PEER`, or `_CLIENT`.
+- `whatami::WhatAmI` — `WhatAmIs.ROUTER`, `.PEER`, or `.CLIENT`.
 - `locators::Vector{String}` — endpoints the peer is reachable at.
 
-Use `whatami_string(h.whatami)` for a human-readable role.
+Use `whatami_string(h.whatami)` for a human-readable role string.
 """
 struct Hello
     zid::LibZenohC.z_id_t
-    whatami::LibZenohC.z_whatami_t
+    whatami::WhatAmI
     locators::Vector{String}
 end
 
@@ -34,7 +34,7 @@ end
 function Hello(r::Base.RefValue{LibZenohC.z_owned_hello_t})
     loaned = LibZenohC.z_hello_loan(r)
     zid_v     = LibZenohC.z_hello_zid(loaned)
-    whatami_v = LibZenohC.z_hello_whatami(loaned)
+    whatami_v = _whatami_from_raw(LibZenohC.z_hello_whatami(loaned))
 
     arr = Ref{LibZenohC.z_owned_string_array_t}()
     LibZenohC.z_hello_locators(loaned, arr)
@@ -67,6 +67,10 @@ function whatami_string(w::LibZenohC.z_whatami_t)
     return unsafe_string(
         LibZenohC.z_string_data(loaned), LibZenohC.z_string_len(loaned))
 end
+
+# Typed-singleton overload: the lowercase libzenohc string ("router", …),
+# distinct from `show`'s `WhatAmIs.ROUTER` repr.
+whatami_string(w::WhatAmI) = whatami_string(_raw(w))
 
 function Base.show(io::IO, h::Hello)
     print(io, "Hello(", whatami_string(h.whatami), " ", h.zid,

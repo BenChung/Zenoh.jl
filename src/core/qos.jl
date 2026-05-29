@@ -281,7 +281,76 @@ Base.show(io::IO, ::QueryConsolidations.None)      = print(io, "QueryConsolidati
 Base.show(io::IO, ::QueryConsolidations.Monotonic) = print(io, "QueryConsolidations.MONOTONIC")
 Base.show(io::IO, ::QueryConsolidations.Latest)    = print(io, "QueryConsolidations.LATEST")
 
+# ── SampleKind ──────────────────────────────────────────────────────────
+#
+# Whether a Sample carries a value (PUT) or signals a key deletion
+# (DELETE). Read off an inbound Sample via `kind(::Sample)`.
+
+module SampleKinds
+    import ..LibZenohC
+
+    abstract type SampleKind end
+
+    struct Put    <: SampleKind end
+    struct Delete <: SampleKind end
+
+    const PUT     = Put()
+    const DELETE  = Delete()
+    # libzenoh: Z_SAMPLE_KIND_DEFAULT == Z_SAMPLE_KIND_PUT.
+    const DEFAULT = PUT
+end
+
+const SampleKind = SampleKinds.SampleKind
+
+_raw(::SampleKinds.Put)    = LibZenohC.Z_SAMPLE_KIND_PUT
+_raw(::SampleKinds.Delete) = LibZenohC.Z_SAMPLE_KIND_DELETE
+
+function _sample_kind_from_raw(v::LibZenohC.z_sample_kind_t)
+    v == LibZenohC.Z_SAMPLE_KIND_PUT    && return SampleKinds.PUT
+    v == LibZenohC.Z_SAMPLE_KIND_DELETE && return SampleKinds.DELETE
+    throw(ArgumentError("unknown z_sample_kind_t value: $v"))
+end
+
+Base.show(io::IO, ::SampleKinds.Put)    = print(io, "SampleKinds.PUT")
+Base.show(io::IO, ::SampleKinds.Delete) = print(io, "SampleKinds.DELETE")
+
+# ── WhatAmI ─────────────────────────────────────────────────────────────
+#
+# The role a discovered node announces in a scouting `Hello`.
+
+module WhatAmIs
+    import ..LibZenohC
+
+    abstract type WhatAmI end
+
+    struct Router <: WhatAmI end
+    struct Peer   <: WhatAmI end
+    struct Client <: WhatAmI end
+
+    const ROUTER = Router()
+    const PEER   = Peer()
+    const CLIENT = Client()
+end
+
+const WhatAmI = WhatAmIs.WhatAmI
+
+_raw(::WhatAmIs.Router) = LibZenohC.Z_WHATAMI_ROUTER
+_raw(::WhatAmIs.Peer)   = LibZenohC.Z_WHATAMI_PEER
+_raw(::WhatAmIs.Client) = LibZenohC.Z_WHATAMI_CLIENT
+
+function _whatami_from_raw(v::LibZenohC.z_whatami_t)
+    v == LibZenohC.Z_WHATAMI_ROUTER && return WhatAmIs.ROUTER
+    v == LibZenohC.Z_WHATAMI_PEER   && return WhatAmIs.PEER
+    v == LibZenohC.Z_WHATAMI_CLIENT && return WhatAmIs.CLIENT
+    throw(ArgumentError("unknown z_whatami_t value: $v"))
+end
+
+Base.show(io::IO, ::WhatAmIs.Router) = print(io, "WhatAmIs.ROUTER")
+Base.show(io::IO, ::WhatAmIs.Peer)   = print(io, "WhatAmIs.PEER")
+Base.show(io::IO, ::WhatAmIs.Client) = print(io, "WhatAmIs.CLIENT")
+
 export Locality, Localities, Priority, Priorities,
     CongestionControl, CongestionControls, Reliability, Reliabilities,
     ReplyKeyexpr, ReplyKeyexprs,
-    QueryTarget, QueryTargets, QueryConsolidation, QueryConsolidations
+    QueryTarget, QueryTargets, QueryConsolidation, QueryConsolidations,
+    SampleKind, SampleKinds, WhatAmI, WhatAmIs

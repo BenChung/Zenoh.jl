@@ -76,8 +76,8 @@ end
 Callback form. `f(::Sample)` runs on a dedicated Julia task for each
 token announcement/withdrawal on `k`:
 
-- `kind(sample) == Z_SAMPLE_KIND_PUT` — token appeared
-- `kind(sample) == Z_SAMPLE_KIND_DELETE` — token withdrew
+- `kind(sample) === SampleKinds.PUT` — token appeared
+- `kind(sample) === SampleKinds.DELETE` — token withdrew
 
 `history=true` replays existing tokens at subscribe time so a late
 subscriber sees the current set of live tokens.

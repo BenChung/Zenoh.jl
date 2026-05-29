@@ -224,6 +224,20 @@ try
         # disjoint
         @test !Zenoh.intersects(Zenoh.Keyexpr("x/y"), a)
 
+        # relation_to lattice + set-comparison predicates
+        @test Zenoh.relation_to(dstar, a) === Zenoh.IntersectionLevels.INCLUDES
+        @test Zenoh.relation_to(a, b)     === Zenoh.IntersectionLevels.EQUALS
+        @test Zenoh.relation_to(Zenoh.Keyexpr("x/y"), a) === Zenoh.IntersectionLevels.DISJOINT
+        @test Zenoh._intersection_level_from_raw(Zenoh._raw(Zenoh.IntersectionLevels.INTERSECTS)) ===
+              Zenoh.IntersectionLevels.INTERSECTS
+        @test occursin("IntersectionLevels.INCLUDES", sprint(show, Zenoh.IntersectionLevels.INCLUDES))
+        # a ⊆ b ⟺ b ⊇ a (issubset is the dual of includes); isdisjoint = !intersects
+        @test (a ⊆ dstar)
+        @test !(dstar ⊆ a)
+        @test issubset(a, b)
+        @test isdisjoint(Zenoh.Keyexpr("x/y"), a)
+        @test !isdisjoint(dstar, c)
+
         # concat — raw suffix, no separator inserted
         @test String(Zenoh.concat(a, "/d")) == "a/b/c/d"
         # bad suffix → ZenohError
@@ -503,7 +517,7 @@ try
             test_key_str = "test/sample_accessors"
             test_key = Zenoh.Keyexpr(test_key_str)
 
-            received_kind = Channel{Zenoh.LibZenohC.z_sample_kind_t}(1)
+            received_kind = Channel{Zenoh.SampleKind}(1)
             received_keyexpr = Channel{String}(1)
             received_attachment = Channel{Union{Nothing, Zenoh.ZBytes}}(1)
             received_encoding = Channel{Zenoh.Encoding}(1)
@@ -527,7 +541,7 @@ try
             Zenoh.put(pub, "sample accessor payload")
 
             @test take!(received_done)
-            @test take!(received_kind) == Zenoh.LibZenohC.Z_SAMPLE_KIND_PUT
+            @test take!(received_kind) === Zenoh.SampleKinds.PUT
             @test take!(received_keyexpr) == test_key_str
             @test take!(received_attachment) === nothing
             enc = take!(received_encoding)
@@ -799,14 +813,14 @@ try
             tok = Zenoh.LivelinessToken(s, test_key)
             put_sample = take!(sub)
             @test put_sample isa Zenoh.Sample
-            @test Zenoh.kind(put_sample) == Zenoh.LibZenohC.Z_SAMPLE_KIND_PUT
+            @test Zenoh.kind(put_sample) === Zenoh.SampleKinds.PUT
             @test Zenoh.keyexpr(put_sample) == "test/liveliness/buffered"
 
             # Undeclare → subscriber sees a DELETE.
             close(tok)
             tok = nothing
             del_sample = take!(sub)
-            @test Zenoh.kind(del_sample) == Zenoh.LibZenohC.Z_SAMPLE_KIND_DELETE
+            @test Zenoh.kind(del_sample) === Zenoh.SampleKinds.DELETE
         finally
             !isnothing(tok) && close(tok)
             !isnothing(sub) && close(sub)
@@ -821,15 +835,15 @@ try
         tok = nothing
         try
             test_key = Zenoh.Keyexpr("test/liveliness/callback")
-            seen = Channel{Zenoh.LibZenohC.z_sample_kind_t}(4)
+            seen = Channel{Zenoh.SampleKind}(4)
             sub = Zenoh.LivelinessSubscriber((sample) -> put!(seen, Zenoh.kind(sample)),
                 s, test_key)
 
             tok = Zenoh.LivelinessToken(s, test_key)
-            @test take!(seen) == Zenoh.LibZenohC.Z_SAMPLE_KIND_PUT
+            @test take!(seen) === Zenoh.SampleKinds.PUT
 
             close(tok); tok = nothing
-            @test take!(seen) == Zenoh.LibZenohC.Z_SAMPLE_KIND_DELETE
+            @test take!(seen) === Zenoh.SampleKinds.DELETE
         finally
             !isnothing(tok) && close(tok)
             !isnothing(sub) && close(sub)
@@ -851,7 +865,7 @@ try
             sub = Zenoh.LivelinessSubscriberHandler(s, test_key;
                 capacity=4, history=true)
             sample = take!(sub)
-            @test Zenoh.kind(sample) == Zenoh.LibZenohC.Z_SAMPLE_KIND_PUT
+            @test Zenoh.kind(sample) === Zenoh.SampleKinds.PUT
             @test Zenoh.keyexpr(sample) == "test/liveliness/history"
         finally
             !isnothing(tok) && close(tok)
@@ -885,6 +899,14 @@ try
         @test Zenoh.Reliabilities.RELIABLE    isa Zenoh.Reliability
         @test Zenoh.Reliabilities.DEFAULT === Zenoh.Reliabilities.RELIABLE
 
+        @test Zenoh.SampleKinds.PUT    isa Zenoh.SampleKind
+        @test Zenoh.SampleKinds.DELETE isa Zenoh.SampleKind
+        @test Zenoh.SampleKinds.DEFAULT === Zenoh.SampleKinds.PUT
+
+        @test Zenoh.WhatAmIs.ROUTER isa Zenoh.WhatAmI
+        @test Zenoh.WhatAmIs.PEER   isa Zenoh.WhatAmI
+        @test Zenoh.WhatAmIs.CLIENT isa Zenoh.WhatAmI
+
         # Singletons survive the raw round-trip.
         @test Zenoh._priority_from_raw(Zenoh._raw(Zenoh.Priorities.REAL_TIME)) ===
               Zenoh.Priorities.REAL_TIME
@@ -898,12 +920,19 @@ try
               Zenoh.Reliabilities.BEST_EFFORT
         @test Zenoh._reliability_from_raw(Zenoh._raw(Zenoh.Reliabilities.RELIABLE)) ===
               Zenoh.Reliabilities.RELIABLE
+        @test Zenoh._sample_kind_from_raw(Zenoh._raw(Zenoh.SampleKinds.DELETE)) ===
+              Zenoh.SampleKinds.DELETE
+        @test Zenoh._whatami_from_raw(Zenoh._raw(Zenoh.WhatAmIs.PEER)) ===
+              Zenoh.WhatAmIs.PEER
 
         @test occursin("Priorities.REAL_TIME",      sprint(show, Zenoh.Priorities.REAL_TIME))
         @test occursin("Localities.REMOTE",         sprint(show, Zenoh.Localities.REMOTE))
         @test occursin("CongestionControls.BLOCK",  sprint(show, Zenoh.CongestionControls.BLOCK))
         @test occursin("ReplyKeyexprs.ANY",         sprint(show, Zenoh.ReplyKeyexprs.ANY))
         @test occursin("Reliabilities.RELIABLE",    sprint(show, Zenoh.Reliabilities.RELIABLE))
+        @test occursin("SampleKinds.DELETE",        sprint(show, Zenoh.SampleKinds.DELETE))
+        @test occursin("WhatAmIs.ROUTER",           sprint(show, Zenoh.WhatAmIs.ROUTER))
+        @test Zenoh.whatami_string(Zenoh.WhatAmIs.ROUTER) == "router"
 
         # Config-builder bridge: singletons serialize to the zenoh config token.
         @test Zenoh._to_json5(Zenoh.Reliabilities.RELIABLE)    == "\"reliable\""
@@ -1189,7 +1218,7 @@ try
             ok_replies = filter(Zenoh.is_ok, replies)
             @test length(ok_replies) >= 1
             smp = Zenoh.sample(ok_replies[1])
-            @test Zenoh.kind(smp) == Zenoh.LibZenohC.Z_SAMPLE_KIND_DELETE
+            @test Zenoh.kind(smp) === Zenoh.SampleKinds.DELETE
         finally
             !isnothing(q) && close(q)
             close(s)

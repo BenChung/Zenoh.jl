@@ -34,7 +34,7 @@ function payload(s::Sample)
     return ZBytes(LibZenohC.z_sample_payload(_loaned_sample(s)), s)
 end
 
-kind(s::Sample) = LibZenohC.z_sample_kind(_loaned_sample(s))
+kind(s::Sample) = _sample_kind_from_raw(LibZenohC.z_sample_kind(_loaned_sample(s)))
 
 function keyexpr(s::Sample)
     # The view string borrows from the sample; GC.@preserve keeps `s` alive

@@ -30,6 +30,7 @@ _loan(s::Keyexpr) = _loan(s.k)
 
 export Keyexpr, @kexpr_str
 export includes, intersects, concat, canonize, is_canon
+export relation_to, IntersectionLevel, IntersectionLevels
 
 function _as_view_string(k::Keyexpr)
     view = Ref{LibZenohC.z_view_string_t}()
@@ -68,6 +69,87 @@ end
 function intersects(a::Keyexpr, b::Keyexpr)
     return LibZenohC.z_keyexpr_intersects(_loan(a.k), _loan(b.k))
 end
+
+# ── relation_to / IntersectionLevel ─────────────────────────────────────
+#
+# The full lattice relationship between two keyexprs' key-sets, as a
+# typed singleton (same pattern as the QoS enums in qos.jl).
+#
+# Keyexprs denote *sets* of keys, but zenoh offers no set-valued union or
+# intersection — the result generally isn't expressible as a single
+# keyexpr. So we expose the *relationship* rather than `∪`/`∩`, and map it
+# onto Julia's set-comparison predicates: `a ⊆ b` (`issubset`) and
+# `isdisjoint(a, b)`, alongside the existing `includes` (⊇) / `intersects`.
+
+module IntersectionLevels
+    import ..LibZenohC
+
+    abstract type IntersectionLevel end
+
+    struct Disjoint   <: IntersectionLevel end
+    struct Intersects <: IntersectionLevel end
+    struct Includes   <: IntersectionLevel end
+    struct Equals     <: IntersectionLevel end
+
+    const DISJOINT   = Disjoint()
+    const INTERSECTS = Intersects()
+    const INCLUDES   = Includes()
+    const EQUALS     = Equals()
+end
+
+const IntersectionLevel = IntersectionLevels.IntersectionLevel
+
+_raw(::IntersectionLevels.Disjoint)   = LibZenohC.Z_KEYEXPR_INTERSECTION_LEVEL_DISJOINT
+_raw(::IntersectionLevels.Intersects) = LibZenohC.Z_KEYEXPR_INTERSECTION_LEVEL_INTERSECTS
+_raw(::IntersectionLevels.Includes)   = LibZenohC.Z_KEYEXPR_INTERSECTION_LEVEL_INCLUDES
+_raw(::IntersectionLevels.Equals)     = LibZenohC.Z_KEYEXPR_INTERSECTION_LEVEL_EQUALS
+
+function _intersection_level_from_raw(v::LibZenohC.z_keyexpr_intersection_level_t)
+    v == LibZenohC.Z_KEYEXPR_INTERSECTION_LEVEL_DISJOINT   && return IntersectionLevels.DISJOINT
+    v == LibZenohC.Z_KEYEXPR_INTERSECTION_LEVEL_INTERSECTS && return IntersectionLevels.INTERSECTS
+    v == LibZenohC.Z_KEYEXPR_INTERSECTION_LEVEL_INCLUDES   && return IntersectionLevels.INCLUDES
+    v == LibZenohC.Z_KEYEXPR_INTERSECTION_LEVEL_EQUALS     && return IntersectionLevels.EQUALS
+    throw(ArgumentError("unknown z_keyexpr_intersection_level_t value: $v"))
+end
+
+Base.show(io::IO, ::IntersectionLevels.Disjoint)   = print(io, "IntersectionLevels.DISJOINT")
+Base.show(io::IO, ::IntersectionLevels.Intersects) = print(io, "IntersectionLevels.INTERSECTS")
+Base.show(io::IO, ::IntersectionLevels.Includes)   = print(io, "IntersectionLevels.INCLUDES")
+Base.show(io::IO, ::IntersectionLevels.Equals)     = print(io, "IntersectionLevels.EQUALS")
+
+"""
+    relation_to(a::Keyexpr, b::Keyexpr) -> IntersectionLevel
+
+`a`'s key-set relationship to `b`'s, as an [`IntersectionLevel`](@ref):
+`DISJOINT` (no shared key), `INTERSECTS` (overlap, neither contains the
+other), `INCLUDES` (`a` ⊇ `b`), or `EQUALS` (same key-set). This is the
+lattice level behind [`includes`](@ref), [`intersects`](@ref),
+[`issubset`](@ref), and [`isdisjoint`](@ref).
+
+Note `EQUALS` is *set* equality, which can differ from `==` (canonical
+string equality) — e.g. `a/**` and `a/**/**` are set-equal but not
+string-equal.
+"""
+function relation_to(a::Keyexpr, b::Keyexpr)
+    return _intersection_level_from_raw(
+        LibZenohC.z_keyexpr_relation_to(_loan(a.k), _loan(b.k)))
+end
+
+"""
+    issubset(a::Keyexpr, b::Keyexpr) -> Bool
+
+`true` when every key matched by `a` is also matched by `b` (`a ⊆ b`);
+the `⊆` operator works too. Dual of [`includes`](@ref) (`a ⊆ b ⟺ b ⊇ a`).
+"""
+Base.issubset(a::Keyexpr, b::Keyexpr) = includes(b, a)
+
+"""
+    isdisjoint(a::Keyexpr, b::Keyexpr) -> Bool
+
+`true` when no key is matched by both — the negation of
+[`intersects`](@ref).
+"""
+Base.isdisjoint(a::Keyexpr, b::Keyexpr) = !intersects(a, b)
 
 """
     concat(a::Keyexpr, suffix::AbstractString) -> Keyexpr
