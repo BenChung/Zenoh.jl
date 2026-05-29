@@ -31,14 +31,124 @@ end
 
 mutable struct SharedShmProvider <: AbstractShmProvider
     p::Base.RefValue{LibZenohC.z_owned_shared_shm_provider_t}
-    session::Session
+    # The session this provider was derived from. Held to keep the session
+    # alive for as long as the provider is used (loaning the provider reaches
+    # into session state). `nothing` when the session itself owns the provider
+    # (the `Session.shm` cache) — there the session already outlives the
+    # provider, so back-referencing it would only create a finalizer cycle.
+    session::Union{Session,Nothing}
 end
-function obtain_shm_provider(s::Session)
+
+# Obtain the session-derived provider. `keep_session` controls whether the
+# returned provider pins its session: true for the standalone public API
+# (`obtain_shm_provider`), false for the `Session.shm` cache (avoids a cycle).
+function _obtain_shared_provider(s::Session, keep_session::Bool)
     ref = Ref{LibZenohC.z_owned_shared_shm_provider_t}()
     state = Ref{LibZenohC.z_shm_provider_state}(LibZenohC.Z_SHM_PROVIDER_STATE_DISABLED)
     _handle_result(LibZenohC.z_obtain_shm_provider(_loan(s), ref, state))
     finalizer(r -> _drop(_move(r)), ref)
-    return SharedShmProvider(ref, s)
+    return SharedShmProvider(ref, keep_session ? s : nothing)
+end
+
+obtain_shm_provider(s::Session) = _obtain_shared_provider(s, true)
+
+_shm_state_sym(st::LibZenohC.z_shm_provider_state) =
+    st == LibZenohC.Z_SHM_PROVIDER_STATE_READY        ? :ready        :
+    st == LibZenohC.Z_SHM_PROVIDER_STATE_INITIALIZING ? :initializing :
+    st == LibZenohC.Z_SHM_PROVIDER_STATE_ERROR        ? :error        : :disabled
+
+# Probe SHM capability and populate the session's cache. Unlike the public
+# `obtain_shm_provider`, this never throws: a failed obtain or an unusable
+# state is recorded in `s.shm_state[]` and leaves `s.shm[]` as `nothing` so
+# `zref(::Session, T)` cleanly falls back to Julia memory.
+#
+# IMPORTANT: each *successful* `z_obtain_shm_provider` materializes a fresh
+# provider whose POSIX `/dev/shm` segments are NOT reclaimed on drop/close
+# (only by `cleanup_orphaned_shm_segments`). So obtain at most once per session:
+# if a provider is already cached, this is a no-op. Repeated callers (the warm-up
+# wait loop, `shm_ready`) thus obtain only while still warming up — when obtains
+# *fail* (`:unavailable`) and allocate nothing — and stop the moment one succeeds
+# and is cached. The provider is cached when zenoh reports it ready or still
+# initializing (lazy mode); `disabled`/`error` are recorded but not cached.
+function _bind_session_shm!(s::Session)
+    s.shm[] === nothing || return s              # already obtained — never re-obtain (leaks segments)
+    ref   = Ref{LibZenohC.z_owned_shared_shm_provider_t}()
+    state = Ref{LibZenohC.z_shm_provider_state}(LibZenohC.Z_SHM_PROVIDER_STATE_DISABLED)
+    rc = LibZenohC.z_obtain_shm_provider(_loan(s), ref, state)
+    if rc != LibZenohC.Z_OK
+        s.shm_state[] = :unavailable
+        return s
+    end
+    finalizer(r -> _drop(_move(r)), ref)
+    st = state[]
+    s.shm_state[] = _shm_state_sym(st)
+    if st == LibZenohC.Z_SHM_PROVIDER_STATE_READY ||
+       st == LibZenohC.Z_SHM_PROVIDER_STATE_INITIALIZING
+        s.shm[] = SharedShmProvider(ref, nothing)   # no back-ref → no finalizer cycle
+    end
+    return s
+end
+
+"""
+    shm_state(s::Session) -> Symbol
+
+The session's shared-memory capability as discovered at `open` (snapshot):
+
+  - `:none`        — opened without `shm_clients`; SHM was never requested.
+  - `:unavailable` — obtaining a provider failed (build/config has no SHM).
+  - `:disabled`    — provider reports disabled.
+  - `:initializing`— provider is warming up (lazy mode); allocations may not
+                     succeed yet but `zref(s, T)` will start using SHM once ready.
+  - `:ready`       — provider is usable now.
+  - `:error`       — provider entered an error state.
+
+`zref(s, T)` uses shared memory when this is `:ready` or `:initializing`, and
+falls back to Julia memory otherwise.
+"""
+shm_state(s::Session) = s.shm_state[]
+
+"""
+    shm_capable(s::Session) -> Bool
+
+True if the session has a cached SHM provider that `zref(s, T)` will allocate
+from (state `:ready` or `:initializing`); false if `zref` falls back to Julia
+memory.
+"""
+shm_capable(s::Session) = s.shm[] !== nothing
+
+"""
+    shm_ready(s::Session) -> Bool
+
+Re-probe the session *now* and report whether its SHM provider is ready to
+allocate. Unlike `shm_state` (a snapshot taken at `open`), this re-attempts the
+provider obtain and *adopts* the provider into the session cache if it has since
+become usable — so once this returns `true`, `shm_capable(s)` is also true and
+`zref(s, T)` allocates from shared memory. Useful when SHM hadn't finished
+warming up at `open` (a session reports `:unavailable`/`:initializing` until the
+provider settles, typically within a second or two of connecting). Always
+`false` for a session opened without `shm_clients`.
+"""
+function shm_ready(s::Session)
+    s.shm_state[] === :none && return false      # SHM never requested at open
+    _bind_session_shm!(s)                         # obtain + adopt (not a throwaway)
+    return s.shm_state[] === :ready
+end
+
+# Block until the provider is ready or `timeout` seconds elapse. The warm-up
+# window surfaces as `:unavailable`/`:initializing` (the obtain itself fails or
+# the provider isn't settled yet), so we keep re-attempting `_bind_session_shm!`
+# — which adopts the provider the moment it's usable — through both. Only
+# `:disabled`/`:error` are truly terminal. Returns the final state symbol.
+function _wait_for_shm_ready!(s::Session, timeout::Float64; poll::Float64=0.05)
+    deadline = time() + timeout
+    while true
+        _bind_session_shm!(s)
+        st = s.shm_state[]
+        st === :ready && return st
+        (st === :disabled || st === :error) && return st
+        time() >= deadline && return st           # gave up: still :unavailable/:initializing
+        sleep(poll)
+    end
 end
 
 _loan_provider(p::ShmProvider) = _loan(p.p)
@@ -215,4 +325,5 @@ export AbstractShmProvider, ShmProvider, SharedShmProvider
 export ShmBuf, ShmBufMut
 export ShmAllocError, ShmLayoutError
 export obtain_shm_provider, alloc, available, defragment, garbage_collect
+export shm_state, shm_capable, shm_ready
 export data, as_shm, is_shm, cleanup_orphaned_shm_segments

@@ -38,6 +38,10 @@ export scout, Hello, whatami_string
 include("shm/shm_client.jl")
 include("shm/shm.jl")
 
+# Typed, transport-agnostic payload handle (depends on Session, Sample,
+# ZBytes, Publisher and the SHM types above).
+include("types/zref.jl")
+
 function setup_logging()
     _handle_result(LibZenohC.zc_init_log_from_env_or("info"))
 end
