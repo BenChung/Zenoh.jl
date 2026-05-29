@@ -1580,18 +1580,89 @@ try
         @test mb isa Memory{UInt8}
         @test length(mb) == 32
 
-        # Scoped (zero-copy-or-copy) view; result of f is returned.
-        s = with_memory(zb, Float64) do mem
-            @test mem isa Memory{Float64}
-            @test length(mem) == 4
-            sum(mem)
+        # Scoped Borrowed view (zero-copy or copy); result of f is returned.
+        s = with_memory(zb, Float64) do b
+            @test b isa Zenoh.Borrowed{Float64}
+            @test length(b) == 4
+            @test b[1] == 1.5 && b[4] == 4.5
+            @test collect(b) == vals
+            sum(b)                       # iterates
         end
         @test s == sum(vals)
+
+        # Escape detection: a Borrowed that leaks out of `with_memory` is
+        # invalidated, and any later use throws BorrowError (not a segfault).
+        escaped = with_memory(zb, Float64) do b
+            @test isvalid(b)
+            b                            # smuggle it out
+        end
+        @test !isvalid(escaped)
+        @test_throws Zenoh.BorrowError escaped[1]
+        @test_throws Zenoh.BorrowError length(escaped)
+        @test_throws Zenoh.BorrowError pointer(escaped)
+        @test_throws Zenoh.BorrowError collect(escaped)
+
+        # Value-first deref: a single-struct payload reads back via b[].
+        struct_bytes = Zenoh.ZBytes(Ref(TestStruct(7, 9.0)))
+        with_memory(struct_bytes, TestStruct) do b
+            @test length(b) == 1
+            @test b[] == TestStruct(7, 9.0)     # the common case
+            # Struct-field proxy: b.field reads the field by offset.
+            @test b.a == 7
+            @test b.b == 9.0
+            @test Set(propertynames(b)) == Set((:a, :b))
+            @test_throws ArgumentError b.nope   # not a field of TestStruct
+            # Read-only by default: mutation is refused, not UB.
+            @test !iswritable(b)
+            @test_throws ArgumentError (b.a = 1)
+            @test_throws ArgumentError (b[] = TestStruct(0, 0.0))
+        end
+        # b[] on a multi-element view is an error (use indexing instead).
+        with_memory(zb, Float64) do b
+            @test_throws ArgumentError b[]
+            @test_throws ArgumentError b.a      # property access needs a single element
+        end
+
+        # Writable borrow: owns a copy, so b.field = v / b[i] = v mutate it.
+        with_memory(struct_bytes, TestStruct; writable = true) do b
+            @test iswritable(b)
+            b.a = 42
+            b.b = -1.5
+            @test b[] == TestStruct(42, -1.5)
+            @test b.a == 42
+        end
+        with_memory(zb, Float64; writable = true) do b
+            b[2] = 99.0
+            @test b[2] == 99.0
+            @test collect(b) == [1.5, 99.0, 3.5, 4.5]
+        end
+
+        # Manual borrow/close, and use-after-close throws.
+        bm = borrow(zb, Float64)
+        @test bm[2] == 2.5
+        close(bm)
+        @test_throws Zenoh.BorrowError bm[2]
+        close(bm)                        # idempotent
+
+        # Unsafe API: raw Memory{T}, no wrapper / no per-access checks.
+        s2 = unsafe_with_memory(zb, Float64) do mem
+            @test mem isa Memory{Float64}
+            @test length(mem) == 4
+            @test mem[1] == 1.5
+            sum(mem)
+        end
+        @test s2 == sum(vals)
+        # unsafe_memory extracts the raw Memory from a Borrowed (checked once).
+        with_memory(zb, Float64) do b
+            m = Zenoh.unsafe_memory(b)
+            @test m isa Memory{Float64}
+            @test collect(m) == vals
+        end
 
         # Length must divide sizeof(T).
         odd = Zenoh.ZBytes(UInt8[1, 2, 3, 4, 5])
         @test_throws ArgumentError Zenoh.as_memory(odd, Float64)
-        @test_throws ArgumentError with_memory(identity, odd, Float64)
+        @test_throws ArgumentError borrow(odd, Float64)
 
         # Round-trip a Memory through ZBytes and back unchanged (bytewise).
         rt = Zenoh.as_memory(Zenoh.ZBytes(Zenoh.as_memory(zb)), Float64)
@@ -1669,18 +1740,28 @@ try
             close(s)
         end
 
-        # Negative: a config without SHM keeps reporting :unavailable, so the
-        # wait runs to its (short) timeout and returns — bounded, not hung — and
-        # zref falls back to Julia memory.
+        # Bounded wait: a short timeout must return promptly whether or not SHM
+        # comes up (it can — even a connect-only session warms up against an SHM
+        # router — so we only assert the *bound*, not the transport).
         t0 = time()
         s2 = open(Zenoh.Config(; str = """{connect: { endpoints: ["tcp/localhost:19148"]}}""");
-                  shm_clients = cs, wait_for_shm = 0.5)
+                  shm_clients = cs, wait_for_shm = 0.5, shm_wait_timeout = 0.5)
         try
             @test (time() - t0) < 5.0           # bounded by the 0.5s timeout, no hang
-            @test !Zenoh.shm_capable(s2)
-            @test zref(s2, Pixel).backing isa Base.RefValue   # Julia fallback
+            @test Zenoh.shm_state(s2) isa Symbol
         finally
             close(s2)
+        end
+
+        # Deterministic Julia fallback: a session opened WITHOUT shm_clients is
+        # never SHM-capable, so zref always backs onto Julia memory.
+        s3 = open(Zenoh.Config(; str = """{connect: { endpoints: ["tcp/localhost:19148"]}}"""))
+        try
+            @test Zenoh.shm_state(s3) == :none
+            @test !Zenoh.shm_capable(s3)
+            @test zref(s3, Pixel).backing isa Base.RefValue
+        finally
+            close(s3)
         end
     end
 

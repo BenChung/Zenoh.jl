@@ -181,29 +181,231 @@ function as_memory(z::ZBytes, ::Type{T}=UInt8) where {T}
     return mem
 end
 
-"""
-    with_memory(f, z::ZBytes, T=UInt8)
+# --- Borrowed: a scope-validated view of the payload ----------------
+#
+# A `Borrowed{T}` is a checked, value-first view of a payload reinterpreted as
+# `T` — usually a single struct, occasionally a buffer of `T`. It behaves both
+# like the struct (`b.field` reads/writes a field, forwarded through pointer
+# arithmetic) and like an array view (`b[]`, `b[i]`, iterate, `length`,
+# `collect`). While valid it pins its `owner` (the Sample/ZBytes, or an owned
+# copy) so the bytes stay live; on `close` it drops that pin and flips `valid`,
+# after which *every* access throws a `BorrowError` rather than reading freed
+# memory. This turns "must not escape the callback" from undefined behaviour into
+# a loud, catchable error — see `with_memory`/`borrow`.
+#
+# Mutation (`b.field = v`, `b[i] = v`, `b[] = v`) is only allowed on a
+# `writable` borrow, which owns a private copy — mutating a zero-copy view of a
+# *received* payload would write to loaned/shared (possibly read-only) memory.
+#
+# NOTE: property access is forwarded, so this type's own fields are reached only
+# via `getfield`/`setfield!` internally, never `b.field`.
 
-Call `f(mem::Memory{T})` with a view of the payload — zero-copy when it is
-SHM-backed or a single contiguous, `T`-aligned network slice, otherwise over a
-one-time copy. The view borrows from `z` and is valid **only for the duration of
-`f`**: do not retain `mem` (or pointers into it) afterwards — copy out (e.g. with
-[`as_memory`](@ref)) if you need it to persist. Returns `f`'s result.
+struct BorrowError <: Exception end
+Base.showerror(io::IO, ::BorrowError) = print(io,
+    "BorrowError: borrowed payload used outside its valid scope ",
+    "(it must not escape `with_memory`, and must not be used after `close`)")
+
+mutable struct Borrowed{T}
+    ptr::Ptr{T}
+    n::Int            # number of T-elements in the view (1 for the common struct case)
+    owner::Any        # pins the source while valid; cleared on close
+    valid::Bool
+    writable::Bool    # true ⇒ owns a private copy; mutation is allowed
+end
+
+@inline _check(b::Borrowed) =
+    getfield(b, :valid) || throw(BorrowError())
+@inline _check_writable(b::Borrowed{T}) where {T} =
+    getfield(b, :writable) || throw(ArgumentError(
+        "Borrowed{$T} is a read-only view; create it with `writable=true` (which copies) to mutate"))
+
+Base.isvalid(b::Borrowed) = getfield(b, :valid)
+Base.length(b::Borrowed)  = (_check(b); getfield(b, :n))
+Base.eltype(::Type{Borrowed{T}}) where {T} = T
+Base.IteratorSize(::Type{<:Borrowed}) = Base.HasLength()
+Base.iswritable(b::Borrowed) = getfield(b, :writable)
+
+# Single-value deref / assign — the common case (payload is one struct).
+function Base.getindex(b::Borrowed{T}) where {T}
+    _check(b)
+    getfield(b, :n) == 1 || throw(ArgumentError(
+        "Borrowed{$T} holds $(getfield(b, :n)) elements; index with `b[i]`, iterate, or `collect(b)`"))
+    return GC.@preserve b unsafe_load(getfield(b, :ptr))
+end
+function Base.setindex!(b::Borrowed{T}, v) where {T}
+    _check(b); _check_writable(b)
+    getfield(b, :n) == 1 || throw(ArgumentError(
+        "Borrowed{$T} holds $(getfield(b, :n)) elements; assign with `b[i] = v`"))
+    GC.@preserve b unsafe_store!(getfield(b, :ptr), convert(T, v))
+    return v
+end
+# Indexed access / assign — the buffer case.
+function Base.getindex(b::Borrowed{T}, i::Integer) where {T}
+    _check(b)
+    (1 <= i <= getfield(b, :n)) || throw(BoundsError(b, i))
+    return GC.@preserve b unsafe_load(getfield(b, :ptr), i)
+end
+function Base.setindex!(b::Borrowed{T}, v, i::Integer) where {T}
+    _check(b); _check_writable(b)
+    (1 <= i <= getfield(b, :n)) || throw(BoundsError(b, i))
+    GC.@preserve b unsafe_store!(getfield(b, :ptr), convert(T, v), i)
+    return v
+end
+function Base.iterate(b::Borrowed, i::Int=1)
+    _check(b)
+    i > getfield(b, :n) && return nothing
+    return (GC.@preserve b unsafe_load(getfield(b, :ptr), i), i + 1)
+end
+function Base.collect(b::Borrowed{T}) where {T}
+    _check(b)
+    n = getfield(b, :n)
+    out = Vector{T}(undef, n)
+    GC.@preserve b out unsafe_copyto!(pointer(out), getfield(b, :ptr), n)
+    return out
+end
+# Escape hatch: a raw pointer, checked at the call. The returned pointer is only
+# valid while the borrow is — using it after `close` is back to undefined.
+Base.pointer(b::Borrowed) = (_check(b); getfield(b, :ptr))
+
+# --- struct-field proxy: b.field get/set, forwarded by offset --------
+@inline function _field_index(::Type{T}, name::Symbol) where {T}
+    i = findfirst(==(name), fieldnames(T))
+    i === nothing && throw(ArgumentError("$T has no field `$name`"))
+    return i
+end
+function Base.getproperty(b::Borrowed{T}, name::Symbol) where {T}
+    _check(b)
+    getfield(b, :n) == 1 || throw(ArgumentError(
+        "property access on Borrowed{$T} needs a single element (it holds $(getfield(b, :n))); index first with `b[i]`"))
+    i   = _field_index(T, name)
+    FT  = fieldtype(T, i)
+    off = fieldoffset(T, i)
+    return GC.@preserve b unsafe_load(Ptr{FT}(getfield(b, :ptr) + off))
+end
+function Base.setproperty!(b::Borrowed{T}, name::Symbol, v) where {T}
+    _check(b); _check_writable(b)
+    getfield(b, :n) == 1 || throw(ArgumentError(
+        "property assignment on Borrowed{$T} needs a single element (it holds $(getfield(b, :n))); index first with `b[i]`"))
+    i   = _field_index(T, name)
+    FT  = fieldtype(T, i)
+    off = fieldoffset(T, i)
+    GC.@preserve b unsafe_store!(Ptr{FT}(getfield(b, :ptr) + off), convert(FT, v))
+    return v
+end
+Base.propertynames(::Borrowed{T}) where {T} = fieldnames(T)
+
+function Base.close(b::Borrowed)
+    setfield!(b, :valid, false)
+    setfield!(b, :owner, nothing)      # release the pin so the source can be reclaimed
+    return nothing
+end
+
+Base.show(io::IO, b::Borrowed{T}) where {T} = print(io,
+    getfield(b, :valid) ?
+        "Borrowed{$T}($(getfield(b, :n)) element$(getfield(b, :n) == 1 ? "" : "s")$(getfield(b, :writable) ? ", writable" : ""))" :
+        "Borrowed{$T}(invalidated)")
+
 """
-function with_memory(f, z::ZBytes, ::Type{T}=UInt8) where {T}
-    isbitstype(T) || throw(ArgumentError("with_memory requires an isbits type, got $T"))
+    borrow(z::ZBytes, T=UInt8; writable=false)   -> Borrowed{T}
+    borrow(s::Sample, T=UInt8; writable=false)   -> Borrowed{T}
+
+A scope-validated view of the payload as `T`. Read a single struct with `b[]` or
+`b.field`, a buffer with `b[i]`/iteration; get the length with `length(b)`. The
+borrow pins its source while valid; call `close(b)` when done, after which any
+use throws a [`BorrowError`](@ref). Prefer [`with_memory`](@ref), which closes
+automatically (and so detects escapes).
+
+With `writable=false` (default) the view is zero-copy when possible (SHM-backed
+or a single contiguous, `T`-aligned network slice), else a one-time copy, and is
+**read-only** — mutating a view of received/shared memory is unsafe. With
+`writable=true` it always owns a private copy, and `b.field = v` / `b[i] = v` /
+`b[] = v` mutate that copy in place (use `collect`/`as_memory` to extract it).
+"""
+function borrow(z::ZBytes, ::Type{T}=UInt8; writable::Bool=false) where {T}
+    isbitstype(T) || throw(ArgumentError("borrow requires an isbits type, got $T"))
     nb = Int(length(z))
     nb % sizeof(T) == 0 ||
         throw(ArgumentError("payload ($nb bytes) is not a multiple of sizeof($T)=$(sizeof(T))"))
     n = nb ÷ sizeof(T)
 
-    # Zero-copy tier 1 — SHM segment.
+    if !writable
+        # Zero-copy tier 1 — SHM segment.
+        shm = as_shm(z)
+        if shm !== nothing && length(shm) >= nb && _aligned(pointer(shm), T)
+            return Borrowed{T}(Ptr{T}(pointer(shm)), n, shm, true, false)
+        end
+        # Zero-copy tier 2 — single contiguous, aligned network slice.
+        view = Ref{LibZenohC.z_view_slice_t}()
+        if LibZenohC.z_bytes_get_contiguous_view(_loaned_bytes(z), view) == LibZenohC.Z_OK
+            sl = LibZenohC.z_view_slice_loan(view)
+            p  = LibZenohC.z_slice_data(sl)
+            if LibZenohC.z_slice_len(sl) >= nb && _aligned(p, T)
+                return Borrowed{T}(Ptr{T}(p), n, _ZRefView(z, view), true, false)
+            end
+        end
+    end
+
+    # Owned copy — the fragmented/misaligned fallback, and the only safely
+    # mutable backing. `owner = mem` keeps it alive while the borrow is valid.
+    mem = as_memory(z, T)
+    return Borrowed{T}(Ptr{T}(pointer(mem)), n, mem, true, writable)
+end
+borrow(s::Sample, ::Type{T}=UInt8; writable::Bool=false) where {T} =
+    borrow(payload(s), T; writable=writable)
+
+"""
+    with_memory(f, z::ZBytes, T=UInt8; writable=false)
+    with_memory(f, s::Sample, T=UInt8; writable=false)
+
+Call `f(b::Borrowed{T})` with a scope-validated view of the payload, then close
+the borrow — so a `Borrowed` (or pointer) that escapes `f` is invalidated and any
+later use throws a [`BorrowError`](@ref) instead of reading freed memory. Read a
+single struct with `b[]`/`b.field`, a buffer with `b[i]`/iteration. With
+`writable=true`, `b` owns a copy you may mutate (`b.field = v`, `b[i] = v`).
+Returns `f`'s result. To keep data past the call, copy out with [`as_memory`](@ref)
+or `collect(b)`.
+"""
+function with_memory(f, z::ZBytes, ::Type{T}=UInt8; writable::Bool=false) where {T}
+    b = borrow(z, T; writable=writable)
+    try
+        return f(b)
+    finally
+        close(b)
+    end
+end
+with_memory(f, s::Sample, ::Type{T}=UInt8; writable::Bool=false) where {T} =
+    with_memory(f, payload(s), T; writable=writable)
+
+# --- unsafe (uninstrumented) views -----------------------------------
+#
+# Same zero-copy/copy tiers as the safe API, but handing back a *raw* `Memory{T}`
+# with no validity wrapper and no per-access checks. The caller takes on the
+# lifetime contract themselves. Use in hot paths once the access pattern is
+# known-correct; otherwise prefer `with_memory` / `borrow`.
+
+"""
+    unsafe_with_memory(f, z::ZBytes, T=UInt8)
+    unsafe_with_memory(f, s::Sample, T=UInt8)
+
+Like [`with_memory`](@ref) but passes `f` a **raw** `Memory{T}` instead of a
+validated [`Borrowed`](@ref) — no per-access checks and no escape detection. The
+view is zero-copy when possible (SHM / contiguous aligned slice), else a one-time
+copy, and is pinned only for the duration of `f` via `GC.@preserve`. If the
+`Memory` (or a pointer into it) escapes `f`, any later use is undefined
+behaviour. Returns `f`'s result.
+"""
+function unsafe_with_memory(f, z::ZBytes, ::Type{T}=UInt8) where {T}
+    isbitstype(T) || throw(ArgumentError("unsafe_with_memory requires an isbits type, got $T"))
+    nb = Int(length(z))
+    nb % sizeof(T) == 0 ||
+        throw(ArgumentError("payload ($nb bytes) is not a multiple of sizeof($T)=$(sizeof(T))"))
+    n = nb ÷ sizeof(T)
+
     shm = as_shm(z)
     if shm !== nothing && length(shm) >= nb && _aligned(pointer(shm), T)
         return GC.@preserve shm f(unsafe_wrap(Memory{T}, Ptr{T}(pointer(shm)), n))
     end
 
-    # Zero-copy tier 2 — single contiguous, aligned network slice.
     view = Ref{LibZenohC.z_view_slice_t}()
     if LibZenohC.z_bytes_get_contiguous_view(_loaned_bytes(z), view) == LibZenohC.Z_OK
         sl = LibZenohC.z_view_slice_loan(view)
@@ -213,8 +415,22 @@ function with_memory(f, z::ZBytes, ::Type{T}=UInt8) where {T}
         end
     end
 
-    # Tier 3 — fragmented or misaligned: one copy.
-    return f(as_memory(z, T))
+    return f(as_memory(z, T))    # owned copy
+end
+unsafe_with_memory(f, s::Sample, ::Type{T}=UInt8) where {T} = unsafe_with_memory(f, payload(s), T)
+
+"""
+    unsafe_memory(b::Borrowed{T}) -> Memory{T}
+
+Extract the underlying `Memory{T}` from a [`Borrowed`](@ref) for a tight inner
+loop, bypassing the per-access checks. Validity is checked **once**, here; the
+returned `Memory` is raw — it is only valid while `b` is (before `close(b)` /
+before the enclosing `with_memory` returns), and you must keep `b` reachable
+(e.g. `GC.@preserve b`) while using it.
+"""
+function unsafe_memory(b::Borrowed{T}) where {T}
+    _check(b)
+    return unsafe_wrap(Memory{T}, getfield(b, :ptr), getfield(b, :n))
 end
 
 # --- accessors -------------------------------------------------------
@@ -287,4 +503,5 @@ function put(s::Session, k::Keyexpr, r::ZRef;
     end
 end
 
-export ZRef, zref, isborrowed, as_memory, with_memory
+export ZRef, zref, isborrowed, as_memory, with_memory, borrow, Borrowed, BorrowError
+export unsafe_with_memory, unsafe_memory
