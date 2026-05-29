@@ -291,6 +291,9 @@ cleanup_orphaned_shm_segments() = LibZenohC.zc_cleanup_orphaned_shm_segments()
 
 # Specializations for `put(...; shm=provider, ...)`. The Nothing fallback is
 # defined in Zenoh.jl so `put` works without shm.jl needing to be loaded yet.
+# An already-built ZBytes is sent as-is — there's nothing to copy into SHM, so
+# the provider is ignored (the bytes are moved by the caller, as usual).
+_shm_zbytes(::AbstractShmProvider, z::ZBytes) = z
 function _shm_zbytes(provider::AbstractShmProvider, data::AbstractVector{UInt8})
     buf = alloc(provider, length(data))
     copyto!(buf, data)

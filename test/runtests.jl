@@ -164,6 +164,16 @@ try
         write(w, "discarded")
         close(w)
         @test true  # no crash; resource freed without a finalizer
+
+        # ZBytes(::ZBytes) identity — lets send APIs move a pre-built payload
+        let z = Zenoh.ZBytes("identity")
+            @test Zenoh.ZBytes(z) === z
+        end
+
+        # close(::ZBytes) reclaims an owned ZBytes on the caller's task
+        zc = Zenoh.ZBytes("to-be-closed")
+        close(zc)
+        @test true  # no crash; dropped without a finalizer
     end
 
     @timed_testset "ZSlice" begin
@@ -324,6 +334,39 @@ try
             if !isnothing(pub)
                 close(pub)
             end
+            close(s)
+        end
+    end
+
+    @timed_testset "Move-on-send (prebuilt ZBytes payload)" begin
+        # A payload assembled with ZBytesWriter (an owned ZBytes) can be sent
+        # directly: put moves it in, so it's consumed — no leak, no finalizer.
+        c = Zenoh.Config(; str = """{connect: { endpoints: ["tcp/localhost:19148"]}}""")
+        s = open(c)
+        sub = nothing
+        pub = nothing
+        try
+            test_key = Zenoh.Keyexpr("test/move-on-send")
+            received = Channel{String}(2)
+            sub = open(s, test_key) do sample
+                put!(received, String(Zenoh.payload(sample)))
+            end
+            pub = Zenoh.Publisher(s, test_key)
+
+            # (1) send the assembled output of a writer
+            assembled = open(Zenoh.ZBytes, Val(:write)) do w
+                write(w, "head-")
+                write(w, "tail")
+            end
+            Zenoh.put(pub, assembled)             # moves `assembled` in
+            @test take!(received) == "head-tail"
+
+            # (2) send a plain pre-built ZBytes
+            Zenoh.put(pub, Zenoh.ZBytes("prebuilt"))
+            @test take!(received) == "prebuilt"
+        finally
+            isnothing(sub) || close(sub)
+            isnothing(pub) || close(pub)
             close(s)
         end
     end

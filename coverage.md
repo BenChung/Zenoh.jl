@@ -106,11 +106,15 @@ Biggest user-visible payoff first:
 > safety net but reverted: it invokes the zero-copy deleter (`_release`,
 > which touches the Julia heap) from the finalizer thread, and dropping an
 > SHM-backed payload off-thread corrupts zenoh's SHM segment bookkeeping —
-> wedging SHM delivery under GC pressure. The pub/sub/query paths all `_move`
-> their bytes into the C call, so they never leak; a standalone owned `ZBytes`
-> that is built and only read (never moved) is not auto-reclaimed. `ZBytesWriter`
-> follows the same rule — `finish` consumes it, `close` drops an unfinished one,
-> both on the caller's task.
+> wedging SHM delivery under GC pressure. This is safe because no API forces a
+> user to hold an owned `ZBytes`: the pub/sub/query paths all `_move` their
+> bytes into the C call, and inbound payloads are loaned. A user-built owned
+> `ZBytes` (`ZBytes(x)` or `finish(::ZBytesWriter)`) has two leak-free exits —
+> **move-on-send** (pass it to `put`/`reply`/`get`; the `ZBytes(::ZBytes)`
+> identity lets it be moved in and freed by zenoh) or **`close(z)`** (drop it
+> explicitly on the caller's task). `ZBytesWriter` follows the same rule —
+> `finish` consumes it, `close` drops an unfinished one. Only build-then-discard
+> without either leaks, which is a degenerate program.
 
 SHM remains a separate, larger project — none of those entrypoints are public
 yet in this binding generation pass.

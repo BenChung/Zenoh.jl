@@ -119,13 +119,24 @@ end
 # observably wedging SHM delivery (a session-fast-path round-trip hangs)
 # under GC pressure. A hang risk is unacceptable, so the net is gone.
 #
-# Consequence (same as upstream behavior): the pub/sub/query paths all
-# `_move` their bytes into a C call, so they never leak. A standalone owned
-# ZBytes that is built and then merely read (never moved) is not auto-
-# reclaimed; move it into a `put`/`reply`/`append!` to hand off ownership.
+# This is safe because no API forces a user to hold an owned ZBytes: the
+# pub/sub/query paths all `_move` their bytes into a C call, and inbound
+# payloads are loaned. The two ways to get a user-held owned ZBytes —
+# `ZBytes(x)` and `finish(::ZBytesWriter)` — both have a leak-free exit:
+#   • move-on-send — pass it to `put`/`reply`/`get`; the move (below, via the
+#     `ZBytes(::ZBytes)` identity) hands ownership to zenoh, which frees it;
+#   • `close(z)` — drop it explicitly on the caller's task if you won't send.
+# Only build-then-discard-without-either leaks, which is a degenerate program.
 
 Base.length(z::ZBytes{Base.RefValue{LibZenohC.z_owned_bytes_t}}) = LibZenohC.z_bytes_len(_loan(z.b))
 Base.length(z::ZBytes{Ptr{LibZenohC.z_loaned_bytes_t}}) = LibZenohC.z_bytes_len(z.b)
+
+# Identity for an owned ZBytes. Lets the send APIs — which build their payload
+# with `ZBytes(payload)` and then `_move` it — accept an already-built owned
+# ZBytes (e.g. from `finish(::ZBytesWriter)`) and move it in unchanged. The
+# move consumes it, so a sent ZBytes can't leak. (Loaned ZBytes have no owned
+# handle to move; forwarding a received payload would need an explicit clone.)
+ZBytes(z::ZBytes{Base.RefValue{LibZenohC.z_owned_bytes_t}}) = z
 
 _move(p::ZBytes) = _move(p.b)
 
@@ -133,6 +144,16 @@ _loaned_bytes(b::ZBytes{Base.RefValue{LibZenohC.z_owned_bytes_t}}) = _loan(b.b)
 _loaned_bytes(b::ZBytes{Ptr{LibZenohC.z_loaned_bytes_t}}) = b.b
 
 Base.isempty(z::ZBytes) = LibZenohC.z_bytes_is_empty(_loaned_bytes(z))
+
+# Explicitly reclaim an owned ZBytes you built but won't send — drops the C
+# handle on the caller's task (never a finalizer/GC thread, so no hang risk).
+# A no-op for loaned ZBytes, which borrow their buffer. Don't use the ZBytes
+# after closing it.
+function Base.close(z::ZBytes{Base.RefValue{LibZenohC.z_owned_bytes_t}})
+    LibZenohC.z_bytes_drop(_move(z.b))
+    return nothing
+end
+Base.close(::ZBytes{Ptr{LibZenohC.z_loaned_bytes_t}}) = nothing
 
 # Materialize the whole payload into a Julia String. Copies out of the
 # (possibly multi-slice) payload, so the result is independent of `z`.
