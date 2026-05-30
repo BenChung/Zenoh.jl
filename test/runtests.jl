@@ -456,7 +456,16 @@ try
             # Test session ZID
             session_zid = Zenoh.zid(s)
             @test !all(iszero, session_zid.id)  # ZID should not be all zeros
-            
+
+            # to_le_bytes returns the raw 16-byte LE array; the show string is
+            # those bytes reversed (big-endian) with leading zeros elided.
+            le = to_le_bytes(session_zid)
+            @test le isa NTuple{16,UInt8}
+            @test le == session_zid.id
+            known = Zenoh.LibZenohC.z_id_t(ntuple(i -> UInt8(i), 16))
+            @test to_le_bytes(known) == ntuple(i -> UInt8(i), 16)
+            @test sprint(show, known) == "z_id: " * bytes2hex(reverse(collect(to_le_bytes(known))))
+
             # Test router ZIDs
             router_ids = Zenoh.router_zids(s)
             @test !isempty(router_ids)  # Should have at least one router (the one we started)

@@ -104,6 +104,16 @@ function Base.show(io::IO, id::LibZenohC.z_id_t)
 end
 
 """
+    to_le_bytes(id::z_id_t) -> NTuple{16, UInt8}
+
+The Zenoh id as its raw 16-byte little-endian array — the form zenoh hashes and
+serializes (the Rust `ZenohId::to_le_bytes`). Note this is *not* the byte order of
+the printed/`show`n string: the string renders these bytes reversed
+(most-significant first) with leading zero bytes elided.
+"""
+to_le_bytes(id::LibZenohC.z_id_t) = getfield(id, :data)
+
+"""
 Fetches the Zenoh IDs of all connected routers.
 """
 function router_zids(s::Session)
@@ -133,4 +143,4 @@ function peer_zids(s::Session)
     return routers
 end
 
-export Session, zid, router_zids, peer_zids
+export Session, zid, router_zids, peer_zids, to_le_bytes
