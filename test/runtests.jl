@@ -1,6 +1,21 @@
 using Zenoh, Zenohd_jll, Test
 include("test_utils.jl")
-router = run(pipeline(`$(Zenohd_jll.zenohd()) -l tcp/localhost:19148`, stdout = stdout), wait=false)
+
+# Distinct random TCP port per run, so a lingering router from a previous
+# (crashed/killed) run can't bind-collide with this run's router or be
+# mistaken for it. All sessions below connect to `$EP`.
+const PORT = rand(20000:39999)
+const EP = "tcp/localhost:$PORT"
+@info "test router endpoint" EP
+# Router logs go to a per-run file, NOT the test process's stdout. Inheriting
+# stdout (the previous behaviour) wired zenohd's fd to the test runner's
+# output stream, so a hung test (whose `finally` never killed the router) left
+# zenohd holding that stream open — any capture/pipe of the test output then
+# blocked indefinitely instead of seeing the failure. A file also keeps the
+# test summary readable and preserves router logs for postmortem.
+const ROUTER_LOG = joinpath(tempdir(), "zenohd-test-$PORT.log")
+router = run(pipeline(`$(Zenohd_jll.zenohd()) -l $EP`,
+                      stdout = ROUTER_LOG, stderr = ROUTER_LOG), wait=false)
 
 # Two long-lived router-connected sessions, shared across the semantically
 # neutral round-trip testsets (generic pub/sub/get/queryable/querier on
@@ -8,7 +23,7 @@ router = run(pipeline(`$(Zenohd_jll.zenohd()) -l tcp/localhost:19148`, stdout = 
 # Testsets that need distinct peers for their semantics (locality /
 # allowed_origin), SHM (`shm_clients=`), liveliness propagation, or that close
 # the session under test, keep opening their own — they do NOT use S1/S2.
-rcfg() = Zenoh.Config(; str = """{connect: { endpoints: ["tcp/localhost:19148"]}}""")
+rcfg() = Zenoh.Config(; str = """{connect: { endpoints: ["$EP"]}}""")
 sleep(0.3)            # let the router bind
 S1 = open(rcfg())
 S2 = open(rcfg())
@@ -18,8 +33,8 @@ try
     @timed_testset "Config" begin
         c = Zenoh.Config()
         ref = Zenoh.toJson(c)
-        c["connect/endpoints"] = "[\"tcp/localhost:19148\"]"
-        @test c["connect/endpoints"] == "[\"tcp/localhost:19148\"]"
+        c["connect/endpoints"] = "[\"$EP\"]"
+        @test c["connect/endpoints"] == "[\"$EP\"]"
         @test length(Zenoh.toJson(c)) > length(ref) # lame I know
 
         # Typed setindex! serializes Julia values to JSON5 fragments.
@@ -39,7 +54,7 @@ try
     @timed_testset "ZenohConfig" begin
         c = Config(ZenohConfig(
             mode = :peer,
-            connect = Connect(endpoints = ["tcp/localhost:19148"]),
+            connect = Connect(endpoints = ["$EP"]),
             scouting = Scouting(multicast = Multicast(enabled = false)),
             timestamping = Timestamping(enabled = true),
             queries_default_timeout = 5000,
@@ -57,7 +72,7 @@ try
             overrides = Dict("transport/link/rx/buffer_size" => 65536),
         ))
         @test c["mode"] == "\"peer\""
-        @test c["connect/endpoints"] == "[\"tcp/localhost:19148\"]"
+        @test c["connect/endpoints"] == "[\"$EP\"]"
         @test c["scouting/multicast/enabled"] == "false"
         @test c["timestamping/enabled"] == "true"
         @test c["queries_default_timeout"] == "5000"
@@ -73,7 +88,7 @@ try
         @test_throws ArgumentError Config(ZenohConfig(mode = :bogus))
 
         # A typed config opens a working session, like the string-built form.
-        s = open(Config(ZenohConfig(connect = Connect(endpoints = ["tcp/localhost:19148"]))))
+        s = open(Config(ZenohConfig(connect = Connect(endpoints = ["$EP"]))))
         close(s)
     end
 
@@ -1684,7 +1699,7 @@ try
     @timed_testset "SHM client storage + open kwarg" timeout=20 begin
         cs = Zenoh.default_shm_clients()
         @test cs isa Zenoh.ShmClientStorage
-        c = Zenoh.Config(; str = """{connect: { endpoints: ["tcp/localhost:19148"]}}""")
+        c = Zenoh.Config(; str = """{connect: { endpoints: ["$EP"]}}""")
         s = open(c; shm_clients = cs)
         try
             @test isopen(s)
@@ -1694,8 +1709,8 @@ try
     end
 
     @timed_testset "SHM round-trip publish/subscribe" timeout=20 begin
-        c1 = Zenoh.Config(; str = """{connect: { endpoints: ["tcp/localhost:19148"]}}""")
-        c2 = Zenoh.Config(; str = """{connect: { endpoints: ["tcp/localhost:19148"]}}""")
+        c1 = Zenoh.Config(; str = """{connect: { endpoints: ["$EP"]}}""")
+        c2 = Zenoh.Config(; str = """{connect: { endpoints: ["$EP"]}}""")
         s_pub = open(c1; shm_clients = Zenoh.default_shm_clients())
         s_sub = open(c2; shm_clients = Zenoh.default_shm_clients())
         sleep(0.5)
@@ -1756,8 +1771,8 @@ try
     end
 
     @timed_testset "ZRef typed round-trip (transport-agnostic)" timeout=30 begin
-        c1 = Zenoh.Config(; str = """{connect: { endpoints: ["tcp/localhost:19148"]}}""")
-        c2 = Zenoh.Config(; str = """{connect: { endpoints: ["tcp/localhost:19148"]}}""")
+        c1 = Zenoh.Config(; str = """{connect: { endpoints: ["$EP"]}}""")
+        c2 = Zenoh.Config(; str = """{connect: { endpoints: ["$EP"]}}""")
         s_pub = open(c1; shm_clients = Zenoh.default_shm_clients())
         s_sub = open(c2; shm_clients = Zenoh.default_shm_clients())
         sleep(0.5)
@@ -1935,7 +1950,7 @@ try
 
     @timed_testset "SHM capability discovery" timeout=20 begin
         # Opened without shm_clients: SHM never requested.
-        c0 = Zenoh.Config(; str = """{connect: { endpoints: ["tcp/localhost:19148"]}}""")
+        c0 = Zenoh.Config(; str = """{connect: { endpoints: ["$EP"]}}""")
         s0 = open(c0)
         try
             @test Zenoh.shm_state(s0) == :none
@@ -1948,7 +1963,7 @@ try
         # session-side provider, so discovery reports a non-usable state and
         # zref falls back to Julia. (We assert the shape, not the exact symbol,
         # since it depends on whether obtain fails outright or reports disabled.)
-        c1 = Zenoh.Config(; str = """{connect: { endpoints: ["tcp/localhost:19148"]}}""")
+        c1 = Zenoh.Config(; str = """{connect: { endpoints: ["$EP"]}}""")
         s1 = open(c1; shm_clients = Zenoh.default_shm_clients())
         try
             st = Zenoh.shm_state(s1)
@@ -1965,7 +1980,7 @@ try
 
         # shm_ready never re-probes (or clobbers) a session that never requested
         # SHM — it stays :none and reports false.
-        s2 = open(Zenoh.Config(; str = """{connect: { endpoints: ["tcp/localhost:19148"]}}"""))
+        s2 = open(Zenoh.Config(; str = """{connect: { endpoints: ["$EP"]}}"""))
         try
             @test !Zenoh.shm_ready(s2)
             @test Zenoh.shm_state(s2) == :none
@@ -1988,7 +2003,7 @@ try
         # capability consistent with state, SHM backing whenever capable) rather
         # than hard-requiring :ready. The happy path (sub-second warm-up to
         # :ready with a ShmBufMut backing) is verified standalone.
-        shm_cfg = """{connect:{endpoints:["tcp/localhost:19148"]}, transport:{shared_memory:{enabled:true}}}"""
+        shm_cfg = """{connect:{endpoints:["$EP"]}, transport:{shared_memory:{enabled:true}}}"""
         s = open(Zenoh.Config(; str = shm_cfg);
                  shm_clients = cs, wait_for_shm = true, shm_wait_timeout = 10.0)
         try
@@ -2008,7 +2023,7 @@ try
         # comes up (it can — even a connect-only session warms up against an SHM
         # router — so we only assert the *bound*, not the transport).
         t0 = time()
-        s2 = open(Zenoh.Config(; str = """{connect: { endpoints: ["tcp/localhost:19148"]}}""");
+        s2 = open(Zenoh.Config(; str = """{connect: { endpoints: ["$EP"]}}""");
                   shm_clients = cs, wait_for_shm = 0.5, shm_wait_timeout = 0.5)
         try
             @test (time() - t0) < 5.0           # bounded by the 0.5s timeout, no hang
@@ -2019,7 +2034,7 @@ try
 
         # Deterministic Julia fallback: a session opened WITHOUT shm_clients is
         # never SHM-capable, so zref always backs onto Julia memory.
-        s3 = open(Zenoh.Config(; str = """{connect: { endpoints: ["tcp/localhost:19148"]}}"""))
+        s3 = open(Zenoh.Config(; str = """{connect: { endpoints: ["$EP"]}}"""))
         try
             @test Zenoh.shm_state(s3) == :none
             @test !Zenoh.shm_capable(s3)
@@ -2031,7 +2046,7 @@ try
 
     @timed_testset "ZRef session alloc-error handler" timeout=20 begin
         cs = Zenoh.default_shm_clients()
-        c  = Zenoh.Config(; str = """{connect: { endpoints: ["tcp/localhost:19148"]}}""")
+        c  = Zenoh.Config(; str = """{connect: { endpoints: ["$EP"]}}""")
 
         # (a) Registered handler is notified, then zref still degrades to Julia.
         seen = Ref{Any}(nothing)
@@ -2074,7 +2089,7 @@ try
         # enable. Verify the API is callable and either succeeds (provider
         # returned) or surfaces a ZenohError — exercising the error path is
         # what matters for v1 coverage of this entrypoint.
-        c = Zenoh.Config(; str = """{connect: { endpoints: ["tcp/localhost:19148"]}}""")
+        c = Zenoh.Config(; str = """{connect: { endpoints: ["$EP"]}}""")
         s = open(c; shm_clients = Zenoh.default_shm_clients())
         try
             local provider
@@ -2094,6 +2109,175 @@ try
         # Idempotent / safe to call.
         @test Zenoh.cleanup_orphaned_shm_segments() === nothing
     end
+
+    # Read a Sample's payload as a String (advanced-pubsub tests).
+    _smp_str(smp) = open(Zenoh.payload(smp), Val(:read)) do io; read(io, String); end
+
+    # Advanced publishers (cache / sample-miss detection) stamp samples, so
+    # their session needs timestamping enabled — otherwise the declare fails
+    # with Z_EGENERIC. Dedicated router-connected sessions for the advanced
+    # testsets below; closed after the last one.
+    atscfg() = Zenoh.Config(; str = """{connect:{endpoints:["$EP"]},timestamping:{enabled:true}}""")
+    ATS1 = open(atscfg())
+    ATS2 = open(atscfg())
+    sleep(0.5)
+
+    @timed_testset "Advanced pub/sub: routing & type contract" begin
+        s = ATS1
+        # Routing predicate is type-stable by inference (presence, not value).
+        @test (@inferred Zenoh._wants_advanced((cache=64,), Val(Zenoh.ADVANCED_PUB_KW)))
+        @test !(@inferred Zenoh._wants_advanced((priority=1,), Val(Zenoh.ADVANCED_PUB_KW)))
+        @test !(@inferred Zenoh._wants_advanced(NamedTuple(), Val(Zenoh.ADVANCED_PUB_KW)))
+        @test (@inferred Zenoh._wants_advanced((history=1,), Val(Zenoh.ADVANCED_SUB_KW)))
+
+        # Publisher routes on advanced-keyword presence; plain stays plain.
+        p = Zenoh.Publisher(s, Zenoh.Keyexpr("test/adv/route/plain"))
+        ap = Zenoh.Publisher(s, Zenoh.Keyexpr("test/adv/route/adv"); cache = 64)
+        ape = Zenoh.AdvancedPublisher(s, Zenoh.Keyexpr("test/adv/route/exp"); cache = 64)
+        try
+            @test p isa Zenoh.Publisher && !Zenoh.isadvanced(p)
+            @test ap isa Zenoh.AdvancedPublisher && Zenoh.isadvanced(ap)
+            @test ape isa Zenoh.AdvancedPublisher
+            @test p isa Zenoh.AbstractPublisher && ap isa Zenoh.AbstractPublisher
+        finally
+            close(p); close(ap); close(ape)
+        end
+    end
+
+    @timed_testset "Advanced pub/sub: basic round-trip" begin
+        s = ATS1
+        sub = nothing; pub = nothing
+        try
+            k = Zenoh.Keyexpr("test/adv/basic")
+            got = Channel{String}(1)
+            sub = open(smp -> put!(got, _smp_str(smp)), s, k;
+                       recovery = RecoveryOptions())
+            @test sub isa Zenoh.AdvancedSubscriber
+            pub = Zenoh.Publisher(s, k; cache = 16, miss_detection = :periodic)
+            @test pub isa Zenoh.AdvancedPublisher
+            Zenoh.put(pub, "adv-hello")
+            @test take!(got) == "adv-hello"
+        finally
+            isnothing(sub) || close(sub)
+            isnothing(pub) || close(pub)
+        end
+    end
+
+    @timed_testset "Advanced pub/sub: history replay to late subscriber" begin
+        # Cross-session via the router: publisher caches, a later advanced
+        # subscriber queries the cache on declaration.
+        pub = nothing; sub = nothing
+        try
+            k = Zenoh.Keyexpr("test/adv/history")
+            pub = Zenoh.Publisher(ATS1, k; cache = CacheOptions(max_samples = 10))
+            for i in 1:3
+                Zenoh.put(pub, "h-$i")
+            end
+            sleep(0.4)  # let the cache settle / be discoverable
+            sub = open(ATS2, k; channel = :fifo, capacity = 16,
+                       history = HistoryOptions())
+            # Drain replayed history with a short poll budget.
+            collected = String[]
+            deadline = time() + 3.0
+            while time() < deadline && length(collected) < 3
+                x = Zenoh.tryrecv!(sub)
+                if x === nothing
+                    sleep(0.05)
+                else
+                    push!(collected, _smp_str(x))
+                end
+            end
+            @test !isempty(collected)              # history replay happened
+            @test issubset(Set(collected), Set(["h-1", "h-2", "h-3"]))
+        finally
+            isnothing(sub) || close(sub)
+            isnothing(pub) || close(pub)
+        end
+    end
+
+    @timed_testset "Advanced pub/sub: unified delete!" begin
+        s = ATS1
+        sub = nothing; pub = nothing
+        try
+            k = Zenoh.Keyexpr("test/adv/delete")
+            sub = open(s, k; channel = :fifo, capacity = 8)   # plain buffered sub
+            pub = Zenoh.Publisher(s, k; cache = 4)            # advanced publisher
+            Zenoh.put(pub, "v")
+            s1 = take!(sub)
+            @test Zenoh.kind(s1) === Zenoh.SampleKinds.PUT
+            # delete! on an AdvancedPublisher → DELETE-kind sample
+            Zenoh.delete!(pub)
+            s2 = take!(sub)
+            @test Zenoh.kind(s2) === Zenoh.SampleKinds.DELETE
+            # delete! on a Session and a plain Publisher also dispatch cleanly.
+            Zenoh.delete!(s, k)
+            s3 = take!(sub)
+            @test Zenoh.kind(s3) === Zenoh.SampleKinds.DELETE
+        finally
+            isnothing(sub) || close(sub)
+            isnothing(pub) || close(pub)
+        end
+    end
+
+    @timed_testset "Advanced pub/sub: MatchingListener + matching_status" begin
+        s = ATS1
+        pub = nothing; sub = nothing; ml = nothing
+        try
+            k = Zenoh.Keyexpr("test/adv/matching")
+            pub = Zenoh.Publisher(s, k; cache = 4)
+            @test pub isa Zenoh.AdvancedPublisher
+            @test Zenoh.matching_status(pub) == false
+            transitions = Channel{Bool}(4)
+            ml = MatchingListener(b -> put!(transitions, b), pub)
+            sub = open(_ -> nothing, s, k)
+            @test take!(transitions) == true       # subscriber arrived
+            sleep(0.1)
+            @test Zenoh.matching_status(pub) == true
+        finally
+            isnothing(ml)  || close(ml)
+            isnothing(sub) || close(sub)
+            isnothing(pub) || close(pub)
+        end
+    end
+
+    @timed_testset "Advanced pub/sub: SampleMissListener declare/close" begin
+        s = ATS1
+        sub = nothing; pub = nothing; ml = nothing
+        try
+            k = Zenoh.Keyexpr("test/adv/miss")
+            sub = open(_ -> nothing, s, k; recovery = RecoveryOptions())
+            @test sub isa Zenoh.AdvancedSubscriber
+            ml = Zenoh.SampleMissListener(m -> nothing, sub)
+            @test ml isa Zenoh.SampleMissListener
+            # Clean stream → no spurious misses; declare/close must be clean.
+            pub = Zenoh.Publisher(s, k; cache = 4, miss_detection = :periodic)
+            Zenoh.put(pub, "x")
+            sleep(0.1)
+            close(ml); ml = nothing
+            @test true
+        finally
+            isnothing(ml)  || close(ml)
+            isnothing(sub) || close(sub)
+            isnothing(pub) || close(pub)
+        end
+    end
+
+    @timed_testset "Advanced pub/sub: heartbeat modes + idempotent close" begin
+        s = ATS1
+        for hb in (:none, :periodic, :sporadic)
+            pub = Zenoh.Publisher(s, Zenoh.Keyexpr("test/adv/hb/$hb");
+                                  miss_detection = MissDetectionOptions(heartbeat = hb))
+            @test pub isa Zenoh.AdvancedPublisher
+            close(pub)
+            @test pub.closed
+            close(pub)             # idempotent
+            @test pub.closed
+        end
+        @test_throws ArgumentError Zenoh._heartbeat_mode(:bogus)
+    end
+
+    close(ATS1)
+    close(ATS2)
 
 finally
     close(S1)

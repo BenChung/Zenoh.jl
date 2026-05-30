@@ -34,6 +34,7 @@ include("messaging/queryable.jl")   # Query, Queryable
 include("features/liveliness.jl")
 include("features/querier.jl")
 include("features/matching.jl")
+include("features/advanced_pubsub.jl")  # AdvancedPublisher/Subscriber, delete!, SampleMissListener
 include("features/scout.jl")
 export scout, Hello, whatami_string
 

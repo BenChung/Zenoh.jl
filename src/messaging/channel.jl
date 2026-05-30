@@ -81,22 +81,37 @@ struct SubscriberHandler{HType, Mode} <: AbstractSubscriberHandler{HType, Mode}
     keyexpr::Keyexpr
 end
 
+# The owned-handle C type backing a buffered handler `T` — read off its
+# `sub` field (invariant of the {HType,Mode} params) so the shared
+# `_open_buffered_sub` allocates the right Ref without a hardcoded type.
+_handler_sub_handle(::Type{T}) where {T<:AbstractSubscriberHandler} =
+    eltype(fieldtype(T, :sub))
+
+# Drop / undeclare for a buffered handler's owned `sub`, dispatched on the
+# handle's Ref type. Default targets the data-plane subscriber;
+# AdvancedSubscriberHandler's ze_owned_advanced_subscriber_t variants live
+# in advanced_pubsub.jl.
+_drop_sub_handle(s::Base.RefValue{LibZenohC.z_owned_subscriber_t}) =
+    LibZenohC.z_subscriber_drop(_move(s))
+_undeclare_sub_handle(s::Base.RefValue{LibZenohC.z_owned_subscriber_t}) =
+    LibZenohC.z_undeclare_subscriber(_move(s))
+
 # Shared buffered-subscriber construction. `declare_fn(sub, closure) -> rtc`
 # picks the C declare entrypoint and supplies any extra options. `T`
 # is the concrete handler type (a UnionAll with two type parameters)
-# to construct on success.
+# to construct on success; its `sub` handle type is derived from `T`.
 function _open_buffered_sub(declare_fn::F, ::Type{T}, k::Keyexpr,
         channel::Symbol, capacity::Integer) where {F, T<:AbstractSubscriberHandler}
     closure = _make_closure_ref(Val(:sample))
     handler = _new_channel(Val(:sample), Val(channel), closure, capacity)
-    sub = Ref{LibZenohC.z_owned_subscriber_t}()
+    sub = Ref{_handler_sub_handle(T)}()
     rtc = declare_fn(sub, closure)
     _handle_result(rtc)
     # GC safety net: drop the subscriber if the handler is collected without
     # an explicit close(). Unlike the callback form there is no ctx/task
     # here (libzenoh owns the channel), so a plain drop is safe; no-op once
     # close() has moved the handle out.
-    finalizer(s -> LibZenohC.z_subscriber_drop(_move(s)), sub)
+    finalizer(s -> _drop_sub_handle(s), sub)
     return T{eltype(typeof(handler)), channel}(sub, handler, k)
 end
 
@@ -126,7 +141,7 @@ function tryrecv!(sh::AbstractSubscriberHandler{H, M}) where {H, M}
 end
 
 function Base.close(sh::AbstractSubscriberHandler)
-    _handle_result(LibZenohC.z_undeclare_subscriber(_move(sh.sub)))
+    _handle_result(_undeclare_sub_handle(sh.sub))
 end
 
 Base.IteratorSize(::Type{<:AbstractSubscriberHandler}) = Base.SizeUnknown()

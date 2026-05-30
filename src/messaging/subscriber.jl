@@ -3,13 +3,22 @@
 # and `cglobal` lookups are stamped out by `@closure_kind :sample` in
 # `closure_kinds.jl`. This file just wires the Julia `Subscriber`
 # lifecycle on top of those generic hooks.
+#
+# `open(f, s, k; …)` / `open(s, k; …)` are routing factories: when an
+# advanced subscriber keyword is present they return the advanced handlers
+# (defined in features/advanced_pubsub.jl); otherwise the plain ones.
+# Routing keys on keyword presence (type-level), so the return type is
+# resolved by ordinary inference — see the advanced-pubsub proposal §3.2.
 
 # --- Julia-side Subscriber -------------------------------------------
 
-# Abstract supertype shared with LivelinessSubscriber. Concrete subtypes
-# must hold the same fields (sub, ctx, async_cond, task, keyexpr, closed);
-# Julia doesn't inherit fields, so the layout is duplicated but the
-# close() lifecycle is shared via dispatch on this supertype.
+# Abstract supertype shared with LivelinessSubscriber / AdvancedSubscriber.
+# Concrete subtypes must hold the same fields (sub, ctx, async_cond, task,
+# keyexpr, closed); Julia doesn't inherit fields, so the layout is duplicated
+# but the close() lifecycle is shared via dispatch on this supertype. The
+# owned-handle type of `sub` may differ per subtype (z_owned_subscriber_t for
+# the data/liveliness subscribers, ze_owned_advanced_subscriber_t for the
+# advanced one) — `_callback_sub_handle` / `_undeclare_callback_sub` adapt.
 abstract type AbstractCallbackSubscriber end
 
 """
@@ -30,15 +39,21 @@ mutable struct Subscriber <: AbstractCallbackSubscriber
     closed::Bool
 end
 
+# The owned-handle C type backing a callback subscriber `T` — read off its
+# `sub` field so the shared `_open_callback_sub` allocates the right Ref
+# without a hardcoded type. Type-stable (resolved from the field type).
+_callback_sub_handle(::Type{T}) where {T<:AbstractCallbackSubscriber} =
+    eltype(fieldtype(T, :sub))
+
 # Shared callback-subscriber construction. `declare_fn(sub, closure) -> rtc`
-# picks the C declare entrypoint (data vs. liveliness) and supplies any
-# extra options. `T` is the concrete subscriber type to construct on
-# success.
+# picks the C declare entrypoint (data vs. liveliness vs. advanced) and
+# supplies any extra options. `T` is the concrete subscriber type to
+# construct on success; its `sub` handle type is derived from `T`.
 function _open_callback_sub(declare_fn::F, ::Type{T}, f::Function,
         k::Keyexpr; should_close_on_error::Bool=true) where {F, T<:AbstractCallbackSubscriber}
     ctx, async_cond, closure = _setup_callback(Val(:sample))
 
-    sub = Ref{LibZenohC.z_owned_subscriber_t}()
+    sub = Ref{_callback_sub_handle(T)}()
     rtc = GC.@preserve ctx declare_fn(sub, closure)
     if rtc != LibZenohC.Z_OK
         # declare failed before the closure was installed → drop cb will fire
@@ -66,24 +81,14 @@ end
 _sub_opts_arg(::Nothing) = C_NULL
 _sub_opts_arg(r::Ref)    = r
 
-"""
-    open(f, s::Session, k::Keyexpr; should_close_on_error=true,
-         allowed_origin=nothing)
+# Advanced-only subscriber keywords. Presence of any routes `open(…)` to
+# `AdvancedSubscriber` / `AdvancedSubscriberHandler`. Kept in sync with the
+# `Advanced*` constructors in features/advanced_pubsub.jl.
+const ADVANCED_SUB_KW = (:history, :recovery, :query_timeout_ms, :detection)
 
-Subscribe to keyexpr `k` in session `s`. `f(::Sample)` is invoked on a
-dedicated Julia task for each sample that fits through the single-slot
-handoff. Samples that arrive while the cell still holds an unconsumed
-one overwrite it — the consumer always sees the latest message; older
-ones are dropped silently.
+# --- Plain (data-plane) subscriber bodies ----------------------------
 
-If `f` throws and `should_close_on_error` is `true`, the dispatcher
-task exits; subsequent samples accumulate (and get overwritten) in
-the cell until `close(sub)` is called.
-
-`allowed_origin` filters which peers' samples are delivered. Accepts a
-`Locality` singleton (`Localities.ANY` / `SESSION_LOCAL` / `REMOTE`).
-"""
-function Base.open(f::Function, s::Session, k::Keyexpr;
+function _open_plain_callback(f::Function, s::Session, k::Keyexpr;
         should_close_on_error::Bool=true,
         allowed_origin::Union{Nothing, Locality} = nothing)
     opts = _make_subscriber_opts(allowed_origin)
@@ -94,15 +99,7 @@ function Base.open(f::Function, s::Session, k::Keyexpr;
     end
 end
 
-"""
-Subscribe to keyexpr `k` in session `s` with a buffered channel handler.
-Returns a `SubscriberHandler` that can be iterated or polled with
-`take!`/`tryrecv!`. Call `close(sub)` to undeclare the subscriber;
-iteration will then terminate once buffered samples are drained.
-
-`allowed_origin` accepts a `Locality` singleton (`Localities.ANY` etc.).
-"""
-function Base.open(s::Session, k::Keyexpr;
+function _open_plain_buffered(s::Session, k::Keyexpr;
         channel::Symbol = :fifo, capacity::Integer = 16,
         allowed_origin::Union{Nothing, Locality} = nothing)
     opts = _make_subscriber_opts(allowed_origin)
@@ -111,6 +108,61 @@ function Base.open(s::Session, k::Keyexpr;
             _move(closure), _sub_opts_arg(opts))
     end
 end
+
+# --- Routing `open` factories ----------------------------------------
+
+"""
+    open(f, s::Session, k::Keyexpr; should_close_on_error=true,
+         allowed_origin=nothing, history, recovery, query_timeout_ms, detection)
+
+Subscribe to keyexpr `k` in session `s`. `f(::Sample)` is invoked on a
+dedicated Julia task for each sample that fits through the single-slot
+handoff. Samples that arrive while the cell still holds an unconsumed
+one overwrite it — the consumer always sees the latest message; older
+ones are dropped silently.
+
+With only the shared keywords this returns a plain [`Subscriber`](@ref);
+passing any advanced feature keyword (`history`, `recovery`,
+`query_timeout_ms`, `detection`) routes to an [`AdvancedSubscriber`](@ref)
+with history replay / sample-miss recovery.
+
+If `f` throws and `should_close_on_error` is `true`, the dispatcher
+task exits; subsequent samples accumulate (and get overwritten) in
+the cell until `close(sub)` is called.
+
+`allowed_origin` filters which peers' samples are delivered. Accepts a
+`Locality` singleton (`Localities.ANY` / `SESSION_LOCAL` / `REMOTE`).
+"""
+function Base.open(f::Function, s::Session, k::Keyexpr; kwargs...)
+    _wants_advanced((; kwargs...), Val(ADVANCED_SUB_KW)) &&
+        return AdvancedSubscriber(f, s, k; kwargs...)
+    return _open_plain_callback(f, s, k; kwargs...)
+end
+
+"""
+    open(s::Session, k::Keyexpr; channel=:fifo, capacity=16,
+         allowed_origin=nothing, history, recovery, query_timeout_ms, detection)
+
+Subscribe to keyexpr `k` in session `s` with a buffered channel handler.
+Returns a `SubscriberHandler` that can be iterated or polled with
+`take!`/`tryrecv!`. Call `close(sub)` to undeclare the subscriber;
+iteration will then terminate once buffered samples are drained.
+
+As with the callback form, passing an advanced feature keyword routes to
+an [`AdvancedSubscriberHandler`](@ref).
+
+`allowed_origin` accepts a `Locality` singleton (`Localities.ANY` etc.).
+"""
+function Base.open(s::Session, k::Keyexpr; kwargs...)
+    _wants_advanced((; kwargs...), Val(ADVANCED_SUB_KW)) &&
+        return AdvancedSubscriber(s, k; kwargs...)
+    return _open_plain_buffered(s, k; kwargs...)
+end
+
+# Undeclare entrypoint for the callback `close` below. Default targets the
+# data-plane subscriber; AdvancedSubscriber overrides in advanced_pubsub.jl.
+_undeclare_callback_sub(sub::AbstractCallbackSubscriber) =
+    LibZenohC.z_undeclare_subscriber(_move(sub.sub))
 
 # NB: the callback-form subscriber intentionally has no GC finalizer.
 # Its ctx is reachable only through this struct and the consume task
@@ -129,7 +181,7 @@ function Base.close(sub::AbstractCallbackSubscriber)
     # Blocks until libzenohc has drained any in-flight callbacks (they
     # bail on the closing flag) and invoked our drop trampoline. The
     # trampoline never blocks, so this returns promptly.
-    _handle_result(LibZenohC.z_undeclare_subscriber(_move(sub.sub)))
+    _handle_result(_undeclare_callback_sub(sub))
 
     wait(sub.task)
 

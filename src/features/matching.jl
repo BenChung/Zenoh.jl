@@ -49,7 +49,7 @@ mutable struct MatchingListener
     ctx::CallbackCtx{LibZenohC.z_matching_status_t}
     async_cond::Base.AsyncCondition
     task::Task
-    target::Union{Publisher, Querier}  # GC pin — listener references the target internally
+    target::Union{AbstractPublisher, Querier}  # GC pin — listener references the target internally
     closed::Bool
 end
 
@@ -103,6 +103,10 @@ function MatchingListener(f::Function, q::Querier;
             _loan(q), handle, _move(closure))
     end
 end
+
+# NB: the AdvancedPublisher methods for MatchingListener / matching_status
+# live in features/advanced_pubsub.jl — that type is declared there, after
+# this file, so its method signatures can't be written here.
 
 function Base.close(ml::MatchingListener)
     ml.closed && return
