@@ -1688,7 +1688,9 @@ try
         s = open(c; shm_clients = cs)
         try
             @test isopen(s)
-        finally        end
+        finally
+            close(s)
+        end
     end
 
     @timed_testset "SHM round-trip publish/subscribe" timeout=20 begin
@@ -1998,7 +2000,9 @@ try
             else
                 @info "session-derived SHM provider not ready in-suite; skipping SHM-backed assertion" state=st
             end
-        finally        end
+        finally
+            close(s)
+        end
 
         # Bounded wait: a short timeout must return promptly whether or not SHM
         # comes up (it can — even a connect-only session warms up against an SHM
@@ -2040,7 +2044,9 @@ try
             @test seen[] isa Zenoh.ShmAllocError
             @test !Zenoh.isborrowed(r)              # degraded to Julia memory
             @test r isa ZRef{Huge}
-        finally        end
+        finally
+            close(s)
+        end
 
         # (b) A throwing handler escalates the failure out of zref.
         s2 = open(c; shm_clients = cs, on_shm_alloc_error = e -> throw(e))
@@ -2079,7 +2085,9 @@ try
             catch e
                 @test e isa Zenoh.ZenohError
             end
-        finally        end
+        finally
+            close(s)
+        end
     end
 
     @timed_testset "SHM cleanup_orphaned_shm_segments" timeout=10 begin
