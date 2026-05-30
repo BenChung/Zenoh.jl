@@ -10,6 +10,7 @@ include("core/config.jl")           # Config
 include("core/config_builder.jl")   # ZenohConfig + typed config sections
 include("core/session.jl")          # Session
 include("core/callback.jl")         # CallbackCtx, _CB_INIT_HOOKS
+include("core/logging.jl")          # setup_logging, LogSeverity, LogStream, open_log_stream
 include("core/closure_kinds.jl")    # @closure_kind
 include("core/encoding.jl")         # Encoding, _to_owned_encoding
 include("core/qos.jl")              # Locality, Priority, CongestionControl, …
@@ -43,10 +44,6 @@ include("shm/shm.jl")
 # Typed, transport-agnostic payload handle (depends on Session, Sample,
 # ZBytes, Publisher and the SHM types above).
 include("types/zref.jl")
-
-function setup_logging()
-    _handle_result(LibZenohC.zc_init_log_from_env_or("info"))
-end
 
 # Build all @cfunction pointers + dlsym lookups at runtime. Each
 # callback file registered a hook via `_register_init!` in callback.jl;

@@ -2,6 +2,18 @@ using Zenoh, Zenohd_jll, Test
 include("test_utils.jl")
 router = run(pipeline(`$(Zenohd_jll.zenohd()) -l tcp/localhost:19148`, stdout = stdout), wait=false)
 
+# Two long-lived router-connected sessions, shared across the semantically
+# neutral round-trip testsets (generic pub/sub/get/queryable/querier on
+# distinct keys) so the suite doesn't pay a ~0.5s session-open per testset.
+# Testsets that need distinct peers for their semantics (locality /
+# allowed_origin), SHM (`shm_clients=`), liveliness propagation, or that close
+# the session under test, keep opening their own — they do NOT use S1/S2.
+rcfg() = Zenoh.Config(; str = """{connect: { endpoints: ["tcp/localhost:19148"]}}""")
+sleep(0.3)            # let the router bind
+S1 = open(rcfg())
+S2 = open(rcfg())
+sleep(0.5)            # let S1/S2 connect before the first round-trip
+
 try
     @timed_testset "Config" begin
         c = Zenoh.Config()
@@ -221,6 +233,60 @@ try
         @test_throws ErrorException write(s4, Int64(1))
     end
 
+    @timed_testset "LogSeverity" begin
+        S = Zenoh.LogSeverities
+        for s in (S.TRACE, S.DEBUG, S.INFO, S.WARN, S.ERROR)
+            @test s isa Zenoh.LogSeverity
+            @test Zenoh._log_severity_from_raw(Zenoh._raw(s)) === s
+        end
+        @test S.TRACE < S.DEBUG < S.INFO < S.WARN < S.ERROR
+        @test S.DEBUG <= S.WARN
+        @test occursin("LogSeverities.WARN", sprint(show, S.WARN))
+        @test Zenoh._filter_string(S.ERROR) == "error"
+        r = Zenoh.LogRecord(S.INFO, "hello")
+        @test r.severity === S.INFO && r.message == "hello"
+        @test occursin("LogRecord", sprint(show, r))
+        @test Zenoh._LogEntry |> isbitstype
+    end
+
+    @timed_testset "Log capture (subprocess)" begin
+        # Zenoh's log init is process-global + one-shot, so it can't run in
+        # this shared test process; drive the foreign-thread bridge in a
+        # throwaway subprocess and check it captured records.
+        script = tempname() * ".jl"
+        open(script, "w") do io
+            # Default Config (no nested quotes — keep this raw block escape-free);
+            # session startup alone emits plenty of TRACE/DEBUG records.
+            println(io, raw"""
+            using Zenoh
+            ls = Zenoh.open_log_stream(min_severity=Zenoh.LogSeverities.TRACE, capacity=128)
+            s = open(Zenoh.Config())
+            sleep(2.0)
+            recs = Zenoh.LogRecord[]
+            while (r = Zenoh.tryrecv!(ls)) !== nothing
+                push!(recs, r)
+            end
+            println(stderr, "captured=", length(recs))
+            ok = length(recs) >= 1 && all(r -> r.severity isa Zenoh.LogSeverity, recs)
+            close(ls); close(s)
+            exit(ok ? 0 : 2)
+            """)
+        end
+        out = tempname()
+        try
+            # Use the package project (deterministic, precompiled) rather than the
+            # Pkg.test sandbox; logging init is global so this runs out-of-process.
+            proj = dirname(@__DIR__)
+            p = run(pipeline(ignorestatus(`$(Base.julia_cmd()) --project=$proj $script`),
+                             stdout=out, stderr=out))
+            p.exitcode == 0 || @info "log-capture subprocess output" log=read(out, String)
+            @test p.exitcode == 0
+        finally
+            rm(script; force=true)
+            rm(out; force=true)
+        end
+    end
+
     @timed_testset "Keyexpr macro" begin
         k = kexpr"test/macro"
         @test k isa Zenoh.Keyexpr
@@ -342,8 +408,7 @@ try
 
     @timed_testset "Publisher-Subscriber" begin
         # Create a session with the router
-        c = Zenoh.Config(; str = """{connect: { endpoints: ["tcp/localhost:19148"]}}""")
-        s = open(c)
+        s = S1
         sub = nothing
         pub = nothing
         
@@ -381,17 +446,14 @@ try
             end
             if !isnothing(pub)
                 close(pub)
-            end
-            close(s)
-        end
+            end        end
     end
 
     @timed_testset "Serializer over session (deserialize from Sample)" begin
         # Encapsulation in practice: put(serialize(...)) on one side, then
         # deserialize(T, sample) straight off the received Sample — exercising
         # the loaned-payload deserialize path, and naming no ZBytes anywhere.
-        c = Zenoh.Config(; str = """{connect: { endpoints: ["tcp/localhost:19148"]}}""")
-        s = open(c)
+        s = S1
         sub = nothing
         pub = nothing
         try
@@ -407,16 +469,13 @@ try
             @test take!(got) == payload
         finally
             !isnothing(sub) && close(sub)
-            !isnothing(pub) && close(pub)
-            close(s)
-        end
+            !isnothing(pub) && close(pub)        end
     end
 
     @timed_testset "Move-on-send (prebuilt ZBytes payload)" begin
         # A payload assembled with ZBytesWriter (an owned ZBytes) can be sent
         # directly: put moves it in, so it's consumed — no leak, no finalizer.
-        c = Zenoh.Config(; str = """{connect: { endpoints: ["tcp/localhost:19148"]}}""")
-        s = open(c)
+        s = S1
         sub = nothing
         pub = nothing
         try
@@ -440,15 +499,12 @@ try
             @test take!(received) == "prebuilt"
         finally
             isnothing(sub) || close(sub)
-            isnothing(pub) || close(pub)
-            close(s)
-        end
+            isnothing(pub) || close(pub)        end
     end
 
     @timed_testset "Timestamp and ZID" begin
         # Create a session with the router
-        c = Zenoh.Config(; str = """{connect: { endpoints: ["tcp/localhost:19148"]}}""")
-        s = open(c)
+        s = S1
         sub = nothing
         pub = nothing
         
@@ -530,9 +586,7 @@ try
             end
             if !isnothing(pub)
                 close(pub)
-            end
-            close(s)
-        end
+            end        end
     end
 
     @timed_testset "Session put with timestamp" begin
@@ -540,8 +594,7 @@ try
         # which writes the timestamp through Ptr{z_put_options_t}. Using the
         # wrong options struct type would land the write at the wrong offset
         # and the received timestamp would not match what was sent.
-        c = Zenoh.Config(; str = """{connect: { endpoints: ["tcp/localhost:19148"]}}""")
-        s = open(c)
+        s = S1
         sub = nothing
 
         try
@@ -571,14 +624,11 @@ try
         finally
             if !isnothing(sub)
                 close(sub)
-            end
-            close(s)
-        end
+            end        end
     end
 
     @timed_testset "Sample accessors" begin
-        c = Zenoh.Config(; str = """{connect: { endpoints: ["tcp/localhost:19148"]}}""")
-        s = open(c)
+        s = S1
         sub = nothing
         pub = nothing
 
@@ -625,9 +675,7 @@ try
             end
             if !isnothing(pub)
                 close(pub)
-            end
-            close(s)
-        end
+            end        end
     end
 
     @timed_testset "Encoding" begin
@@ -662,8 +710,7 @@ try
     end
 
     @timed_testset "Put with encoding" begin
-        c = Zenoh.Config(; str = """{connect: { endpoints: ["tcp/localhost:19148"]}}""")
-        s = open(c)
+        s = S1
         sub = nothing
         pub = nothing
 
@@ -708,13 +755,10 @@ try
             end
             if !isnothing(pub)
                 close(pub)
-            end
-            close(s)
-        end
+            end        end
     end
     @timed_testset "Buffered subscriber" begin
-        c = Zenoh.Config(; str = """{connect: { endpoints: ["tcp/localhost:19148"]}}""")
-        s = open(c)
+        s = S1
         sub = nothing
         pub = nothing
 
@@ -771,14 +815,11 @@ try
             end
             if !isnothing(pub)
                 close(pub)
-            end
-            close(s)
-        end
+            end        end
     end
 
     @timed_testset "Buffered subscriber (ring)" begin
-        c = Zenoh.Config(; str = """{connect: { endpoints: ["tcp/localhost:19148"]}}""")
-        s = open(c)
+        s = S1
         sub = nothing
         pub = nothing
 
@@ -819,14 +860,11 @@ try
             end
             if !isnothing(pub)
                 close(pub)
-            end
-            close(s)
-        end
+            end        end
     end
 
     @timed_testset "Get/Reply" begin
-        c = Zenoh.Config(; str = """{connect: { endpoints: ["tcp/localhost:19148"]}}""")
-        s = open(c)
+        s = S1
 
         try
             # Plumbing test: querying a key with no queryable should return
@@ -861,14 +899,11 @@ try
                 payload="hi", encoding=Zenoh.Encodings.APPLICATION_JSON,
                 attachment="meta")
             @test collect(handler3) isa Vector{Zenoh.Reply}
-        finally
-            close(s)
-        end
+        finally        end
     end
 
     @timed_testset "Liveliness token + buffered subscriber" begin
-        c = Zenoh.Config(; str = """{connect: { endpoints: ["tcp/localhost:19148"]}}""")
-        s = open(c)
+        s = S1
         sub = nothing
         tok = nothing
         try
@@ -892,14 +927,11 @@ try
             @test Zenoh.kind(del_sample) === Zenoh.SampleKinds.DELETE
         finally
             !isnothing(tok) && close(tok)
-            !isnothing(sub) && close(sub)
-            close(s)
-        end
+            !isnothing(sub) && close(sub)        end
     end
 
     @timed_testset "Liveliness callback subscriber" begin
-        c = Zenoh.Config(; str = """{connect: { endpoints: ["tcp/localhost:19148"]}}""")
-        s = open(c)
+        s = S1
         sub = nothing
         tok = nothing
         try
@@ -915,15 +947,12 @@ try
             @test take!(seen) === Zenoh.SampleKinds.DELETE
         finally
             !isnothing(tok) && close(tok)
-            !isnothing(sub) && close(sub)
-            close(s)
-        end
+            !isnothing(sub) && close(sub)        end
     end
 
     @timed_testset "Liveliness history replay" begin
         # history=true should replay existing tokens to a late subscriber.
-        c = Zenoh.Config(; str = """{connect: { endpoints: ["tcp/localhost:19148"]}}""")
-        s = open(c)
+        s = S1
         sub = nothing
         tok = nothing
         try
@@ -938,9 +967,7 @@ try
             @test Zenoh.keyexpr(sample) == "test/liveliness/history"
         finally
             !isnothing(tok) && close(tok)
-            !isnothing(sub) && close(sub)
-            close(s)
-        end
+            !isnothing(sub) && close(sub)        end
     end
 
     @timed_testset "QoS enums" begin
@@ -1014,8 +1041,7 @@ try
     @timed_testset "QoS end-to-end (session put → subscriber)" begin
         # Session-level put threads the QoS fields onto the wire; verify
         # the subscriber-side Sample accessors reflect them.
-        c = Zenoh.Config(; str = """{connect: { endpoints: ["tcp/localhost:19148"]}}""")
-        s = open(c)
+        s = S1
         sub = nothing
         try
             test_key = Zenoh.Keyexpr("test/qos/end_to_end")
@@ -1045,16 +1071,13 @@ try
             @test take!(received_express) === true
             @test take!(received_reliab)  === Zenoh.Reliabilities.BEST_EFFORT
         finally
-            !isnothing(sub) && close(sub)
-            close(s)
-        end
+            !isnothing(sub) && close(sub)        end
     end
 
     @timed_testset "QoS via Publisher options" begin
         # Same idea but the QoS lives on the Publisher itself, not on
         # the per-put call.
-        c = Zenoh.Config(; str = """{connect: { endpoints: ["tcp/localhost:19148"]}}""")
-        s = open(c)
+        s = S1
         sub = nothing
         pub = nothing
         try
@@ -1083,17 +1106,14 @@ try
             @test take!(received_reliab) === Zenoh.Reliabilities.BEST_EFFORT
         finally
             !isnothing(sub) && close(sub)
-            !isnothing(pub) && close(pub)
-            close(s)
-        end
+            !isnothing(pub) && close(pub)        end
     end
 
     @timed_testset "Subscriber allowed_origin" begin
         # Same-session puts are session-local. A subscriber with
         # allowed_origin=REMOTE should not receive them. Use a tryrecv-style
         # negative check.
-        c = Zenoh.Config(; str = """{connect: { endpoints: ["tcp/localhost:19148"]}}""")
-        s = open(c)
+        s = S1
         sh_remote = nothing
         sh_any    = nothing
         try
@@ -1117,14 +1137,11 @@ try
             @test Zenoh.tryrecv!(sh_remote) === nothing
         finally
             !isnothing(sh_remote) && close(sh_remote)
-            !isnothing(sh_any)    && close(sh_any)
-            close(s)
-        end
+            !isnothing(sh_any)    && close(sh_any)        end
     end
 
     @timed_testset "Queryable (channel) round-trip" begin
-        c = Zenoh.Config(; str = """{connect: { endpoints: ["tcp/localhost:19148"]}}""")
-        s = open(c)
+        s = S1
         qh = nothing
         srv = nothing
         try
@@ -1164,14 +1181,11 @@ try
             @test take!(seen_params)  == "k1=v1&k2=v2"
         finally
             !isnothing(qh) && close(qh)
-            !isnothing(srv) && wait(srv)
-            close(s)
-        end
+            !isnothing(srv) && wait(srv)        end
     end
 
     @timed_testset "Queryable (callback) round-trip" begin
-        c = Zenoh.Config(; str = """{connect: { endpoints: ["tcp/localhost:19148"]}}""")
-        s = open(c)
+        s = S1
         q = nothing
         try
             test_key = Zenoh.Keyexpr("test/queryable/callback")
@@ -1191,14 +1205,11 @@ try
             end
             @test take!(served) == "x=1"
         finally
-            !isnothing(q) && close(q)
-            close(s)
-        end
+            !isnothing(q) && close(q)        end
     end
 
     @timed_testset "Queryable accessors (payload + attachment + encoding)" begin
-        c = Zenoh.Config(; str = """{connect: { endpoints: ["tcp/localhost:19148"]}}""")
-        s = open(c)
+        s = S1
         qh = nothing
         srv = nothing
         try
@@ -1241,14 +1252,11 @@ try
             @test take!(seen_enc)     == Zenoh.Encodings.APPLICATION_JSON
         finally
             !isnothing(qh) && close(qh)
-            !isnothing(srv) && wait(srv)
-            close(s)
-        end
+            !isnothing(srv) && wait(srv)        end
     end
 
     @timed_testset "Queryable reply_err" begin
-        c = Zenoh.Config(; str = """{connect: { endpoints: ["tcp/localhost:19148"]}}""")
-        s = open(c)
+        s = S1
         q = nothing
         try
             test_key = Zenoh.Keyexpr("test/queryable/err")
@@ -1267,14 +1275,11 @@ try
             end
             @test Zenoh.error_encoding(r) == Zenoh.Encodings.TEXT_PLAIN
         finally
-            !isnothing(q) && close(q)
-            close(s)
-        end
+            !isnothing(q) && close(q)        end
     end
 
     @timed_testset "Queryable reply_del" begin
-        c = Zenoh.Config(; str = """{connect: { endpoints: ["tcp/localhost:19148"]}}""")
-        s = open(c)
+        s = S1
         q = nothing
         try
             test_key = Zenoh.Keyexpr("test/queryable/del")
@@ -1289,14 +1294,11 @@ try
             smp = Zenoh.sample(ok_replies[1])
             @test Zenoh.kind(smp) === Zenoh.SampleKinds.DELETE
         finally
-            !isnothing(q) && close(q)
-            close(s)
-        end
+            !isnothing(q) && close(q)        end
     end
 
     @timed_testset "Queryable tryrecv! + close before any query" begin
-        c = Zenoh.Config(; str = """{connect: { endpoints: ["tcp/localhost:19148"]}}""")
-        s = open(c)
+        s = S1
         qh = nothing
         try
             qh = Zenoh.Queryable(s, Zenoh.Keyexpr("test/queryable/idle");
@@ -1313,14 +1315,11 @@ try
             @test qh.closed
             qh = nothing
         finally
-            !isnothing(qh) && close(qh)
-            close(s)
-        end
+            !isnothing(qh) && close(qh)        end
     end
 
     @timed_testset "liveliness_get snapshot" begin
-        c = Zenoh.Config(; str = """{connect: { endpoints: ["tcp/localhost:19148"]}}""")
-        s = open(c)
+        s = S1
         tok = nothing
         try
             test_key_str = "test/liveliness/snapshot"
@@ -1349,17 +1348,13 @@ try
             end
             @test count[] >= 1
         finally
-            !isnothing(tok) && close(tok)
-            close(s)
-        end
+            !isnothing(tok) && close(tok)        end
     end
 
     @timed_testset "MatchingListener + matching_status" begin
         # Two sessions through the same router: pub on s1, sub on s2.
-        c1 = Zenoh.Config(; str = """{connect: { endpoints: ["tcp/localhost:19148"]}}""")
-        c2 = Zenoh.Config(; str = """{connect: { endpoints: ["tcp/localhost:19148"]}}""")
-        s1 = open(c1)
-        s2 = open(c2)
+        s1 = S1
+        s2 = S2
         pub = nothing
         ml  = nothing
         sub = nothing
@@ -1401,17 +1396,13 @@ try
             !isnothing(sub) && close(sub)
             !isnothing(ml)  && close(ml)
             !isnothing(pub) && close(pub)
-            close(s2)
-            close(s1)
         end
     end
 
     @timed_testset "Querier (channel) round-trip" begin
-        # Two sessions through the same router: queryable on s1, querier on s2.
-        c1 = Zenoh.Config(; str = """{connect: { endpoints: ["tcp/localhost:19148"]}}""")
-        c2 = Zenoh.Config(; str = """{connect: { endpoints: ["tcp/localhost:19148"]}}""")
-        s1 = open(c1)
-        s2 = open(c2)
+        # Two shared sessions through the same router: queryable on s1, querier on s2.
+        s1 = S1
+        s2 = S2
         qh = nothing
         qrr = nothing
         srv = nothing
@@ -1466,16 +1457,12 @@ try
             !isnothing(qrr) && close(qrr)
             !isnothing(qh)  && close(qh)
             !isnothing(srv) && wait(srv)
-            close(s2)
-            close(s1)
         end
     end
 
     @timed_testset "Querier repeated queries reuse declared options" begin
-        c1 = Zenoh.Config(; str = """{connect: { endpoints: ["tcp/localhost:19148"]}}""")
-        c2 = Zenoh.Config(; str = """{connect: { endpoints: ["tcp/localhost:19148"]}}""")
-        s1 = open(c1)
-        s2 = open(c2)
+        s1 = S1
+        s2 = S2
         qh = nothing
         qrr = nothing
         srv = nothing
@@ -1503,16 +1490,12 @@ try
             !isnothing(qrr) && close(qrr)
             !isnothing(qh)  && close(qh)
             !isnothing(srv) && wait(srv)
-            close(s2)
-            close(s1)
         end
     end
 
     @timed_testset "Querier (callback) round-trip" begin
-        c1 = Zenoh.Config(; str = """{connect: { endpoints: ["tcp/localhost:19148"]}}""")
-        c2 = Zenoh.Config(; str = """{connect: { endpoints: ["tcp/localhost:19148"]}}""")
-        s1 = open(c1)
-        s2 = open(c2)
+        s1 = S1
+        s2 = S2
         qh = nothing
         qrr = nothing
         srv = nothing
@@ -1540,16 +1523,12 @@ try
             !isnothing(qrr) && close(qrr)
             !isnothing(qh)  && close(qh)
             !isnothing(srv) && wait(srv)
-            close(s2)
-            close(s1)
         end
     end
 
     @timed_testset "Querier MatchingListener + matching_status" begin
-        c1 = Zenoh.Config(; str = """{connect: { endpoints: ["tcp/localhost:19148"]}}""")
-        c2 = Zenoh.Config(; str = """{connect: { endpoints: ["tcp/localhost:19148"]}}""")
-        s1 = open(c1)
-        s2 = open(c2)
+        s1 = S1
+        s2 = S2
         qrr = nothing
         ml  = nothing
         qh  = nothing
@@ -1592,8 +1571,6 @@ try
             !isnothing(srv) && wait(srv)
             !isnothing(ml)  && close(ml)
             !isnothing(qrr) && close(qrr)
-            close(s2)
-            close(s1)
         end
     end
 
@@ -1603,8 +1580,7 @@ try
         # Querier accepts the same CongestionControl/Priority/Locality
         # singletons every other entrypoint takes (this path previously took
         # raw enum values and broke on the singletons).
-        c = Zenoh.Config(; str = """{connect: { endpoints: ["tcp/localhost:19148"]}}""")
-        s = open(c)
+        s = S1
         qrr = nothing
         try
             # get with typed singletons against a key no one answers.
@@ -1629,23 +1605,34 @@ try
             @test Zenoh.keyexpr(qrr) == "test/typed/querier"
             @test collect(Zenoh.get(qrr)) isa Vector{Zenoh.Reply}
         finally
-            !isnothing(qrr) && close(qrr)
-            close(s)
-        end
+            !isnothing(qrr) && close(qrr)        end
     end
 
     @timed_testset "Publisher idempotent close" begin
-        c = Zenoh.Config(; str = """{connect: { endpoints: ["tcp/localhost:19148"]}}""")
-        s = open(c)
+        s = S1
         try
             pub = Zenoh.Publisher(s, Zenoh.Keyexpr("test/pub/close"))
             close(pub)
             @test pub.closed
             close(pub)  # second close is a no-op, must not throw
             @test pub.closed
-        finally
-            close(s)
-        end
+        finally        end
+    end
+
+    @timed_testset "Session idempotent close" begin
+        # No router needed — a default peer session opens without connecting.
+        s = open(Zenoh.Config())
+        @test isopen(s)
+        close(s)
+        @test !isopen(s)          # closed → false (no use-after-free on the freed handle)
+        @test s.closed[]
+        close(s)                  # second close is a no-op, must not throw
+        @test s.closed[]
+        # operations after close fail loudly rather than touching a freed handle
+        @test_throws ArgumentError Zenoh.zid(s)
+        @test_throws ArgumentError Zenoh.Publisher(s, Zenoh.Keyexpr("test/closed/pub"))
+        GC.gc(true)               # finalizer must skip the already-closed session
+        @test true
     end
 
     @timed_testset "SHM provider basics" timeout=20 begin
@@ -1701,9 +1688,7 @@ try
         s = open(c; shm_clients = cs)
         try
             @test isopen(s)
-        finally
-            close(s)
-        end
+        finally        end
     end
 
     @timed_testset "SHM round-trip publish/subscribe" timeout=20 begin
@@ -2013,9 +1998,7 @@ try
             else
                 @info "session-derived SHM provider not ready in-suite; skipping SHM-backed assertion" state=st
             end
-        finally
-            close(s)
-        end
+        finally        end
 
         # Bounded wait: a short timeout must return promptly whether or not SHM
         # comes up (it can — even a connect-only session warms up against an SHM
@@ -2057,9 +2040,7 @@ try
             @test seen[] isa Zenoh.ShmAllocError
             @test !Zenoh.isborrowed(r)              # degraded to Julia memory
             @test r isa ZRef{Huge}
-        finally
-            close(s)
-        end
+        finally        end
 
         # (b) A throwing handler escalates the failure out of zref.
         s2 = open(c; shm_clients = cs, on_shm_alloc_error = e -> throw(e))
@@ -2098,9 +2079,7 @@ try
             catch e
                 @test e isa Zenoh.ZenohError
             end
-        finally
-            close(s)
-        end
+        finally        end
     end
 
     @timed_testset "SHM cleanup_orphaned_shm_segments" timeout=10 begin
@@ -2109,5 +2088,7 @@ try
     end
 
 finally
+    close(S1)
+    close(S2)
     kill(router)
 end

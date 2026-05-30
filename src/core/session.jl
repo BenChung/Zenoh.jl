@@ -17,11 +17,23 @@ struct Session
     # Discovered SHM capability, snapshotted at `open` from the provider state
     # zenoh-c reports. See `shm_state` / `shm_capable`. `:none` until probed.
     shm_state::Base.RefValue{Symbol}
+    # `true` once `close` (or the finalizer) has torn the session down. In a
+    # mutable cell so `Session` stays immutable; guards `close` against running
+    # `z_close`/`z_session_drop` twice and lets every handle accessor fail loudly
+    # instead of touching a freed handle.
+    closed::Base.RefValue{Bool}
     Session() = new(Ref{LibZenohC.z_owned_session_t}(),
-                    Ref{Any}(nothing), Ref{Any}(nothing), Ref{Symbol}(:none))
+                    Ref{Any}(nothing), Ref{Any}(nothing), Ref{Symbol}(:none),
+                    Ref(false))
 end
 
-_loan(s::Session) = _loan(s.s)
+# Loan the session for any operation; throws once closed so a use-after-free
+# can't reach the dropped handle (this is the chokepoint every declare/put/get
+# routes through).
+function _loan(s::Session)
+    s.closed[] && throw(ArgumentError("session is closed"))
+    return _loan(s.s)
+end
 
 """
 Opens a new Zenoh session with a given Zenoh config. Copies the config.
@@ -60,7 +72,16 @@ function Base.open(c::Config; shm_clients=nothing, on_shm_alloc_error=nothing,
             s.s, _move(cfg_copy), _loan(shm_clients.s)))
     end
 
-    finalizer(s -> _drop(_move(s)), s.s)
+    # Safety net: free the handle on GC only if it wasn't explicitly closed.
+    # `close` does the teardown deterministically on the caller's thread and
+    # flips `closed`, so for a closed session this no-ops — keeping the
+    # graceful `z_session_drop` (which drains the tokio runtime) off the GC /
+    # process-exit finalizer thread, where ordering is unpredictable.
+    let handle = s.s, closed = s.closed
+        finalizer(handle) do h
+            closed[] || _drop(_move(h))
+        end
+    end
 
     # Discover the session's SHM capability once, here — the one place SHM is
     # acknowledged. `_bind_session_shm!` reads the provider state zenoh-c
@@ -76,23 +97,33 @@ function Base.open(c::Config; shm_clients=nothing, on_shm_alloc_error=nothing,
     return s
 end
 
+"""
+Closes a Zenoh session: gracefully shuts it down (`z_close`) and frees the
+handle (`z_session_drop`), deterministically on the calling task. Idempotent —
+a second `close` is a no-op, and the GC finalizer skips an already-closed
+session. After `close` the session is unusable; operations on it throw.
+"""
 function Base.close(s::Session)
+    s.closed[] && return nothing
+    s.closed[] = true
     opts = Ref{LibZenohC.z_close_options_t}()
     LibZenohC.z_close_options_default(opts)
-    _handle_result(LibZenohC.z_close(_loan(s.s), opts))
+    GC.@preserve s _handle_result(LibZenohC.z_close(_loan(s.s), opts))
+    _drop(_move(s.s))   # free now, on this task — not later on the GC thread
+    return nothing
 end
 
 """
 Checks if zenoh session is open.
 """
-Base.isopen(s::Session) = !LibZenohC.z_session_is_closed(_loan(s.s))
+Base.isopen(s::Session) = !s.closed[] && !LibZenohC.z_session_is_closed(_loan(s.s))
 
 """
 Returns the session’s Zenoh ID.
 
 Unless the session is invalid, that ID is guaranteed to be non-zero. In other words, this function returning an array of 16 zeros means you failed to pass it a valid session.
 """
-zid(s::Session) = LibZenohC.z_info_zid(_loan(s.s))
+zid(s::Session) = LibZenohC.z_info_zid(_loan(s))
 
 function Base.show(io::IO, id::LibZenohC.z_id_t)
     r=Ref{LibZenohC.z_owned_string_t}()
@@ -124,7 +155,7 @@ function router_zids(s::Session)
     end
     callback = Ref{LibZenohC.z_owned_closure_zid_t}()
     LibZenohC.z_closure_zid(callback, recv_func, C_NULL, recv_ctx)
-    GC.@preserve recv_ctx recv_func _handle_result(LibZenohC.z_info_routers_zid(_loan(s.s), _move(callback)))
+    GC.@preserve recv_ctx recv_func _handle_result(LibZenohC.z_info_routers_zid(_loan(s), _move(callback)))
     return routers
 end
 
@@ -139,7 +170,7 @@ function peer_zids(s::Session)
     end
     callback = Ref{LibZenohC.z_owned_closure_zid_t}()
     LibZenohC.z_closure_zid(callback, recv_func, C_NULL, recv_ctx)
-    GC.@preserve recv_ctx recv_func _handle_result(LibZenohC.z_info_peers_zid(_loan(s.s), _move(callback)))
+    GC.@preserve recv_ctx recv_func _handle_result(LibZenohC.z_info_peers_zid(_loan(s), _move(callback)))
     return routers
 end
 
