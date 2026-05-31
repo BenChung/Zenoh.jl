@@ -143,17 +143,24 @@ macro closure_kind(tag_expr, args...)
                     return h
                 end
 
+                # `@gc_safe_threadcall` (not `@threadcall`): the blocking recv runs on
+                # a libuv worker thread that the runtime adopts (GC-tracks). Base's
+                # `@threadcall` leaves that worker GC-*unsafe* while parked in the recv,
+                # so a stop-the-world GC on another thread (e.g. JIT during live
+                # traffic) waits for it forever — a deadlock. The gc_safe variant marks
+                # the worker GC-safe for the blocking call's duration (it touches no
+                # Julia heap), so GC never waits on it. See core/gc_safe_threadcall.jl.
                 @inline _recv(::$val_t, ::Val{:fifo},
                         h::Ptr{LibZenohC.$fifo_loaned},
                         o::Ptr{LibZenohC.$owned_t}) =
-                    @threadcall(($(QuoteNode(fifo_recv)), LibZenohC.libzenohc),
+                    @gc_safe_threadcall(($(QuoteNode(fifo_recv)), LibZenohC.libzenohc),
                         LibZenohC.z_result_t,
                         (Ptr{LibZenohC.$fifo_loaned}, Ptr{LibZenohC.$owned_t}),
                         h, o)
                 @inline _recv(::$val_t, ::Val{:ring},
                         h::Ptr{LibZenohC.$ring_loaned},
                         o::Ptr{LibZenohC.$owned_t}) =
-                    @threadcall(($(QuoteNode(ring_recv)), LibZenohC.libzenohc),
+                    @gc_safe_threadcall(($(QuoteNode(ring_recv)), LibZenohC.libzenohc),
                         LibZenohC.z_result_t,
                         (Ptr{LibZenohC.$ring_loaned}, Ptr{LibZenohC.$owned_t}),
                         h, o)

@@ -50,11 +50,15 @@ end
 # the call site resolves to a singleton at compile time and the right
 # ccall is inlined — no runtime dispatch.
 #
-# The blocking _recv methods use @threadcall: the C function runs on a
-# libuv worker thread and the calling Julia task asynchronously waits
+# The blocking _recv methods use @gc_safe_threadcall: the C function runs
+# on a libuv worker thread and the calling Julia task asynchronously waits
 # for completion, so other Julia tasks (including `close(handler)`)
-# continue to run. The default libuv pool is 4 threads — bump
-# UV_THREADPOOL_SIZE (set before Julia starts) if you need more
+# continue to run. The `gc_safe` variant (vs Base.@threadcall) is required:
+# the worker thread is GC-tracked while parked in the blocking recv, so a
+# plain @threadcall would stall a stop-the-world GC on another thread
+# (the recv never reaches a safepoint) — a deadlock. gc_safe marks it
+# parked-from-GC's-view for the call's duration. The default libuv pool is
+# 4 threads — bump UV_THREADPOOL_SIZE (before Julia starts) for more
 # concurrent in-flight recvs.
 
 # ── Channel-handler subscriber ───────────────────────────────────────
@@ -71,9 +75,10 @@ abstract type AbstractSubscriberHandler{HType, Mode} end
 Buffered subscriber returned by `Base.open(s, k; channel=:fifo|:ring, capacity=N)`.
 Iterate or use `take!`/`tryrecv!` to consume `Sample`s. Iteration
 terminates when the channel disconnects (e.g. after `close(sub)`).
-Blocking recv runs on a libuv worker thread (`@threadcall`), so other
+Blocking recv runs on a libuv worker thread (`@gc_safe_threadcall`), so other
 Julia tasks — including `close(sub)` from a sibling task — run
-concurrently while iteration waits.
+concurrently while iteration waits, and a stop-the-world GC never stalls on
+the parked worker.
 """
 struct SubscriberHandler{HType, Mode} <: AbstractSubscriberHandler{HType, Mode}
     sub::Base.RefValue{LibZenohC.z_owned_subscriber_t}
