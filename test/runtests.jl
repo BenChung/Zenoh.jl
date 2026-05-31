@@ -2276,6 +2276,8 @@ try
         @test_throws ArgumentError Zenoh._heartbeat_mode(:bogus)
     end
 
+    include("ring_channel.jl")
+
     close(ATS1)
     close(ATS2)
 

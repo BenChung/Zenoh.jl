@@ -312,10 +312,12 @@ Buffered advanced subscriber returned by `AdvancedSubscriber(s, k; channel=…)`
 (or `open(s, k; history=…)`). Iterate / `take!` / `tryrecv!` to consume
 `Sample`s. See [`SubscriberHandler`](@ref).
 """
-struct AdvancedSubscriberHandler{HType, Mode} <: AbstractSubscriberHandler{HType, Mode}
+mutable struct AdvancedSubscriberHandler <: AbstractSubscriberHandler
     sub::Base.RefValue{LibZenohC.ze_owned_advanced_subscriber_t}
-    h::Base.RefValue{HType}
+    ctx::CallbackCtx{LibZenohC.z_owned_sample_t}
+    async_cond::Base.AsyncCondition
     keyexpr::Keyexpr
+    closed::Bool
 end
 
 function AdvancedSubscriber(f::Function, s::Session, k::Keyexpr;
@@ -331,7 +333,8 @@ end
 function AdvancedSubscriber(s::Session, k::Keyexpr;
         channel::Symbol=:fifo, capacity::Integer=16, kwargs...)
     opts = _make_advanced_subscriber_opts(; kwargs...)
-    _open_buffered_sub(AdvancedSubscriberHandler, k, channel, capacity) do sub, closure
+    # `:fifo`/`:ring` → drop-oldest ring (KEEP_LAST); `:keep_all` → heap-backed.
+    _open_buffered_sub(AdvancedSubscriberHandler, k, capacity, channel) do sub, closure
         GC.@preserve opts LibZenohC.ze_declare_advanced_subscriber(
             _loan(s), sub, _loan(k), _move(closure), opts)
     end
@@ -360,6 +363,8 @@ isadvanced(::AbstractCallbackSubscriber) = false
 isadvanced(::AbstractSubscriberHandler)  = false
 isadvanced(::AdvancedSubscriber)         = true
 isadvanced(::AdvancedSubscriberHandler)  = true
+isadvanced(::KeepAllSubscriber)          = false
+isadvanced(::KeepAllSubscriber{LibZenohC.ze_owned_advanced_subscriber_t}) = true
 
 # ── :miss closure kind + SampleMissListener ──────────────────────────
 #
@@ -392,8 +397,8 @@ end
 
 function _teardown_callback(::Val{:miss},
         ctx::CallbackCtx{LibZenohC.ze_miss_t},
-        async_cond::Base.AsyncCondition)
-    destroy_ctx_pod!(ctx, async_cond)
+        async_cond::Base.AsyncCondition; close_async::Bool=true)
+    destroy_ctx_pod!(ctx, async_cond; close_async)
 end
 
 """

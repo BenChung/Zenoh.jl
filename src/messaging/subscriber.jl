@@ -103,7 +103,8 @@ function _open_plain_buffered(s::Session, k::Keyexpr;
         channel::Symbol = :fifo, capacity::Integer = 16,
         allowed_origin::Union{Nothing, Locality} = nothing)
     opts = _make_subscriber_opts(allowed_origin)
-    _open_buffered_sub(SubscriberHandler, k, channel, capacity) do sub, closure
+    # `:fifo`/`:ring` → drop-oldest ring (KEEP_LAST); `:keep_all` → heap-backed.
+    _open_buffered_sub(SubscriberHandler, k, capacity, channel) do sub, closure
         GC.@preserve opts LibZenohC.z_declare_subscriber(_loan(s), sub, _loan(k),
             _move(closure), _sub_opts_arg(opts))
     end
@@ -143,13 +144,24 @@ end
     open(s::Session, k::Keyexpr; channel=:fifo, capacity=16,
          allowed_origin=nothing, history, recovery, query_timeout_ms, detection)
 
-Subscribe to keyexpr `k` in session `s` with a buffered channel handler.
-Returns a `SubscriberHandler` that can be iterated or polled with
-`take!`/`tryrecv!`. Call `close(sub)` to undeclare the subscriber;
-iteration will then terminate once buffered samples are drained.
+Subscribe to keyexpr `k` in session `s` with a buffered handler. Iterate or
+poll with `take!`/`tryrecv!`. Call `close(sub)` to undeclare; iteration
+terminates once buffered samples are drained.
 
-As with the callback form, passing an advanced feature keyword routes to
-an [`AdvancedSubscriberHandler`](@ref).
+Delivery is the slot-free callback ring (no `@threadcall` worker is parked, so
+arbitrarily many buffered endpoints coexist). `channel` selects the History
+policy:
+
+- `:fifo` / `:ring` (default) → bounded ring, **drop-oldest** on overflow,
+  `capacity` slots → ROS2 **KEEP_LAST(capacity)**. Returns a
+  [`SubscriberHandler`](@ref). `dropped_count(sub)` counts evictions.
+- `:keep_all` → a consume task drains into an unbounded, heap-backed buffer →
+  ROS2 **KEEP_ALL** (bounded only by memory; OOM, not deadlock, under
+  sustained overload). Returns a [`KeepAllSubscriber`](@ref). `capacity` is a
+  floor on the internal handoff ring, not a bound.
+
+Neither blocks the IO thread. As with the callback form, passing an advanced
+feature keyword routes to an [`AdvancedSubscriberHandler`](@ref).
 
 `allowed_origin` accepts a `Locality` singleton (`Localities.ANY` etc.).
 """

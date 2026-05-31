@@ -38,119 +38,267 @@ function error_encoding(r::Reply)
     return _from_loaned_encoding(LibZenohC.z_reply_err_encoding(LibZenohC.z_reply_err(_loaned_reply(r))))
 end
 
-# ── Channel handler dispatch ─────────────────────────────────────────
+# ── Buffered (ring) delivery ──────────────────────────────────────────
 #
-# The per-kind channel constructors and recv/try_recv methods live in
-# `closure_kinds.jl` (`_new_channel`, `_recv`, `_try_recv`), stamped
-# out by `@closure_kind :sample` and `@closure_kind :reply`. This file
-# composes them into the user-facing `SubscriberHandler` / `GetHandler`
-# iteration interface.
+# `open(s, k; channel=:fifo)`, `Queryable(s, k; channel=…)`, and the channel
+# `get` are all delivered by the capacity-bounded callback ring in
+# `callback.jl` (filled on libzenohc's I/O thread, drained on a Julia task) —
+# NOT by a blocking libzenohc FIFO/ring handler pulled on a `@threadcall`
+# worker. The ring is slot-free: an arbitrary number of buffered endpoints can
+# coexist without exhausting the `Base.threadcall_restrictor` (sem_size 4).
 #
-# Mode is a Symbol type parameter on the handler struct, so Val(M) at
-# the call site resolves to a singleton at compile time and the right
-# ccall is inlined — no runtime dispatch.
+# Overflow is drop-oldest (ROS `KEEP_LAST`): when the consumer falls behind,
+# the oldest buffered item is evicted and counted in `dropped_count`. The I/O
+# thread never blocks. For lossless backpressure (block the publisher, at the
+# cost of stalling the shared RX thread) the native libzenohc FIFO handlers
+# remain generated in `closure_kinds.jl` — wiring a user-facing opt-in for them
+# is a follow-up; nothing routes there by default.
 #
-# The blocking _recv methods use @gc_safe_threadcall: the C function runs
-# on a libuv worker thread and the calling Julia task asynchronously waits
-# for completion, so other Julia tasks (including `close(handler)`)
-# continue to run. The `gc_safe` variant (vs Base.@threadcall) is required:
-# the worker thread is GC-tracked while parked in the blocking recv, so a
-# plain @threadcall would stall a stop-the-world GC on another thread
-# (the recv never reaches a safepoint) — a deadlock. gc_safe marks it
-# parked-from-GC's-view for the call's duration. The default libuv pool is
-# 4 threads — bump UV_THREADPOOL_SIZE (before Julia starts) for more
-# concurrent in-flight recvs.
+# Two consumption shapes:
+#   • Buffered subscriber/queryable (infinite stream, keep-last-N): the caller
+#     pulls the ring directly via `_ring_take` / `_ring_pop!` — one bounded
+#     buffer, clean drop-oldest. Teardown is deferred to a finalizer (a
+#     concurrent iterate may still touch the ctx; reachability is the interlock).
+#   • Channel `get` (finite reply set): a consume task drains the ring into a
+#     `Base.Channel{Reply}`; the task owns the ctx lifetime until the get
+#     completes (drop trampoline fires), which makes abandonment safe (no
+#     undeclare exists for a get).
 
-# ── Channel-handler subscriber ───────────────────────────────────────
+# ── Buffered subscriber handler ───────────────────────────────────────
 
-# Abstract supertype shared with LivelinessSubscriberHandler. Both
-# subtypes wrap the same `z_owned_subscriber_t` + channel handler, only
-# the declare entrypoint differs; the recv/iterate machinery is shared
-# via dispatch on this supertype.
-abstract type AbstractSubscriberHandler{HType, Mode} end
+# Abstract supertype shared with AdvancedSubscriberHandler /
+# LivelinessSubscriberHandler. Concrete subtypes hold the same fields
+# (sub, ctx, async_cond, keyexpr, closed); only the owned-handle type of `sub`
+# differs (z_owned_subscriber_t vs ze_owned_advanced_subscriber_t), which
+# `_handler_sub_handle` / `_drop_sub_handle` / `_undeclare_sub_handle` adapt.
+abstract type AbstractSubscriberHandler end
 
 """
     SubscriberHandler
 
-Buffered subscriber returned by `Base.open(s, k; channel=:fifo|:ring, capacity=N)`.
-Iterate or use `take!`/`tryrecv!` to consume `Sample`s. Iteration
-terminates when the channel disconnects (e.g. after `close(sub)`).
-Blocking recv runs on a libuv worker thread (`@gc_safe_threadcall`), so other
-Julia tasks — including `close(sub)` from a sibling task — run
-concurrently while iteration waits, and a stop-the-world GC never stalls on
-the parked worker.
+Buffered subscriber returned by `Base.open(s, k; channel=:fifo, capacity=N)`.
+Iterate or use `take!`/`tryrecv!` to consume `Sample`s. Iteration terminates
+once the subscriber is closed and the buffer is drained.
+
+Delivery is the slot-free callback ring: samples land in a Julia-side
+capacity-`N` ring on libzenohc's I/O thread and are pulled here on the
+consuming task. When the consumer falls behind, the oldest buffered sample is
+dropped (`dropped_count(sub)` counts evictions). Other Julia tasks — including
+`close(sub)` from a sibling task — run concurrently while iteration waits.
 """
-struct SubscriberHandler{HType, Mode} <: AbstractSubscriberHandler{HType, Mode}
+mutable struct SubscriberHandler <: AbstractSubscriberHandler
     sub::Base.RefValue{LibZenohC.z_owned_subscriber_t}
-    h::Base.RefValue{HType}
-    keyexpr::Keyexpr
+    ctx::CallbackCtx{LibZenohC.z_owned_sample_t}
+    async_cond::Base.AsyncCondition
+    keyexpr::Keyexpr     # GC pin
+    closed::Bool
 end
 
-# The owned-handle C type backing a buffered handler `T` — read off its
-# `sub` field (invariant of the {HType,Mode} params) so the shared
-# `_open_buffered_sub` allocates the right Ref without a hardcoded type.
+# The owned-handle C type backing a buffered handler `T` — read off its `sub`
+# field so the shared `_open_buffered_sub` allocates the right Ref without a
+# hardcoded type.
 _handler_sub_handle(::Type{T}) where {T<:AbstractSubscriberHandler} =
     eltype(fieldtype(T, :sub))
 
 # Drop / undeclare for a buffered handler's owned `sub`, dispatched on the
 # handle's Ref type. Default targets the data-plane subscriber;
-# AdvancedSubscriberHandler's ze_owned_advanced_subscriber_t variants live
-# in advanced_pubsub.jl.
+# AdvancedSubscriberHandler's ze_owned_advanced_subscriber_t variants live in
+# advanced_pubsub.jl.
 _drop_sub_handle(s::Base.RefValue{LibZenohC.z_owned_subscriber_t}) =
     LibZenohC.z_subscriber_drop(_move(s))
 _undeclare_sub_handle(s::Base.RefValue{LibZenohC.z_owned_subscriber_t}) =
     LibZenohC.z_undeclare_subscriber(_move(s))
 
 # Shared buffered-subscriber construction. `declare_fn(sub, closure) -> rtc`
-# picks the C declare entrypoint and supplies any extra options. `T`
-# is the concrete handler type (a UnionAll with two type parameters)
-# to construct on success; its `sub` handle type is derived from `T`.
+# picks the C declare entrypoint (data vs. liveliness vs. advanced) and
+# supplies any extra options. `T` is the concrete handler type to construct;
+# its `sub` handle type is derived from `T`.
 function _open_buffered_sub(declare_fn::F, ::Type{T}, k::Keyexpr,
-        channel::Symbol, capacity::Integer) where {F, T<:AbstractSubscriberHandler}
-    closure = _make_closure_ref(Val(:sample))
-    handler = _new_channel(Val(:sample), Val(channel), closure, capacity)
+        capacity::Integer, channel::Symbol) where {F, T<:AbstractSubscriberHandler}
+    # KEEP_ALL routes to the heap-backed consume-task form (no drop-oldest).
+    channel === :keep_all &&
+        return _open_keepall_sub(declare_fn, _handler_sub_handle(T), k, capacity)
+    ctx, async_cond, closure = _setup_callback(Val(:sample), capacity)
     sub = Ref{_handler_sub_handle(T)}()
-    rtc = declare_fn(sub, closure)
-    _handle_result(rtc)
-    # GC safety net: drop the subscriber if the handler is collected without
-    # an explicit close(). Unlike the callback form there is no ctx/task
-    # here (libzenoh owns the channel), so a plain drop is safe; no-op once
-    # close() has moved the handle out.
-    finalizer(s -> _drop_sub_handle(s), sub)
-    return T{eltype(typeof(handler)), channel}(sub, handler, k)
+    rtc = GC.@preserve ctx declare_fn(sub, closure)
+    if rtc != LibZenohC.Z_OK
+        # declare failed before the closure was installed → its drop cb fires
+        # via z_closure_sample's own ownership machinery. Just clean Julia-side.
+        _teardown_callback(Val(:sample), ctx, async_cond)
+        _handle_result(rtc)
+    end
+    sh = T(sub, ctx, async_cond, k, false)
+    finalizer(_finalize_buffered_sub, sh)
+    return sh
 end
 
-function Base.iterate(sh::AbstractSubscriberHandler{H, M}, ::Any=nothing) where {H, M}
-    owned = Ref{LibZenohC.z_owned_sample_t}()
-    rtc = GC.@preserve sh owned _recv(Val(:sample), Val(M), _loan(sh.h),
-        Base.unsafe_convert(Ptr{LibZenohC.z_owned_sample_t}, owned))
-    rtc == LibZenohC.Z_OK && return (Sample(owned), nothing)
-    rtc == LibZenohC.Z_CHANNEL_DISCONNECTED && return nothing
-    throw(ZenohError(rtc))
+function Base.iterate(sh::AbstractSubscriberHandler, ::Any=nothing)
+    r = _ring_take(sh.ctx, sh.async_cond)
+    r === nothing && return nothing                 # closed and drained
+    return (Sample(r), nothing)
 end
 
-function Base.take!(sh::AbstractSubscriberHandler{H, M}) where {H, M}
-    owned = Ref{LibZenohC.z_owned_sample_t}()
-    rtc = GC.@preserve sh owned _recv(Val(:sample), Val(M), _loan(sh.h),
-        Base.unsafe_convert(Ptr{LibZenohC.z_owned_sample_t}, owned))
-    rtc == LibZenohC.Z_OK && return Sample(owned)
-    throw(ZenohError(rtc))
+function Base.take!(sh::AbstractSubscriberHandler)
+    r = _ring_take(sh.ctx, sh.async_cond)
+    r === nothing && throw(ZenohError(LibZenohC.Z_CHANNEL_DISCONNECTED))
+    return Sample(r)
 end
 
-function tryrecv!(sh::AbstractSubscriberHandler{H, M}) where {H, M}
-    owned = Ref{LibZenohC.z_owned_sample_t}()
-    rtc = _try_recv(Val(:sample), Val(M), _loan(sh.h), owned)
-    rtc == LibZenohC.Z_OK && return Sample(owned)
-    rtc == LibZenohC.Z_CHANNEL_NODATA && return nothing
-    throw(ZenohError(rtc))
+function tryrecv!(sh::AbstractSubscriberHandler)
+    r = _ring_pop!(sh.ctx)
+    r isa Base.RefValue && return Sample(r)
+    return nothing                                  # :empty or :closed
 end
+
+# Samples dropped to ring overflow since declare (advisory).
+dropped_count(sh::AbstractSubscriberHandler) = dropped_count(sh.ctx)
 
 function Base.close(sh::AbstractSubscriberHandler)
-    _handle_result(_undeclare_sub_handle(sh.sub))
+    sh.closed && return
+    sh.closed = true
+    signal_closing!(sh.ctx, sh.async_cond)          # closing=1 + wake any parked pull
+    _handle_result(_undeclare_sub_handle(sh.sub))   # foreign side quiescent after this
+    # ctx teardown deferred to the finalizer: a concurrent iterate on another
+    # task may still be inside _ring_take. After close, closing=1 means it
+    # drains remnants then returns nothing (it never parks again).
+    return nothing
+end
+
+# Finalizer: runs only when nothing references `sh`, so no iterate can be in
+# flight (a parked pull holds `sh`). Spawns the teardown on a normal task so
+# `close(async_cond)` is legal (vs. finalizer task-switch limits) and so the
+# AsyncCondition stays alive across the safety-net undeclare's drop trampoline.
+_finalize_buffered_sub(sh::AbstractSubscriberHandler) =
+    Threads.@spawn _teardown_buffered_sub!(sh)
+
+function _teardown_buffered_sub!(sh::AbstractSubscriberHandler)
+    if !sh.closed
+        sh.closed = true
+        _drop_sub_handle(sh.sub)                    # GC safety net: stop foreign side
+    end
+    _teardown_callback(Val(:sample), sh.ctx, sh.async_cond)
+    return nothing
 end
 
 Base.IteratorSize(::Type{<:AbstractSubscriberHandler}) = Base.SizeUnknown()
 Base.eltype(::Type{<:AbstractSubscriberHandler}) = Sample
+
+# ── KEEP_ALL buffered subscriber ─────────────────────────────────────
+#
+# History KEEP_ALL: no drop-oldest. A consume task drains the bounded ring
+# (slot-free) into an unbounded, heap-backed `Channel{Sample}`. The task's
+# pop+`put!` far outpaces zenoh delivery, so the ring stays near-empty (it
+# never blocks the IO thread and effectively never drops); the backlog
+# accumulates on the Julia heap, bounded only by memory — which is exactly
+# ROS2 KEEP_ALL's "keep all up to resource limits" (OOM, not deadlock, under
+# sustained overload). Generic over the subscriber handle type `H` (data /
+# advanced / liveliness) so one type serves all three.
+#
+# NB: this reimplements lossless buffering in Julia because libzenohc's FIFO
+# handler exposes no push notification to drive a slot-free drain. A future
+# Rust-side notifying handler would let `:fifo`/KEEP_ALL ride zenoh's own
+# buffering+backpressure with just a wakeup bridge — see DESIGN notes.
+mutable struct KeepAllSubscriber{H}
+    sub::Base.RefValue{H}
+    ctx::CallbackCtx{LibZenohC.z_owned_sample_t}
+    async_cond::Base.AsyncCondition
+    ch::Channel{Sample}
+    task::Task
+    keyexpr::Keyexpr     # GC pin
+    closed::Bool
+end
+
+# Drain the ring into `ch` until the subscriber is closed (drop trampoline sets
+# closing → `_ring_pop!` returns :closed). Owns the ctx lifetime: keeps it
+# alive while the foreign side may push, tears it down only after the closure
+# is dropped. Abandonment is safe — the finalizer drops the sub handle, which
+# fires the trampoline → :closed → we drain remnants, close `ch`, free the ctx.
+function _drain_samples(ctx::CallbackCtx{LibZenohC.z_owned_sample_t},
+        async_cond::Base.AsyncCondition, ch::Channel{Sample})
+    completed = false
+    try
+        while !completed
+            try
+                wait(async_cond)
+            catch
+                break
+            end
+            while true
+                r = _ring_pop!(ctx)
+                if r isa Base.RefValue
+                    try
+                        put!(ch, Sample(r))     # unbounded → never blocks; throws iff ch closed
+                    catch
+                        # ch closed by abandonment: discard, keep draining to :closed.
+                    end
+                elseif r === :closed
+                    completed = true
+                    break
+                else                            # :empty
+                    break
+                end
+            end
+        end
+    finally
+        isopen(ch) && close(ch)
+        _teardown_callback(Val(:sample), ctx, async_cond; close_async=false)
+    end
+    return nothing
+end
+
+# Handoff-ring floor for KEEP_ALL. The user's `capacity` bounds nothing here
+# (the heap Channel is unbounded), but the fixed foreign→Julia handoff ring
+# must absorb a delivery burst before the consume task drains it, or it would
+# drop. Size it generously; loss is still possible (and counted) only if a
+# burst exceeds this before the task runs — strict no-loss awaits a Rust-side
+# notifying FIFO handler.
+const _KEEPALL_HANDOFF = 8192
+
+function _open_keepall_sub(declare_fn::F, ::Type{H}, k::Keyexpr,
+        capacity::Integer) where {F, H}
+    ctx, async_cond, closure =
+        _setup_callback(Val(:sample), max(capacity, _KEEPALL_HANDOFF))
+    sub = Ref{H}()
+    rtc = GC.@preserve ctx declare_fn(sub, closure)
+    if rtc != LibZenohC.Z_OK
+        _teardown_callback(Val(:sample), ctx, async_cond)
+        _handle_result(rtc)
+    end
+    ch = Channel{Sample}(typemax(Int))          # unbounded (heap-backed)
+    task = Threads.@spawn _drain_samples(ctx, async_cond, ch)
+    sh = KeepAllSubscriber{H}(sub, ctx, async_cond, ch, task, k, false)
+    finalizer(_finalize_keepall_sub, sh)
+    return sh
+end
+
+Base.iterate(sh::KeepAllSubscriber, st=nothing) = iterate(sh.ch, st)
+Base.take!(sh::KeepAllSubscriber) = take!(sh.ch)
+tryrecv!(sh::KeepAllSubscriber) = isready(sh.ch) ? take!(sh.ch) : nothing
+# KEEP_ALL never drops at the ring (the task keeps it drained); kept for a
+# uniform handler API.
+dropped_count(sh::KeepAllSubscriber) = dropped_count(sh.ctx)
+Base.IteratorSize(::Type{<:KeepAllSubscriber}) = Base.SizeUnknown()
+Base.eltype(::Type{<:KeepAllSubscriber}) = Sample
+
+function Base.close(sh::KeepAllSubscriber)
+    sh.closed && return
+    sh.closed = true
+    signal_closing!(sh.ctx, sh.async_cond)
+    _handle_result(_undeclare_sub_handle(sh.sub))
+    # The consume task observes :closed, drains remnants into ch, closes ch,
+    # and tears down the ctx. Iteration ends when ch drains.
+    return nothing
+end
+
+_finalize_keepall_sub(sh::KeepAllSubscriber) =
+    sh.closed || Threads.@spawn _abandon_keepall_sub!(sh)
+
+function _abandon_keepall_sub!(sh::KeepAllSubscriber)
+    sh.closed && return
+    sh.closed = true
+    _drop_sub_handle(sh.sub)        # stop foreign side → trampoline → task sees :closed → teardown
+    return nothing
+end
 
 # ── Channel-handler get / reply consumer ─────────────────────────────
 
@@ -158,39 +306,82 @@ Base.eltype(::Type{<:AbstractSubscriberHandler}) = Sample
     GetHandler
 
 Reply consumer returned by `Zenoh.get(s, k, params; ...)`. Iterate or use
-`take!`/`tryrecv!` to consume `Reply`s. Iteration terminates once the
-remote side stops sending — no explicit close needed.
+`take!`/`tryrecv!` to consume `Reply`s. Iteration terminates once the remote
+side stops sending (all peers replied or the timeout elapsed) — no explicit
+close needed.
+
+Replies are delivered by the callback ring (slot-free), drained on an internal
+task into a `Channel`; that task also owns teardown once the get completes.
 """
-struct GetHandler{HType, Mode}
-    h::Base.RefValue{HType}
+mutable struct GetHandler
+    ch::Channel{Reply}
+    task::Task
 end
 
-function Base.iterate(gh::GetHandler{H, M}, ::Any=nothing) where {H, M}
-    owned = Ref{LibZenohC.z_owned_reply_t}()
-    rtc = GC.@preserve gh owned _recv(Val(:reply), Val(M), _loan(gh.h),
-        Base.unsafe_convert(Ptr{LibZenohC.z_owned_reply_t}, owned))
-    rtc == LibZenohC.Z_OK && return (Reply(owned), nothing)
-    rtc == LibZenohC.Z_CHANNEL_DISCONNECTED && return nothing
-    throw(ZenohError(rtc))
+# Consume task for the channel get: drain the ring into `ch` until the get
+# completes (drop trampoline sets closing → `_ring_pop!` returns :closed). The
+# task owns the ctx lifetime — it keeps it alive while libzenohc may still push
+# replies, and tears it down only after the closure has been dropped, which is
+# why an abandoned get (Channel closed by the finalizer) is still safe: we keep
+# draining/discarding until :closed before freeing the ctx.
+function _drain_replies(ctx::CallbackCtx{LibZenohC.z_owned_reply_t},
+        async_cond::Base.AsyncCondition, ch::Channel{Reply})
+    completed = false
+    try
+        while !completed
+            try
+                wait(async_cond)
+            catch
+                break                               # async_cond closed (unexpected pre-completion)
+            end
+            while true
+                r = _ring_pop!(ctx)
+                if r isa Base.RefValue
+                    rep = Reply(r)
+                    try
+                        put!(ch, rep)               # blocks if full; throws if ch closed (abandoned)
+                    catch
+                        # ch closed by abandonment: discard `rep`, keep draining to :closed.
+                    end
+                elseif r === :closed
+                    completed = true
+                    break
+                else                                # :empty
+                    break
+                end
+            end
+        end
+    finally
+        isopen(ch) && close(ch)
+        # `close_async=false`: the GetHandler/Channel keep no live waiter on the
+        # AsyncCondition once `ch` is closed, and the task may be torn down via
+        # the finalizer; let the AsyncCondition's own finalizer close the handle.
+        _teardown_callback(Val(:reply), ctx, async_cond; close_async=false)
+    end
+    return nothing
 end
 
-function Base.take!(gh::GetHandler{H, M}) where {H, M}
-    owned = Ref{LibZenohC.z_owned_reply_t}()
-    rtc = GC.@preserve gh owned _recv(Val(:reply), Val(M), _loan(gh.h),
-        Base.unsafe_convert(Ptr{LibZenohC.z_owned_reply_t}, owned))
-    rtc == LibZenohC.Z_OK && return Reply(owned)
-    throw(ZenohError(rtc))
+# Shared channel-get construction. `call_fn(closure) -> rtc` performs the C
+# entrypoint (`z_get` / `z_querier_get` / `z_liveliness_get`) that consumes the
+# reply closure. Mirrors `_open_buffered_sub` for the get side.
+function _open_buffered_get(call_fn::F, capacity::Integer) where F
+    ctx, async_cond, closure = _setup_callback(Val(:reply), capacity)
+    rtc = call_fn(closure)
+    if rtc != LibZenohC.Z_OK
+        _teardown_callback(Val(:reply), ctx, async_cond)
+        _handle_result(rtc)
+    end
+    ch = Channel{Reply}(capacity)
+    task = Threads.@spawn _drain_replies(ctx, async_cond, ch)
+    gh = GetHandler(ch, task)
+    finalizer(g -> (isopen(g.ch) && close(g.ch)), gh)
+    return gh
 end
 
-function tryrecv!(gh::GetHandler{H, M}) where {H, M}
-    owned = Ref{LibZenohC.z_owned_reply_t}()
-    rtc = _try_recv(Val(:reply), Val(M), _loan(gh.h), owned)
-    rtc == LibZenohC.Z_OK && return Reply(owned)
-    rtc == LibZenohC.Z_CHANNEL_NODATA && return nothing
-    throw(ZenohError(rtc))
-end
-
-Base.close(::GetHandler) = nothing  # finalizer cleans up; no-op for symmetry
+Base.iterate(gh::GetHandler, st=nothing) = iterate(gh.ch, st)
+Base.take!(gh::GetHandler) = take!(gh.ch)
+tryrecv!(gh::GetHandler) = isready(gh.ch) ? take!(gh.ch) : nothing
+Base.close(::GetHandler) = nothing  # task self-tears-down on completion; finalizer covers abandonment
 
 Base.IteratorSize(::Type{<:GetHandler}) = Base.SizeUnknown()
 Base.eltype(::Type{<:GetHandler}) = Reply
@@ -208,11 +399,11 @@ _consolidation(::Val{:monotonic}) = LibZenohC.z_query_consolidation_monotonic()
 _consolidation(::Val{:latest})    = LibZenohC.z_query_consolidation_latest()
 _consolidation(s::Symbol) = _consolidation(Val(s))
 
-# Coerce a `target=` / `consolidation=` argument to its raw libzenoh
-# value. Accepts the typed singletons (`QueryTargets.ALL`) — the
-# canonical, dispatch-checked form, consistent with the QoS enums — or a
-# `Symbol` shorthand (`:all`), mirroring how `_as_encoding` accepts both
-# an `Encoding` and a bare string.
+# Coerce a `target=` / `consolidation=` argument to its raw libzenoh value.
+# Accepts the typed singletons (`QueryTargets.ALL`) — the canonical,
+# dispatch-checked form, consistent with the QoS enums — or a `Symbol`
+# shorthand (`:all`), mirroring how `_as_encoding` accepts both an `Encoding`
+# and a bare string.
 _as_query_target(t::QueryTarget) = _raw(t)
 _as_query_target(s::Symbol)      = _query_target(s)
 
@@ -220,8 +411,8 @@ _as_consolidation(c::QueryConsolidation) = _raw(c)
 _as_consolidation(s::Symbol)             = _consolidation(s)
 
 # Populate a Ref{z_get_options_t} from the shared `get` kwargs. Returns
-# `(opts, payload_bytes, attach_bytes, enc_ref)`; callers GC.@preserve
-# the three trailing values across the z_get call.
+# `(opts, payload_bytes, attach_bytes, enc_ref)`; callers GC.@preserve the
+# three trailing values across the z_get call.
 function _make_get_opts(;
         target::Union{Nothing, QueryTarget, Symbol} = nothing,
         consolidation::Union{Nothing, QueryConsolidation, Symbol} = nothing,
@@ -264,7 +455,8 @@ Issue a query on key expression `k`, returning a `GetHandler` over the
 replies. Iterate it to consume each `Reply`.
 
 Keyword arguments:
-- `channel`            — `:fifo` (default) or `:ring`
+- `channel`            — accepted for compatibility; delivery is the callback
+                         ring either way (drop-oldest on overflow)
 - `capacity`           — channel buffer size (default 16)
 - `target`             — `QueryTargets.BEST_MATCHING` / `ALL` / `ALL_COMPLETE`
                          (or the `:best_matching` / `:all` / `:all_complete` shorthand)
@@ -285,20 +477,15 @@ function Base.get(s::Session, k::Keyexpr, parameters::AbstractString="";
         capacity::Integer = 16,
         kwargs...)
     opts, payload_bytes, attach_bytes, enc_ref = _make_get_opts(; kwargs...)
-
-    closure = _make_closure_ref(Val(:reply))
-    handler = _new_channel(Val(:reply), Val(channel), closure, capacity)
-
     params = String(parameters)
-    GC.@preserve payload_bytes attach_bytes enc_ref params opts begin
-        rtc = LibZenohC.z_get(_loan(s), _loan(k),
-            pointer(Base.unsafe_convert(Cstring, params)),
-            _move(closure), opts)
-        _handle_result(rtc)
+    _open_buffered_get(capacity) do closure
+        GC.@preserve payload_bytes attach_bytes enc_ref params opts begin
+            LibZenohC.z_get(_loan(s), _loan(k),
+                pointer(Base.unsafe_convert(Cstring, params)),
+                _move(closure), opts)
+        end
     end
-
-    return GetHandler{eltype(typeof(handler)), channel}(handler)
 end
 
-export Reply, SubscriberHandler, GetHandler, tryrecv!,
+export Reply, SubscriberHandler, KeepAllSubscriber, GetHandler, tryrecv!,
     is_ok, sample, error_payload, error_encoding

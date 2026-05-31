@@ -211,9 +211,9 @@ macro closure_kind(tag_expr, args...)
 
             function _teardown_callback(::$val_t,
                     ctx::CallbackCtx{LibZenohC.$owned_t},
-                    async_cond::Base.AsyncCondition)
+                    async_cond::Base.AsyncCondition; close_async::Bool=true)
                 destroy_ctx!(ctx, async_cond,
-                    $item_drop_fp[], LibZenohC.$moved_t)
+                    $item_drop_fp[], LibZenohC.$moved_t; close_async)
             end
 
             $channel_block
@@ -250,8 +250,8 @@ macro closure_kind(tag_expr, args...)
 
             function _teardown_callback(::$val_t,
                     ctx::CallbackCtx{LibZenohC.$item_t},
-                    async_cond::Base.AsyncCondition)
-                destroy_ctx_pod!(ctx, async_cond)
+                    async_cond::Base.AsyncCondition; close_async::Bool=true)
+                destroy_ctx_pod!(ctx, async_cond; close_async)
             end
         end)
     else
@@ -267,10 +267,10 @@ end
 # declare/get entrypoint, samples / replies / queries / … start landing
 # in the ctx's inline cell. Tear down with `_teardown_callback(kind, …)`.
 
-function _setup_callback(kind::Val)
+function _setup_callback(kind::Val, capacity::Integer=1)
     ctx        = _make_callback_ctx(kind)
     async_cond = Base.AsyncCondition()
-    init_ctx!(ctx, async_cond)
+    init_ctx!(ctx, async_cond, capacity)
     closure    = _make_closure_ref(kind)
     _install_closure!(kind, closure, ctx)
     return ctx, async_cond, closure

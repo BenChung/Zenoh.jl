@@ -112,16 +112,19 @@ end
 Buffered form. Iterate / `take!` / `tryrecv!` to consume token samples.
 See [`SubscriberHandler`](@ref) for queue semantics.
 """
-struct LivelinessSubscriberHandler{HType, Mode} <: AbstractSubscriberHandler{HType, Mode}
+mutable struct LivelinessSubscriberHandler <: AbstractSubscriberHandler
     sub::Base.RefValue{LibZenohC.z_owned_subscriber_t}
-    h::Base.RefValue{HType}
+    ctx::CallbackCtx{LibZenohC.z_owned_sample_t}
+    async_cond::Base.AsyncCondition
     keyexpr::Keyexpr
+    closed::Bool
 end
 
 function LivelinessSubscriberHandler(s::Session, k::Keyexpr;
         channel::Symbol=:fifo, capacity::Integer=16, history::Bool=false)
     opts = _liveliness_sub_opts(history)
-    _open_buffered_sub(LivelinessSubscriberHandler, k, channel, capacity) do sub, closure
+    # `:fifo`/`:ring` → drop-oldest ring (KEEP_LAST); `:keep_all` → heap-backed.
+    _open_buffered_sub(LivelinessSubscriberHandler, k, capacity, channel) do sub, closure
         GC.@preserve opts LibZenohC.z_liveliness_declare_subscriber(
             _loan(s), sub, _loan(k), _move(closure), opts)
     end
@@ -152,12 +155,11 @@ the token's keyexpr.
 function liveliness_get(s::Session, k::Keyexpr;
         channel::Symbol=:fifo, capacity::Integer=16, timeout_ms::Integer=0)
     opts = _liveliness_get_opts(timeout_ms)
-    closure = _make_closure_ref(Val(:reply))
-    handler = _new_channel(Val(:reply), Val(channel), closure, capacity)
-    rtc = GC.@preserve opts LibZenohC.z_liveliness_get(
-        _loan(s), _loan(k), _move(closure), opts)
-    _handle_result(rtc)
-    return GetHandler{eltype(typeof(handler)), channel}(handler)
+    # `channel` accepted for source compat; the ring delivers both alike.
+    _open_buffered_get(capacity) do closure
+        GC.@preserve opts LibZenohC.z_liveliness_get(
+            _loan(s), _loan(k), _move(closure), opts)
+    end
 end
 
 """

@@ -156,20 +156,17 @@ function Base.get(q::Querier, parameters::AbstractString="";
     opts, payload_bytes, attach_bytes, enc_ref =
         _make_querier_get_opts(; payload, encoding, attachment)
 
-    closure = _make_closure_ref(Val(:reply))
-    handler = _new_channel(Val(:reply), Val(channel), closure, capacity)
-
     # _substr takes (ptr, len) rather than a null-terminated string, so a
     # `SubString` view threads through without an intermediate copy.
     params = parameters isa Union{String, SubString{String}} ? parameters : String(parameters)
-    GC.@preserve payload_bytes attach_bytes enc_ref params opts begin
-        rtc = LibZenohC.z_querier_get_with_parameters_substr(_loan(q),
-            Ptr{Cchar}(pointer(params)), ncodeunits(params),
-            _move(closure), opts)
-        _handle_result(rtc)
+    # `channel` accepted for source compat; the ring delivers both alike.
+    _open_buffered_get(capacity) do closure
+        GC.@preserve payload_bytes attach_bytes enc_ref params opts begin
+            LibZenohC.z_querier_get_with_parameters_substr(_loan(q),
+                Ptr{Cchar}(pointer(params)), ncodeunits(params),
+                _move(closure), opts)
+        end
     end
-
-    return GetHandler{eltype(typeof(handler)), channel}(handler)
 end
 
 """
