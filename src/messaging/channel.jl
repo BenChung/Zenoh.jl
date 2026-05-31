@@ -85,6 +85,12 @@ capacity-`N` ring on libzenohc's I/O thread and are pulled here on the
 consuming task. When the consumer falls behind, the oldest buffered sample is
 dropped (`dropped_count(sub)` counts evictions). Other Julia tasks — including
 `close(sub)` from a sibling task — run concurrently while iteration waits.
+
+!!! note "Iteration lifetime"
+    `for s in sub` reuses one buffer per loop for zero per-sample allocation, so
+    a yielded `Sample` is valid **only until the next iteration** — don't stash
+    it across iterations or `collect` it. Use `take!` (or a `:keep_all`
+    subscriber) when you need to hold a sample beyond the current step.
 """
 mutable struct SubscriberHandler <: AbstractSubscriberHandler
     sub::Base.RefValue{LibZenohC.z_owned_subscriber_t}
@@ -132,10 +138,22 @@ function _open_buffered_sub(declare_fn::F, ::Type{T}, k::Keyexpr,
     return sh
 end
 
-function Base.iterate(sh::AbstractSubscriberHandler, ::Any=nothing)
-    r = _ring_take(sh.ctx, sh.async_cond)
-    r === nothing && return nothing                 # closed and drained
-    return (Sample(r), nothing)
+# Iteration reuses a single owned box (the iterate state), refilled in place
+# each step — no per-item Ref and no per-item finalizer. The box carries one
+# finalizer purely as a break-safety net (per loop, not per item); each step
+# drops the previous occupant first, so the drop is also prompt. Consequently a
+# sample yielded by `for s in sub` is valid only until the next iteration — do
+# not stash it across iterations or `collect` it (use `take!`, or `:keep_all`,
+# for owned samples). Mirrors the channel `Queryable` query contract.
+function Base.iterate(sh::AbstractSubscriberHandler, box=nothing)
+    if box === nothing
+        box = Ref{LibZenohC.z_owned_sample_t}()
+        finalizer(b -> LibZenohC.z_sample_drop(_move(b)), box)
+    else
+        LibZenohC.z_sample_drop(_move(box))         # drop previous occupant promptly
+    end
+    _ring_take_into!(box, sh.ctx, sh.async_cond) || return nothing
+    return (_borrow_sample(box), box)
 end
 
 function Base.take!(sh::AbstractSubscriberHandler)

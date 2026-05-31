@@ -16,6 +16,12 @@ function Sample(r::Base.RefValue{LibZenohC.z_owned_sample_t})
     return Sample{Base.RefValue{LibZenohC.z_owned_sample_t}}(r, nothing)
 end
 
+# Non-finalized owned Sample borrowing a caller-managed box. The box's lifetime
+# (and the `z_sample_drop`) is owned elsewhere — the iterate reusable box — so
+# this carries no finalizer. Valid only while the box holds this occupant.
+@inline _borrow_sample(box::Base.RefValue{LibZenohC.z_owned_sample_t}) =
+    Sample{Base.RefValue{LibZenohC.z_owned_sample_t}}(box, nothing)
+
 _loaned_sample(s::Sample{Ptr{LibZenohC.z_loaned_sample_t}}) = s.s
 _loaned_sample(s::Sample{Base.RefValue{LibZenohC.z_owned_sample_t}}) = _loan(s.s)
 

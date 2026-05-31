@@ -54,6 +54,30 @@ end
     end
 end
 
+@timed_testset "Ring iterate: reused box, in-order, break-safe" begin
+    s = S1
+    k = Zenoh.Keyexpr("test/ring/iterbox")
+    sub = open(s, k; channel=:fifo, capacity=64)
+    pub = Zenoh.Publisher(s, k)
+    sleep(0.3)
+    try
+        N = 20
+        for n in 1:N
+            Zenoh.put(pub, string(n))
+        end
+        sleep(0.4)
+        got = String[]
+        for smp in sub                    # reused box: read payload inside the body (valid here)
+            push!(got, String(Zenoh.payload(smp)))
+            length(got) == N && break     # break leaves the loop → box finalizer drops the last occupant
+        end
+        @test got == string.(1:N)         # in order, no aliasing/corruption from reuse
+    finally
+        close(sub)
+        close(pub)
+    end
+end
+
 @timed_testset "KEEP_ALL: lossless under burst (heap-backed)" begin
     s = S1
     k = Zenoh.Keyexpr("test/ring/keepall")

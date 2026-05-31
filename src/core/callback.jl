@@ -245,6 +245,33 @@ function _ring_take(ctx::CallbackCtx{Item}, async_cond::Base.AsyncCondition) whe
     end
 end
 
+# Like `_ring_take`, but pops the next item INTO `box` in place — no per-item
+# allocation. Returns `true` once `box[]` holds a freshly dequeued item, or
+# `false` on disconnect. Used by the iterate path's reusable-box optimization
+# (the caller drops `box`'s previous occupant before each call).
+function _ring_take_into!(box::Base.RefValue{Item}, ctx::CallbackCtx{Item},
+        async_cond::Base.AsyncCondition) where {Item}
+    cp = ctx_p(ctx)
+    while true
+        ccall(:uv_mutex_lock, Cvoid, (Ptr{Cvoid},), cp)
+        if ctx.count > 0
+            box[] = ctx.buf[ctx.head + 1]   # copy owned bits into the box; slot now stale
+            ctx.head  = (ctx.head + one(ctx.head)) % ctx.cap
+            ctx.count -= one(ctx.count)
+            ccall(:uv_mutex_unlock, Cvoid, (Ptr{Cvoid},), cp)
+            return true
+        end
+        closed = ctx.closing != 0
+        ccall(:uv_mutex_unlock, Cvoid, (Ptr{Cvoid},), cp)
+        closed && return false
+        try
+            wait(async_cond)
+        catch
+            return false                    # async_cond closed
+        end
+    end
+end
+
 # Consumer loop (push form). Drains the ring fully on each wake — uv_async_send
 # coalesces, so a single wake may cover several pushes; re-checking `count`
 # under the lock before parking keeps FIFO order instead of degrading to
