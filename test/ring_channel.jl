@@ -54,6 +54,39 @@ end
     end
 end
 
+@timed_testset "recv!: zero-allocation receive into a reused holder" begin
+    s = S1
+    k = Zenoh.Keyexpr("test/ring/recvbang")
+    sub = open(s, k; channel=:fifo, capacity=256)
+    pub = Zenoh.Publisher(s, k)
+    sleep(0.3)
+    h = Zenoh.SampleHolder()
+    # Drain exactly `n` buffered samples, touching only a non-allocating
+    # accessor (express → Bool). No String/payload copy in the measured region.
+    function drain!(sub, h, n)
+        c = 0
+        for _ in 1:n
+            r = Zenoh.recv!(sub, h)
+            r === nothing && break
+            c += Zenoh.express(r) ? 1 : 0
+        end
+        c
+    end
+    try
+        for _ in 1:8; Zenoh.put(pub, "w"); end          # warm up + force compilation
+        sleep(0.3); drain!(sub, h, 8)
+        N = 100
+        for _ in 1:N; Zenoh.put(pub, "x"); end
+        sleep(0.5)                                       # all N buffered (capacity 256)
+        GC.gc()
+        a = @allocated drain!(sub, h, N)
+        @info "recv! steady-state allocations" total_bytes=a per_sample=a/N
+        @test a == 0                                     # zero-allocation receive
+    finally
+        close(sub); close(pub)
+    end
+end
+
 @timed_testset "Ring iterate: reused box, in-order, break-safe" begin
     s = S1
     k = Zenoh.Keyexpr("test/ring/iterbox")

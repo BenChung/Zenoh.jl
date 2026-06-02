@@ -245,6 +245,22 @@ function _ring_take(ctx::CallbackCtx{Item}, async_cond::Base.AsyncCondition) whe
     end
 end
 
+# Non-blocking in-place pop: fills `box[]` and returns `true` if an item was
+# queued, else `false` (caller drops `box`'s previous occupant first).
+@inline function _ring_pop_into!(box::Base.RefValue{Item}, ctx::CallbackCtx{Item}) where {Item}
+    cp = ctx_p(ctx)
+    ccall(:uv_mutex_lock, Cvoid, (Ptr{Cvoid},), cp)
+    if ctx.count > 0
+        box[] = ctx.buf[ctx.head + 1]
+        ctx.head  = (ctx.head + one(ctx.head)) % ctx.cap
+        ctx.count -= one(ctx.count)
+        ccall(:uv_mutex_unlock, Cvoid, (Ptr{Cvoid},), cp)
+        return true
+    end
+    ccall(:uv_mutex_unlock, Cvoid, (Ptr{Cvoid},), cp)
+    return false
+end
+
 # Like `_ring_take`, but pops the next item INTO `box` in place — no per-item
 # allocation. Returns `true` once `box[]` holds a freshly dequeued item, or
 # `false` on disconnect. Used by the iterate path's reusable-box optimization

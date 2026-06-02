@@ -355,7 +355,7 @@ borrow(s::Sample, ::Type{T}=UInt8; writable::Bool=false) where {T} =
 
 """
     with_memory(f, z::ZBytes, T=UInt8; writable=false)
-    with_memory(f, s::Sample, T=UInt8; writable=false)
+    with_memory(f, s::AbstractSample, T=UInt8; writable=false)
 
 Call `f(b::Borrowed{T})` with a scope-validated view of the payload, then close
 the borrow — so a `Borrowed` (or pointer) that escapes `f` is invalidated and any
@@ -373,7 +373,7 @@ function with_memory(f, z::ZBytes, ::Type{T}=UInt8; writable::Bool=false) where 
         close(b)
     end
 end
-with_memory(f, s::Sample, ::Type{T}=UInt8; writable::Bool=false) where {T} =
+with_memory(f, s::AbstractSample, ::Type{T}=UInt8; writable::Bool=false) where {T} =
     with_memory(f, payload(s), T; writable=writable)
 
 # --- unsafe (uninstrumented) views -----------------------------------

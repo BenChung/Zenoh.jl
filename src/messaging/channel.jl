@@ -139,12 +139,13 @@ function _open_buffered_sub(declare_fn::F, ::Type{T}, k::Keyexpr,
 end
 
 # Iteration reuses a single owned box (the iterate state), refilled in place
-# each step — no per-item Ref and no per-item finalizer. The box carries one
-# finalizer purely as a break-safety net (per loop, not per item); each step
-# drops the previous occupant first, so the drop is also prompt. Consequently a
-# sample yielded by `for s in sub` is valid only until the next iteration — do
-# not stash it across iterations or `collect` it (use `take!`, or `:keep_all`,
-# for owned samples). Mirrors the channel `Queryable` query contract.
+# each step — no per-item finalizer (the box carries one finalizer as a
+# break-safety net, per loop not per item; each step drops the previous
+# occupant first, so the drop is also prompt). It yields a concrete `Sample`
+# borrowing that box, so `::Sample` call sites keep working. The yielded sample
+# is valid only until the next iteration — don't stash it or `collect` it (use
+# `take!`, or `:keep_all`, for owned samples; `recv!` for a zero-alloc loop).
+# Mirrors the channel `Queryable` query contract.
 function Base.iterate(sh::AbstractSubscriberHandler, box=nothing)
     if box === nothing
         box = Ref{LibZenohC.z_owned_sample_t}()
@@ -166,6 +167,34 @@ function tryrecv!(sh::AbstractSubscriberHandler)
     r = _ring_pop!(sh.ctx)
     r isa Base.RefValue && return Sample(r)
     return nothing                                  # :empty or :closed
+end
+
+"""
+    recv!(sub, holder::SampleHolder) -> holder | nothing
+
+Zero-allocation receive: block for the next sample and fill `holder` in place
+(dropping its previous occupant), returning `holder`, or `nothing` once the
+subscriber is closed and drained. Reuse one `holder` across calls for an
+allocation-free receive loop:
+
+    h = SampleHolder()
+    while (s = recv!(sub, h)) !== nothing
+        # process s now — it (and its payload/keyexpr/…) is valid only until the
+        # next recv!; don't stash it
+    end
+"""
+function recv!(sh::AbstractSubscriberHandler, h::SampleHolder)
+    _drop_current!(h)
+    _ring_take_into!(h.s, sh.ctx, sh.async_cond) || return nothing
+    return h
+end
+
+# Non-blocking in-place variant: fills `holder` and returns it, or `nothing` if
+# nothing is buffered.
+function tryrecv!(sh::AbstractSubscriberHandler, h::SampleHolder)
+    _drop_current!(h)
+    _ring_pop_into!(h.s, sh.ctx) || return nothing
+    return h
 end
 
 # Samples dropped to ring overflow since declare (advisory).
@@ -199,6 +228,7 @@ function _teardown_buffered_sub!(sh::AbstractSubscriberHandler)
 end
 
 Base.IteratorSize(::Type{<:AbstractSubscriberHandler}) = Base.SizeUnknown()
+# Both `for s in sub` and `take!` yield a `Sample`; `recv!` fills a `SampleHolder`.
 Base.eltype(::Type{<:AbstractSubscriberHandler}) = Sample
 
 # ── KEEP_ALL buffered subscriber ─────────────────────────────────────
@@ -505,5 +535,5 @@ function Base.get(s::Session, k::Keyexpr, parameters::AbstractString="";
     end
 end
 
-export Reply, SubscriberHandler, KeepAllSubscriber, GetHandler, tryrecv!,
+export Reply, SubscriberHandler, KeepAllSubscriber, GetHandler, tryrecv!, recv!,
     is_ok, sample, error_payload, error_encoding
