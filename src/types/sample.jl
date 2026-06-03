@@ -90,6 +90,29 @@ function keyexpr(s::AbstractSample)
     end
 end
 
+"""
+    keyexpr_view(f, s::AbstractSample)
+
+Call `f(ptr::Ptr{UInt8}, len::Int)` with a zero-copy view of the sample's
+keyexpr bytes for the duration of `f`, **without** allocating the `String` that
+[`keyexpr`](@ref) copies out. `s` (and thus the borrowed keyexpr) is kept alive
+across `f` via `GC.@preserve`; the pointer is valid only within `f`. For decode
+hot paths that hash/compare the keyexpr bytes and only materialize a `String` on
+a cold miss.
+"""
+@inline function keyexpr_view(f, s::AbstractSample)
+    GC.@preserve s begin
+        ke = LibZenohC.z_sample_keyexpr(_loaned_sample(s))
+        view = Ref{LibZenohC.z_view_string_t}()
+        LibZenohC.z_keyexpr_as_view_string(ke, view)
+        GC.@preserve view begin
+            loaned = LibZenohC.z_view_string_loan(view)
+            return f(Ptr{UInt8}(LibZenohC.z_string_data(loaned)),
+                     Int(LibZenohC.z_string_len(loaned)))
+        end
+    end
+end
+
 function attachment(s::AbstractSample)
     a = LibZenohC.z_sample_attachment(_loaned_sample(s))
     if a == C_NULL
@@ -108,5 +131,5 @@ function encoding(s::AbstractSample)
     return _from_loaned_encoding(LibZenohC.z_sample_encoding(_loaned_sample(s)))
 end
 
-export Sample, SampleHolder, payload, keyexpr, encoding, attachment, timestamp, kind,
+export Sample, SampleHolder, payload, keyexpr, keyexpr_view, encoding, attachment, timestamp, kind,
     priority, congestion_control, express, reliability

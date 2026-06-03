@@ -1946,6 +1946,34 @@ try
         # Round-trip a Memory through ZBytes and back unchanged (bytewise).
         rt = Zenoh.as_memory(Zenoh.ZBytes(Zenoh.as_memory(zb)), Float64)
         @test collect(rt) == vals
+
+        # with_payload_memory: hands `f` an *isbits* PayloadView (a (ptr,len) view,
+        # no `unsafe_wrap` Memory header) over the payload bytes — every tier.
+        @test isbitstype(Zenoh.PayloadView)
+        bytes = collect(reinterpret(UInt8, vals))       # the 32 payload bytes
+        pv_sum = with_payload_memory(zb) do pv
+            @test pv isa Zenoh.PayloadView
+            @test length(pv) == 32
+            @test collect(pv) == bytes
+            sum(UInt64(b) for b in pv)
+        end
+        @test pv_sum == sum(UInt64.(bytes))
+
+        # with_payload_memory_checked: the same zero-copy view, but escape-guarded —
+        # in-frame use is fine; a view smuggled past the block is invalidated, so
+        # later access throws BorrowError (not a use-after-free).
+        ck_sum = with_payload_memory_checked(zb) do pv
+            @test pv isa Zenoh.GuardedPayloadView
+            @test collect(pv) == bytes
+            sum(UInt64(b) for b in pv)
+        end
+        @test ck_sum == sum(UInt64.(bytes))
+        escaped_pv = with_payload_memory_checked(zb) do pv
+            pv                                            # smuggle it out
+        end
+        @test_throws Zenoh.BorrowError escaped_pv[1]
+        @test_throws Zenoh.BorrowError pointer(escaped_pv)
+        @test_throws Zenoh.BorrowError collect(escaped_pv)
     end
 
     @timed_testset "SHM capability discovery" timeout=20 begin

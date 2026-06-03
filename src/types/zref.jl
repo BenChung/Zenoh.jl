@@ -200,10 +200,15 @@ end
 # NOTE: property access is forwarded, so this type's own fields are reached only
 # via `getfield`/`setfield!` internally, never `b.field`.
 
-struct BorrowError <: Exception end
-Base.showerror(io::IO, ::BorrowError) = print(io,
-    "BorrowError: borrowed payload used outside its valid scope ",
-    "(it must not escape `with_memory`, and must not be used after `close`)")
+struct BorrowError <: Exception
+    msg::String
+end
+BorrowError() = BorrowError("")
+Base.showerror(io::IO, e::BorrowError) = print(io, "BorrowError: ",
+    isempty(e.msg) ?
+        "borrowed payload used outside its valid scope (it must not escape \
+         `with_memory`, and must not be used after `close`)" :
+        e.msg)
 
 mutable struct Borrowed{T}
     ptr::Ptr{T}
@@ -376,6 +381,141 @@ end
 with_memory(f, s::AbstractSample, ::Type{T}=UInt8; writable::Bool=false) where {T} =
     with_memory(f, payload(s), T; writable=writable)
 
+"""
+    PayloadView <: DenseVector{UInt8}
+
+An **isbits** `(ptr, len)` view of a byte buffer as a `DenseVector{UInt8}`, so a
+borrowed payload can back a `CDRReader` / `CDRString` / `CDRView` with **no heap
+allocation** — unlike `unsafe_wrap(Memory{UInt8}, …)`, which heap-allocates a
+`Memory` header per borrow. Because it is isbits, a `CDRString{PayloadView}` (and
+the `CDRView` holding it) is itself isbits and stack-allocates.
+
+Holds **no GC root** of its own: the bytes are kept alive by the enclosing
+[`with_payload_memory`](@ref)'s `GC.@preserve` for the duration of `f` only. Any
+use past `f` (a view that escapes the handler) reads freed memory — the same
+contract as `with_payload_memory`.
+"""
+struct PayloadView <: DenseVector{UInt8}
+    ptr::Ptr{UInt8}
+    len::Int
+end
+@inline Base.size(p::PayloadView) = (getfield(p, :len),)
+@inline Base.length(p::PayloadView) = getfield(p, :len)
+Base.IndexStyle(::Type{PayloadView}) = Base.IndexLinear()
+@inline function Base.getindex(p::PayloadView, i::Int)
+    @boundscheck checkbounds(p, i)
+    return unsafe_load(getfield(p, :ptr), i)
+end
+@inline Base.pointer(p::PayloadView) = getfield(p, :ptr)
+@inline Base.pointer(p::PayloadView, i::Integer) = getfield(p, :ptr) + (Int(i) - 1)
+@inline Base.unsafe_convert(::Type{Ptr{UInt8}}, p::PayloadView) = getfield(p, :ptr)
+@inline Base.elsize(::Type{PayloadView}) = 1
+
+"""
+    with_payload_memory(f, z::ZBytes)
+    with_payload_memory(f, s::AbstractSample)
+
+Call `f(view::PayloadView)` with a zero-copy [`PayloadView`](@ref) of the payload
+bytes for the duration of `f`, with **no allocation** on the contiguous path: no
+`Borrowed`/`_ZRefView` wrappers (unlike [`with_memory`](@ref)) and — since
+`PayloadView` is isbits — no `unsafe_wrap` `Memory` header either. SHM payloads
+and a single contiguous network slice are viewed in place; a fragmented payload
+falls back to an owned `as_memory` copy, still presented as a `PayloadView` (so
+`f` sees one type on every tier). The backing bytes are kept alive across `f` via
+`GC.@preserve`.
+
+Lower-level than `with_memory`: it skips the scope-validated `BorrowError` safety
+net, so it's for internal decode paths that consume the bytes within `f` and
+don't let them escape. Anything escaping `f` reads freed memory.
+"""
+function with_payload_memory(f, z::ZBytes)
+    nb = Int(length(z))
+    nb == 0 && return f(PayloadView(Ptr{UInt8}(C_NULL), 0))
+    # Tier 1 — SHM segment (view its data directly).
+    shm = as_shm(z)
+    if shm !== nothing && length(shm) >= nb
+        return GC.@preserve z shm f(PayloadView(Ptr{UInt8}(pointer(shm)), nb))
+    end
+    # Tier 2 — single contiguous network slice (UInt8 ⇒ always aligned). No
+    # `Borrowed`/`_ZRefView` and no `Memory` header: just the view handle (a Ref the
+    # compiler stack-elides since it doesn't escape) + an isbits `PayloadView`.
+    view = Ref{LibZenohC.z_view_slice_t}()
+    if LibZenohC.z_bytes_get_contiguous_view(_loaned_bytes(z), view) == LibZenohC.Z_OK
+        GC.@preserve z view begin
+            sl = LibZenohC.z_view_slice_loan(view)
+            if LibZenohC.z_slice_len(sl) >= nb
+                return f(PayloadView(Ptr{UInt8}(LibZenohC.z_slice_data(sl)), nb))
+            end
+        end
+    end
+    # Tier 3 — fragmented/misaligned: owned copy, viewed in place (kept alive
+    # across `f` by `GC.@preserve`, so `f` still gets a `PayloadView`).
+    mem = as_memory(z, UInt8)
+    return GC.@preserve mem f(PayloadView(Ptr{UInt8}(pointer(mem)), nb))
+end
+with_payload_memory(f, s::AbstractSample) =
+    GC.@preserve s with_payload_memory(f, payload(s))
+
+"""
+    GuardedPayloadView <: DenseVector{UInt8}
+
+Like [`PayloadView`](@ref) but carrying a shared validity flag: once the
+enclosing [`with_payload_memory_checked`](@ref) call returns, the flag is cleared
+and **every subsequent access throws [`BorrowError`](@ref)**. This turns the
+fast-path's silent use-after-free (a `CDRView`/`CDRString` that escaped the
+handler) into a loud, debuggable error — over the *same* representation the
+zero-copy path ships, so it validates the exact code you'll run unchecked.
+
+Not isbits (it holds the flag `Ref`), so it allocates — it's the validation tier,
+not the production tier.
+"""
+struct GuardedPayloadView <: DenseVector{UInt8}
+    ptr::Ptr{UInt8}
+    len::Int
+    valid::Base.RefValue{Bool}
+end
+@inline _guard(p::GuardedPayloadView) = getfield(p, :valid)[] ||
+    throw(BorrowError("payload view used after the handler returned — the borrowed \
+                       CDRView/CDRString escaped its scope (use `decode_owned`/`materialize` \
+                       to keep it, or switch to an owned subscription)"))
+@inline Base.size(p::GuardedPayloadView) = (getfield(p, :len),)
+@inline Base.length(p::GuardedPayloadView) = getfield(p, :len)
+Base.IndexStyle(::Type{GuardedPayloadView}) = Base.IndexLinear()
+@inline function Base.getindex(p::GuardedPayloadView, i::Int)
+    @boundscheck checkbounds(p, i)
+    _guard(p)
+    return unsafe_load(getfield(p, :ptr), i)
+end
+@inline Base.pointer(p::GuardedPayloadView) = (_guard(p); getfield(p, :ptr))
+@inline Base.pointer(p::GuardedPayloadView, i::Integer) = (_guard(p); getfield(p, :ptr) + (Int(i) - 1))
+@inline Base.unsafe_convert(::Type{Ptr{UInt8}}, p::GuardedPayloadView) = (_guard(p); getfield(p, :ptr))
+@inline Base.elsize(::Type{GuardedPayloadView}) = 1
+
+"""
+    with_payload_memory_checked(f, z::ZBytes)
+    with_payload_memory_checked(f, s::AbstractSample)
+
+Like [`with_payload_memory`](@ref) but hands `f` a [`GuardedPayloadView`](@ref):
+the zero-copy fast-path representation plus a runtime escape check. The view is
+invalidated the instant `f` returns, so a `CDRView`/`CDRString` that escaped `f`
+throws `BorrowError` on its next access instead of reading freed memory. The
+validation tier — run a view handler under this to confirm it doesn't escape,
+then switch to `with_payload_memory` for the allocation-free production path.
+"""
+function with_payload_memory_checked(f, z::ZBytes)
+    valid = Ref(true)
+    return with_payload_memory(z) do view
+        gv = GuardedPayloadView(pointer(view), length(view), valid)
+        try
+            return f(gv)
+        finally
+            valid[] = false      # invalidate before the borrow's bytes go out of scope
+        end
+    end
+end
+with_payload_memory_checked(f, s::AbstractSample) =
+    GC.@preserve s with_payload_memory_checked(f, payload(s))
+
 # --- unsafe (uninstrumented) views -----------------------------------
 #
 # Same zero-copy/copy tiers as the safe API, but handing back a *raw* `Memory{T}`
@@ -503,5 +643,6 @@ function put(s::Session, k::Keyexpr, r::ZRef;
     end
 end
 
-export ZRef, zref, isborrowed, as_memory, with_memory, borrow, Borrowed, BorrowError
+export ZRef, zref, isborrowed, as_memory, with_memory, with_payload_memory, with_payload_memory_checked,
+    PayloadView, GuardedPayloadView, borrow, Borrowed, BorrowError
 export unsafe_with_memory, unsafe_memory
