@@ -57,14 +57,17 @@ function _liveliness_sub_opts(history::Bool)
     return opts
 end
 
-function _liveliness_get_opts(timeout_ms::Integer)
+function _liveliness_get_opts(timeout_ms::Integer;
+        cancellation::Union{Nothing, CancellationToken} = nothing)
     opts = Ref{LibZenohC.z_liveliness_get_options_t}()
     LibZenohC.z_liveliness_get_options_default(opts)
-    if timeout_ms > 0
-        Base.unsafe_convert(Ptr{LibZenohC.z_liveliness_get_options_t},
-            opts).timeout_ms = UInt64(timeout_ms)
-    end
-    return opts
+    optsP = Base.unsafe_convert(Ptr{LibZenohC.z_liveliness_get_options_t}, opts)
+    timeout_ms > 0 && (optsP.timeout_ms = UInt64(timeout_ms))
+    # The get consumes (moves) the token; clone so the caller keeps theirs to
+    # cancel. Returned for the caller to GC-preserve across the get.
+    cancel_clone = isnothing(cancellation) ? nothing : _clone(cancellation)
+    isnothing(cancel_clone) || (optsP.cancellation_token = _move(cancel_clone))
+    return opts, cancel_clone
 end
 
 # --- Callback subscriber --------------------------------------------
@@ -146,18 +149,20 @@ LivelinessSubscriber(s::Session, k::Keyexpr; kwargs...) =
 
 """
     liveliness_get(s::Session, k::Keyexpr;
-                   channel=:fifo, capacity=16, timeout_ms=0) -> GetHandler
+                   channel=:fifo, capacity=16, timeout_ms=0, cancellation=nothing) -> GetHandler
 
 One-shot snapshot of currently live tokens matching `k`. Iterate the
 returned `GetHandler` to consume replies; each `sample(reply)` carries
-the token's keyexpr.
+the token's keyexpr. Pass a [`CancellationToken`](@ref) as `cancellation` and
+`cancel` it to abort the snapshot early.
 """
 function liveliness_get(s::Session, k::Keyexpr;
-        channel::Symbol=:fifo, capacity::Integer=16, timeout_ms::Integer=0)
-    opts = _liveliness_get_opts(timeout_ms)
+        channel::Symbol=:fifo, capacity::Integer=16, timeout_ms::Integer=0,
+        cancellation::Union{Nothing, CancellationToken}=nothing)
+    opts, cancel_clone = _liveliness_get_opts(timeout_ms; cancellation)
     # `channel` accepted for source compat; the ring delivers both alike.
     _open_buffered_get(capacity) do closure
-        GC.@preserve opts LibZenohC.z_liveliness_get(
+        GC.@preserve opts cancel_clone LibZenohC.z_liveliness_get(
             _loan(s), _loan(k), _move(closure), opts)
     end
 end
@@ -171,10 +176,11 @@ Callback form. Blocks until libzenohc finishes delivering replies
 single-slot semantics — see [`get`](@ref).
 """
 function liveliness_get(f::Function, s::Session, k::Keyexpr;
-        timeout_ms::Integer=0, should_close_on_error::Bool=true)
-    opts = _liveliness_get_opts(timeout_ms)
+        timeout_ms::Integer=0, should_close_on_error::Bool=true,
+        cancellation::Union{Nothing, CancellationToken}=nothing)
+    opts, cancel_clone = _liveliness_get_opts(timeout_ms; cancellation)
     _callback_get(f; should_close_on_error=should_close_on_error) do closure
-        GC.@preserve opts LibZenohC.z_liveliness_get(
+        GC.@preserve opts cancel_clone LibZenohC.z_liveliness_get(
             _loan(s), _loan(k), _move(closure), opts)
     end
 end

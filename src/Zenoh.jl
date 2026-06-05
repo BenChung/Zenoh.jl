@@ -17,6 +17,7 @@ include("core/encoding.jl")         # Encoding, _to_owned_encoding
 include("core/qos.jl")              # Locality, Priority, CongestionControl, …
 
 # Primitive value types
+include("types/cancellation.jl")    # CancellationToken (bounds an in-flight get)
 include("types/bytes.jl")           # ZBytes, ZBytesReader, slice iterators
 include("types/slice.jl")           # ZSlice
 include("types/keyexpr.jl")         # Keyexpr struct + ops + kexpr"…" macro

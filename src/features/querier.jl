@@ -41,17 +41,22 @@ end
 function _make_querier_get_opts(;
         payload = nothing,
         encoding::Union{Nothing, Encoding, AbstractString, Base.MIME} = nothing,
-        attachment = nothing)
+        attachment = nothing,
+        cancellation::Union{Nothing, CancellationToken} = nothing)
     opts = Ref{LibZenohC.z_querier_get_options_t}()
     LibZenohC.z_querier_get_options_default(opts)
     payload_bytes = isnothing(payload)    ? nothing : ZBytes(payload)
     attach_bytes  = isnothing(attachment) ? nothing : ZBytes(attachment)
     enc_ref       = isnothing(encoding)   ? nothing : _to_owned_encoding(_as_encoding(encoding))
+    # The get consumes (moves) the token; clone so the caller keeps theirs to
+    # cancel. The clone is returned for the caller to GC-preserve across the get.
+    cancel_clone  = isnothing(cancellation) ? nothing : _clone(cancellation)
     isnothing(payload_bytes) || _store_field!(opts, 1, _move(payload_bytes))
     isnothing(enc_ref)       || _store_field!(opts, 2, _move(enc_ref))
-    # attachment sits after the `source_info` field (index 3).
+    # attachment sits after the `source_info` field (index 3); cancellation last.
     isnothing(attach_bytes)  || _store_field!(opts, 4, _move(attach_bytes))
-    return opts, payload_bytes, attach_bytes, enc_ref
+    isnothing(cancel_clone)  || _store_field!(opts, 5, _move(cancel_clone))
+    return opts, payload_bytes, attach_bytes, enc_ref, cancel_clone
 end
 
 """
@@ -145,23 +150,25 @@ Issue a query on `q`, returning a `GetHandler` over the replies. Mirrors
 target/consolidation/QoS.
 
 Keyword arguments: `channel` (`:fifo`/`:ring`), `capacity`, `payload`,
-`encoding`, `attachment`.
+`encoding`, `attachment`, `cancellation` (a [`CancellationToken`](@ref);
+`cancel` it to abort this get — the only per-call bound a querier get has).
 """
 function Base.get(q::Querier, parameters::AbstractString="";
         channel::Symbol = :fifo,
         capacity::Integer = 16,
         payload = nothing,
         encoding::Union{Nothing, Encoding, AbstractString, Base.MIME} = nothing,
-        attachment = nothing)
-    opts, payload_bytes, attach_bytes, enc_ref =
-        _make_querier_get_opts(; payload, encoding, attachment)
+        attachment = nothing,
+        cancellation::Union{Nothing, CancellationToken} = nothing)
+    opts, payload_bytes, attach_bytes, enc_ref, cancel_clone =
+        _make_querier_get_opts(; payload, encoding, attachment, cancellation)
 
     # _substr takes (ptr, len) rather than a null-terminated string, so a
     # `SubString` view threads through without an intermediate copy.
     params = parameters isa Union{String, SubString{String}} ? parameters : String(parameters)
     # `channel` accepted for source compat; the ring delivers both alike.
     _open_buffered_get(capacity) do closure
-        GC.@preserve payload_bytes attach_bytes enc_ref params opts begin
+        GC.@preserve payload_bytes attach_bytes enc_ref cancel_clone params opts begin
             LibZenohC.z_querier_get_with_parameters_substr(_loan(q),
                 Ptr{Cchar}(pointer(params)), ncodeunits(params),
                 _move(closure), opts)
@@ -177,19 +184,20 @@ reply that fits through the single-slot handoff. Mirrors
 `get(f, ::Session, ::Keyexpr, params; …)`.
 
 Keyword arguments: `should_close_on_error`, `payload`, `encoding`,
-`attachment`.
+`attachment`, `cancellation` (a [`CancellationToken`](@ref)).
 """
 function Base.get(f::Function, q::Querier, parameters::AbstractString="";
         should_close_on_error::Bool=true,
         payload = nothing,
         encoding::Union{Nothing, Encoding, AbstractString, Base.MIME} = nothing,
-        attachment = nothing)
-    opts, payload_bytes, attach_bytes, enc_ref =
-        _make_querier_get_opts(; payload, encoding, attachment)
+        attachment = nothing,
+        cancellation::Union{Nothing, CancellationToken} = nothing)
+    opts, payload_bytes, attach_bytes, enc_ref, cancel_clone =
+        _make_querier_get_opts(; payload, encoding, attachment, cancellation)
 
     params = parameters isa Union{String, SubString{String}} ? parameters : String(parameters)
     _callback_get(f; should_close_on_error=should_close_on_error) do closure
-        GC.@preserve payload_bytes attach_bytes enc_ref params opts begin
+        GC.@preserve payload_bytes attach_bytes enc_ref cancel_clone params opts begin
             LibZenohC.z_querier_get_with_parameters_substr(_loan(q),
                 Ptr{Cchar}(pointer(params)), ncodeunits(params),
                 _move(closure), opts)

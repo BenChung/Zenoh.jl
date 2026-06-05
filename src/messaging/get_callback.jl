@@ -35,11 +35,11 @@ function Base.get(f::Function, s::Session, k::Keyexpr,
         parameters::AbstractString="";
         should_close_on_error::Bool=true,
         kwargs...)
-    opts, payload_bytes, attach_bytes, enc_ref = _make_get_opts(; kwargs...)
+    opts, payload_bytes, attach_bytes, enc_ref, cancel_clone = _make_get_opts(; kwargs...)
 
     params = String(parameters)
     _callback_get(f; should_close_on_error=should_close_on_error) do closure
-        GC.@preserve payload_bytes attach_bytes enc_ref params opts begin
+        GC.@preserve payload_bytes attach_bytes enc_ref cancel_clone params opts begin
             LibZenohC.z_get(_loan(s), _loan(k),
                 pointer(Base.unsafe_convert(Cstring, params)),
                 _move(closure), opts)

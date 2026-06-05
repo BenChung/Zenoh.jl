@@ -1589,6 +1589,46 @@ try
         end
     end
 
+    @timed_testset "CancellationToken" begin
+        # Core property: a clone shares the underlying flag, so cancelling the
+        # handle you keep cancels the one moved into a get (the get-opts builders
+        # clone the token in and hand your handle back to cancel through).
+        tok   = Zenoh.CancellationToken()
+        clone = Zenoh._clone(tok)
+        @test !Zenoh.is_cancelled(tok)
+        @test !Zenoh.is_cancelled(clone)
+        Zenoh.cancel(tok)
+        @test Zenoh.is_cancelled(tok)
+        @test Zenoh.is_cancelled(clone)          # shared flag, not a deep copy
+        close(clone); close(tok)
+
+        # symmetric: cancelling the clone is visible on the original
+        a = Zenoh.CancellationToken(); b = Zenoh._clone(a)
+        Zenoh.cancel(b)
+        @test Zenoh.is_cancelled(a)
+        close(a); close(b)
+
+        # The `cancellation` kwarg threads through every get path and returns
+        # (no matching queryable here, so each get resolves promptly).
+        k = Zenoh.Keyexpr("test/cancellation/smoke")
+        let t = Zenoh.CancellationToken()
+            gh = Base.get(S1, k; cancellation = t); for _ in gh; end
+            @test true
+        end
+        let t = Zenoh.CancellationToken()
+            gh = Zenoh.liveliness_get(S1, k; cancellation = t); for _ in gh; end
+            @test true
+        end
+        qrr = Zenoh.Querier(S1, k; timeout_ms = 1000)
+        try
+            t = Zenoh.CancellationToken()
+            gh = Base.get(qrr; payload = "x", cancellation = t); for _ in gh; end
+            @test true
+        finally
+            close(qrr)
+        end
+    end
+
     @timed_testset "Typed query target/consolidation + Querier QoS singletons" begin
         # The QueryTargets / QueryConsolidations singletons are the canonical
         # form; verify they thread through both get and Querier, and that the

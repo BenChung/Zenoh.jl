@@ -148,11 +148,19 @@ end
 # Mirrors the channel `Queryable` query contract.
 function Base.iterate(sh::AbstractSubscriberHandler, box=nothing)
     if box === nothing
+        # Fresh box: `Ref{z_owned_sample_t}()` is UNINITIALISED memory. Take first and
+        # arm the break-safety finalizer only once the box owns a real sample — if the
+        # take fails before any item (closed/drained), the box is dropped by GC as plain
+        # memory with no `z_sample_drop`, never as a garbage owned-sample (which would
+        # segfault `drop_in_place` at finalize/atexit).
         box = Ref{LibZenohC.z_owned_sample_t}()
+        _ring_take_into!(box, sh.ctx, sh.async_cond) || return nothing
         finalizer(b -> LibZenohC.z_sample_drop(_move(b)), box)
-    else
-        LibZenohC.z_sample_drop(_move(box))         # drop previous occupant promptly
+        return (_borrow_sample(box), box)
     end
+    LibZenohC.z_sample_drop(_move(box))             # drop previous occupant promptly
+    # `_move` left the box in the null gravestone, so the finalizer is safe even if the
+    # refill below fails (drop of a null owned sample is a no-op).
     _ring_take_into!(box, sh.ctx, sh.async_cond) || return nothing
     return (_borrow_sample(box), box)
 end
@@ -472,7 +480,8 @@ function _make_get_opts(;
         priority::Union{Nothing, Priority}                    = nothing,
         express::Union{Nothing, Bool}                         = nothing,
         allowed_destination::Union{Nothing, Locality}         = nothing,
-        accept_replies::Union{Nothing, ReplyKeyexpr}          = nothing)
+        accept_replies::Union{Nothing, ReplyKeyexpr}          = nothing,
+        cancellation::Union{Nothing, CancellationToken}       = nothing)
     opts = Ref{LibZenohC.z_get_options_t}()
     LibZenohC.z_get_options_default(opts)
     optsP = Base.unsafe_convert(Ptr{LibZenohC.z_get_options_t}, opts)
@@ -483,9 +492,12 @@ function _make_get_opts(;
     payload_bytes = isnothing(payload)    ? nothing : ZBytes(payload)
     attach_bytes  = isnothing(attachment) ? nothing : ZBytes(attachment)
     enc_ref       = isnothing(encoding)   ? nothing : _to_owned_encoding(_as_encoding(encoding))
+    # The get consumes (moves) the token; clone so the caller keeps theirs to cancel.
+    cancel_clone  = isnothing(cancellation) ? nothing : _clone(cancellation)
     isnothing(payload_bytes) || (optsP.payload    = _move(payload_bytes))
     isnothing(attach_bytes)  || (optsP.attachment = _move(attach_bytes))
     isnothing(enc_ref)       || (optsP.encoding   = _move(enc_ref))
+    isnothing(cancel_clone)  || (optsP.cancellation_token = _move(cancel_clone))
 
     isnothing(congestion_control)  || (optsP.congestion_control  = _raw(congestion_control))
     isnothing(priority)            || (optsP.priority            = _raw(priority))
@@ -493,7 +505,7 @@ function _make_get_opts(;
     isnothing(allowed_destination) || (optsP.allowed_destination = _raw(allowed_destination))
     isnothing(accept_replies)      || (optsP.accept_replies      = _raw(accept_replies))
 
-    return opts, payload_bytes, attach_bytes, enc_ref
+    return opts, payload_bytes, attach_bytes, enc_ref, cancel_clone
 end
 
 """
@@ -519,15 +531,16 @@ Keyword arguments:
 - `express`            — `Bool`; bypass batching
 - `allowed_destination`— `Localities.ANY` / `SESSION_LOCAL` / `REMOTE`
 - `accept_replies`     — `ReplyKeyexprs.ANY` or `MATCHING_QUERY`
+- `cancellation`       — a [`CancellationToken`](@ref); `cancel` it to abort this get
 """
 function Base.get(s::Session, k::Keyexpr, parameters::AbstractString="";
         channel::Symbol = :fifo,
         capacity::Integer = 16,
         kwargs...)
-    opts, payload_bytes, attach_bytes, enc_ref = _make_get_opts(; kwargs...)
+    opts, payload_bytes, attach_bytes, enc_ref, cancel_clone = _make_get_opts(; kwargs...)
     params = String(parameters)
     _open_buffered_get(capacity) do closure
-        GC.@preserve payload_bytes attach_bytes enc_ref params opts begin
+        GC.@preserve payload_bytes attach_bytes enc_ref cancel_clone params opts begin
             LibZenohC.z_get(_loan(s), _loan(k),
                 pointer(Base.unsafe_convert(Cstring, params)),
                 _move(closure), opts)
