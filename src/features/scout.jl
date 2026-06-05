@@ -3,10 +3,9 @@
 # libzenohc's `z_scout` consumes a config and a `z_closure_hello`, then
 # fires the closure once per peer it hears from within `timeout_ms` (or
 # its default). The closure-side plumbing (trampolines, ctx, teardown)
-# is stamped out by `@closure_kind :hello` in `closure_kinds.jl`; no
-# FIFO/ring channel variants exist in libzenohc for hello — the macro's
-# generated `_new_channel` / `_recv` / `_try_recv` methods reference
-# nonexistent symbols and are inert dead code unless invoked.
+# is stamped out by `@closure_kind :hello` in `closure_kinds.jl`. hello
+# uses the closure form only — libzenohc ships no FIFO/ring channel handler
+# for it, so the macro runs with `channels=false` and emits no channel methods.
 
 # ── Hello ────────────────────────────────────────────────────────────
 
@@ -27,10 +26,8 @@ struct Hello
     locators::Vector{String}
 end
 
-# Eager extract from the owned hello the consume task memcpy'd out of
-# the callback slot: the underlying `z_loaned_string_t` locators are
-# owned by the hello, so we materialize them into Julia Strings here
-# rather than holding the owned hello until the user finalizes.
+# Copy locators into Julia Strings now: they borrow from the owned hello,
+# which the consume task drops before the user sees this Hello.
 function Hello(r::Base.RefValue{LibZenohC.z_owned_hello_t})
     loaned = LibZenohC.z_hello_loan(r)
     zid_v     = LibZenohC.z_hello_zid(loaned)

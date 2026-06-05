@@ -33,8 +33,7 @@ end
         loanedtype = has_ofreg(z_prefix, z_typename, loanedtypes)
         if !isnothing(movedtype)
             has_func = !isnothing(dlsym(lzc, Symbol("$(z_prefix)_$(z_typename)_move"); throw_error=false))
-            #@show typ movedtype z_prefix z_typename
-            if has_func 
+            if has_func
                 movefunc = getfield(LibZenohC, Symbol("$(z_prefix)_$(z_typename)_move"))
                 push!(dfns, quote _move(x::Ref{$typ}) = ($movefunc)(x) end)
             else
@@ -58,8 +57,11 @@ end
             if !isnothing(dlsym(lzc, Symbol("$(z_prefix)_$(z_typename)_drop"); throw_error=false))
                 loanfunc = getfield(LibZenohC, Symbol("$(z_prefix)_$(z_typename)_drop"))
                 push!(dfns, quote _drop(x::Ref{$movedtype}) = ($loanfunc)(x) end)
-            else 
-                # weiiiird case???? only liveliness
+            else
+                # No _drop: the non-greedy `ownedtypes` regex truncates *_token_t,
+                # so the `z_<name>_drop` lookup misses the real `z_<name>_token_drop`.
+                # liveliness and cancellation both land here; both drop via direct C
+                # calls (see cancellation.jl), so nothing is needed.
             end
             if !isnothing(dlsym(lzc, Symbol("$(z_prefix)_$(z_typename)_take"); throw_error=false))
                 loanfunc = getfield(LibZenohC, Symbol("$(z_prefix)_$(z_typename)_take"))
@@ -70,8 +72,9 @@ end
                     x[] = y[]
                     ($loanfunc)(x)
                 end end)
-            else 
-                # weiiiird case???? only liveliness
+            else
+                # No _take: same regex truncation as above; `z_<name>_take` and
+                # `z_internal_<name>_null` miss the real `z_<name>_token_*` symbols.
             end
         end
     end

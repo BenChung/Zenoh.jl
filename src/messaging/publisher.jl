@@ -13,7 +13,7 @@
 # the advanced-pubsub proposal §3.2.
 
 # Common abstract supertype for the plain and advanced publishers. Concrete so
-# clients stay type-stable: `Publisher` is unchanged and concrete, and a client
+# clients stay type-stable: `Publisher` remains a concrete type, and a client
 # that wants to hold either kind parameterizes (`struct Foo{P<:AbstractPublisher}
 # pub::P end`) rather than storing the abstract field directly.
 abstract type AbstractPublisher end

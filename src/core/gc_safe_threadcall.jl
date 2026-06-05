@@ -31,8 +31,7 @@ macro gc_safe_threadcall(f, rettype, argtypes, argvals...)
     argtypes = map(esc, argtypes.args)
     argvals = map(esc, argvals)
 
-    # Non-allocating wrapper that runs on the libuv worker thread (mirrors
-    # Base.@threadcall's wrapper exactly, except the inner call is gc_safe).
+    # Non-allocating wrapper that runs on the libuv worker thread.
     wrapper = :(function (fptr::Ptr{Cvoid}, args_ptr::Ptr{Cvoid}, retval_ptr::Ptr{Cvoid})
         p = args_ptr
     end)
@@ -44,9 +43,8 @@ macro gc_safe_threadcall(f, rettype, argtypes, argvals...)
         push!(body, :(p += Core.sizeof($T)))
         push!(args, arg)
     end
-    # The one and only difference from Base.@threadcall: the blocking call is
-    # `gc_safe`, so the adopted libuv worker thread does not stall a stop-the-world
-    # GC while parked in it. Built as `@ccall gc_safe=true $fptr(a::T, …)::rettype`.
+    # The gc_safe inner call — the sole difference from Base.@threadcall.
+    # Built as `@ccall gc_safe=true $fptr(a::T, …)::rettype`.
     typed = [:($(args[i])::$(argtypes[i])) for i in eachindex(args)]
     inner_call = Expr(:(::), Expr(:call, Expr(:$, :fptr), typed...), rettype)
     gc_safe_ccall = Expr(:macrocall, GlobalRef(Base, Symbol("@ccall")), __source__,

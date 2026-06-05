@@ -15,7 +15,6 @@ end
 
 function ZTimestamp(ptr::Ptr{LibZenohC.z_timestamp_t})
     ts = Ref{LibZenohC.z_timestamp_t}()
-    # Copy the timestamp data by value
     unsafe_copyto!(Base.unsafe_convert(Ptr{LibZenohC.z_timestamp_t}, ts), ptr, 1)
     return ZTimestamp(ts)
 end

@@ -18,7 +18,6 @@
 # background-callback pin policy exists.
 # ═══════════════════════════════════════════════════════════════════════
 
-# `wrap` for the consume() loop: extract the Bool from the POD struct.
 @inline _matching_unwrap(r::Base.RefValue{LibZenohC.z_matching_status_t}) =
     r[].matching
 

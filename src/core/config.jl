@@ -2,7 +2,7 @@
 
 """
 A Zenoh configuration. Can be constructed as Config(; from_env=[should load from ZENOH_CONFIG env var], file="filename", str="json string").
-Only zero or one of these options can be selected; if none is selected (the default) then the configuration will be initialized from the default.
+At most one of these options may be set. With none set (the default), the configuration is initialized from Zenoh's built-in defaults.
 """
 struct Config
     c::Base.RefValue{LibZenohC.z_owned_config_t}
@@ -37,11 +37,11 @@ end
 
 """
 Serialize a Julia value into a JSON5 fragment suitable for insertion into a
-`Config`. This is deliberately minimal — Zenoh's own parser validates and
-canonicalizes the value on insert, so we only need to emit well-formed JSON5 for
-the value types the config builder produces. Note that strings are *quoted* here
-(the nested form); a top-level `AbstractString` passed to `setindex!` is instead
-treated as raw, pre-formatted JSON5 (see below).
+`Config`. Zenoh's own parser validates and canonicalizes the value on insert, so
+this emits well-formed JSON5 for the value types the config builder produces.
+Note that strings are *quoted* here (the nested form); a top-level
+`AbstractString` passed to `setindex!` is instead treated as raw, pre-formatted
+JSON5 (see below).
 """
 _to_json5(x::Bool) = x ? "true" : "false"
 _to_json5(x::Integer) = string(x)

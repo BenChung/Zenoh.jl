@@ -121,7 +121,7 @@ Base.isopen(s::Session) = !s.closed[] && !LibZenohC.z_session_is_closed(_loan(s.
 """
 Returns the session’s Zenoh ID.
 
-Unless the session is invalid, that ID is guaranteed to be non-zero. In other words, this function returning an array of 16 zeros means you failed to pass it a valid session.
+A valid session always yields a non-zero ID; an all-zero 16-byte array means the session was invalid.
 """
 zid(s::Session) = LibZenohC.z_info_zid(_loan(s))
 

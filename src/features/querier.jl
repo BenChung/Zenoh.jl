@@ -166,7 +166,7 @@ function Base.get(q::Querier, parameters::AbstractString="";
     # _substr takes (ptr, len) rather than a null-terminated string, so a
     # `SubString` view threads through without an intermediate copy.
     params = parameters isa Union{String, SubString{String}} ? parameters : String(parameters)
-    # `channel` accepted for source compat; the ring delivers both alike.
+    # The ring delivers :fifo and :ring identically; channel has no effect here.
     _open_buffered_get(capacity) do closure
         GC.@preserve payload_bytes attach_bytes enc_ref cancel_clone params opts begin
             LibZenohC.z_querier_get_with_parameters_substr(_loan(q),

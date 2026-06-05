@@ -109,15 +109,12 @@ struct ZBytes{R <: Union{Base.RefValue{LibZenohC.z_owned_bytes_t}, Ptr{LibZenohC
         return new{Base.RefValue{LibZenohC.z_owned_bytes_t}}(b, nothing)
     end
 end
-# NOTE on ownership: owned ZBytes deliberately carry NO GC finalizer.
-#
-# An earlier revision attached a `z_bytes_drop` finalizer as a leak safety
-# net for owned ZBytes that are never moved into a put/reply/get. It was
-# reverted: `z_bytes_drop` invokes the zero-copy deleter (`_release`, which
-# touches the Julia heap) from the GC/finalizer thread, and dropping an
-# SHM-backed payload off-thread corrupts zenoh's SHM segment bookkeeping —
-# observably wedging SHM delivery (a session-fast-path round-trip hangs)
-# under GC pressure. A hang risk is unacceptable, so the net is gone.
+# NOTE on ownership: owned ZBytes deliberately carry NO GC finalizer, and one
+# must not be added. `z_bytes_drop` invokes the zero-copy deleter (`_release`,
+# which touches the Julia heap); on the GC/finalizer thread, dropping an
+# SHM-backed payload off-thread corrupts zenoh's SHM segment bookkeeping and
+# wedges SHM delivery (a session-fast-path round-trip hangs) under GC pressure.
+# Cleanup must run on the caller's task.
 #
 # This is safe because no API forces a user to hold an owned ZBytes: the
 # pub/sub/query paths all `_move` their bytes into a C call, and inbound
@@ -211,7 +208,7 @@ function Base.readavailable(zr::ZBytesReader)
 end
 Base.eof(zr::ZBytesReader) = bytesavailable(zr) == 0
 function Base.close(zr::ZBytesReader)
-    # don't have to do anything
+    # the reader borrows the ZBytes buffer; nothing owned to free
 end
 
 struct ZBytesSliceIterator

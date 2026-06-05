@@ -50,9 +50,8 @@ end
 # Overflow is drop-oldest (ROS `KEEP_LAST`): when the consumer falls behind,
 # the oldest buffered item is evicted and counted in `dropped_count`. The I/O
 # thread never blocks. For lossless backpressure (block the publisher, at the
-# cost of stalling the shared RX thread) the native libzenohc FIFO handlers
-# remain generated in `closure_kinds.jl` — wiring a user-facing opt-in for them
-# is a follow-up; nothing routes there by default.
+# cost of stalling the shared RX thread), the native libzenohc FIFO handlers in
+# `closure_kinds.jl` are available, but nothing routes to them by default.
 #
 # Two consumption shapes:
 #   • Buffered subscriber/queryable (infinite stream, keep-last-N): the caller
@@ -205,7 +204,7 @@ function tryrecv!(sh::AbstractSubscriberHandler, h::SampleHolder)
     return h
 end
 
-# Samples dropped to ring overflow since declare (advisory).
+# Advisory: samples dropped to ring overflow since declare.
 dropped_count(sh::AbstractSubscriberHandler) = dropped_count(sh.ctx)
 
 function Base.close(sh::AbstractSubscriberHandler)
@@ -250,10 +249,8 @@ Base.eltype(::Type{<:AbstractSubscriberHandler}) = Sample
 # sustained overload). Generic over the subscriber handle type `H` (data /
 # advanced / liveliness) so one type serves all three.
 #
-# NB: this reimplements lossless buffering in Julia because libzenohc's FIFO
-# handler exposes no push notification to drive a slot-free drain. A future
-# Rust-side notifying handler would let `:fifo`/KEEP_ALL ride zenoh's own
-# buffering+backpressure with just a wakeup bridge — see DESIGN notes.
+# Buffering is reimplemented in Julia because libzenohc's FIFO handler exposes
+# no push notification to drive a slot-free drain.
 mutable struct KeepAllSubscriber{H}
     sub::Base.RefValue{H}
     ctx::CallbackCtx{LibZenohC.z_owned_sample_t}

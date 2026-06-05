@@ -198,8 +198,6 @@ function Base.close(sub::AbstractCallbackSubscriber)
     wait(sub.task)
 
     _teardown_callback(Val(:sample), sub.ctx, sub.async_cond)
-    # sub.ctx (the Julia CallbackCtx) is released to GC when this
-    # Subscriber becomes unreachable.
     return nothing
 end
 

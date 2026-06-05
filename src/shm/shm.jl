@@ -130,7 +130,7 @@ provider settles, typically within a second or two of connecting). Always
 """
 function shm_ready(s::Session)
     s.shm_state[] === :none && return false      # SHM never requested at open
-    _bind_session_shm!(s)                         # obtain + adopt (not a throwaway)
+    _bind_session_shm!(s)
     return s.shm_state[] === :ready
 end
 
@@ -211,9 +211,7 @@ function alloc(p::AbstractShmProvider, n::Integer;
     end
     status = result[].status
     if status == LibZenohC.ZC_BUF_LAYOUT_ALLOC_STATUS_OK
-        # Extract the moved z_owned_shm_mut_t from the result struct via _take,
-        # which leaves the source in a moved-from state so result_ref's stack
-        # storage holds no live ownership.
+        # Move the allocated z_owned_shm_mut_t out of the result struct.
         buf_ref = Ref{LibZenohC.z_owned_shm_mut_t}()
         GC.@preserve result buf_ref begin
             res_ptr = Base.unsafe_convert(

@@ -249,7 +249,7 @@ mutable struct Queryable{B}
     closed::Bool
 end
 
-# Channel form alias — the buffered Queryable's historical name.
+# Alias for the channel (buffered, ring-backed) Queryable form.
 const QueryableHandler = Queryable{RingBacking}
 
 """
@@ -326,7 +326,7 @@ manually.
 function Queryable(s::Session, k::Keyexpr;
         channel::Symbol = :fifo, capacity::Integer = 16,
         complete=nothing, allowed_origin=nothing)
-    # `channel` accepted for source compat; the ring delivers both alike.
+    # The ring delivers :fifo and :ring identically; channel has no effect here.
     ctx, async_cond, closure = _setup_callback(Val(:query), capacity)
     opts  = _make_queryable_opts(; complete, allowed_origin)
     qable = Ref{LibZenohC.z_owned_queryable_t}()
@@ -387,12 +387,9 @@ end
 
 function Base.iterate(q::Queryable{RingBacking},
         prev::Union{Nothing, Query}=nothing)
-    # Drop the previous query before pulling the next. The z_query_drop is what
-    # sends the final-ack the originating get is waiting on; relying on GC to do
-    # this defers the ack until at best the next allocation cycle, and in test
-    # workloads typically until the query times out — making every reply look
-    # 2 s late. Mirrors the callback-form `wrapped` shim that calls
-    # `finalize(query.q)` immediately after the user's `f` returns.
+    # Drop the previous query before pulling the next: z_query_drop sends the
+    # final-ack the originating get awaits, and deferring it to GC stalls the
+    # ack until the query times out. Mirrors the callback-form `wrapped` shim.
     prev === nothing || finalize(prev.q)
     b = q.backing
     r = _ring_take(b.ctx, b.async_cond)

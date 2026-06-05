@@ -10,7 +10,7 @@ struct Keyexpr
         k = Ref{LibZenohC.z_owned_keyexpr_t}()
         res = new(k)
         if autocanonize
-            rtc = LibZenohC.z_keyexpr_from_str_autocanonize(res.k, pointer(s)) # copies but we shouldn't do much of this
+            rtc = LibZenohC.z_keyexpr_from_str_autocanonize(res.k, pointer(s)) # autocanonize copies the input into the owned keyexpr
         else
             rtc = LibZenohC.z_keyexpr_from_str(res.k, pointer(s))
         end
@@ -372,7 +372,7 @@ macro kexpr_str(s, flags="")
     pieces = _parse_kexpr_template(s)
     has_interp = any(p -> !(p isa String), pieces)
     if !has_interp
-        # No-interp fast path — preserves the pre-interpolation behavior.
+        # No-interp fast path: delegate straight to the plain Keyexpr constructor.
         return :(Keyexpr($s; autocanonize=$autocanonize))
     end
     return _kexpr_emit_interp(pieces, autocanonize)

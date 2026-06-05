@@ -76,9 +76,9 @@ end
 """
     RecoveryOptions(; periodic_queries_period_ms=0)
 
-Subscriber-side gap recovery. `periodic_queries_period_ms > 0` enables
-periodic last-sample-miss detection at that interval; otherwise recovery
-relies on the publisher heartbeat / sequence numbers.
+Subscriber-side gap recovery. A positive `periodic_queries_period_ms` polls
+for missed last samples at that interval. The default `0` recovers gaps from
+the publisher heartbeat and sequence numbers alone.
 """
 struct RecoveryOptions
     periodic_queries_period_ms::Int
