@@ -1,3 +1,22 @@
+"""
+    Session
+
+The central Zenoh runtime handle, holding the connection state of this node to
+the Zenoh network. Wraps an owned `z_owned_session_t` and is the object every
+[`put`](@ref), [`get`](@ref), and declaration ([`Publisher`](@ref),
+[`Subscriber`](@ref), [`Queryable`](@ref)) routes through — internally via a
+`_loan` chokepoint that throws once the session is closed, so a use-after-free
+can never reach the dropped handle.
+
+Open one with [`open`](@ref)`(::Config)` and release it with [`close`](@ref),
+which runs the graceful shutdown and frees the handle deterministically on the
+calling task. A GC finalizer drops the handle as a safety net for sessions that
+were never explicitly closed.
+
+The struct stays immutable; close state and discovered shared-memory capability
+live in mutable cells so they can be updated in place. Query identity and
+topology with [`zid`](@ref), [`router_zids`](@ref), and [`peer_zids`](@ref).
+"""
 struct Session
     s::Base.RefValue{LibZenohC.z_owned_session_t}
     # Cached session-derived SHM provider (a `SharedShmProvider`) or `nothing`.
@@ -17,6 +36,12 @@ struct Session
     # Discovered SHM capability, snapshotted at `open` from the provider state
     # zenoh-c reports. See `shm_state` / `shm_capable`. `:none` until probed.
     shm_state::Base.RefValue{Symbol}
+    # Serializes the lazy SHM bind (`_bind_session_shm!`): the first-bind
+    # check-obtain-cache is otherwise an unsynchronized read/write of `shm`/
+    # `shm_state`, reachable concurrently from `open`, `zref(s,T)`, and
+    # `shm_ready`. The cached fast path (`shm[] !== nothing`) returns before
+    # taking this, so there is no hot-path cost.
+    shm_lock::ReentrantLock
     # `true` once `close` (or the finalizer) has torn the session down. In a
     # mutable cell so `Session` stays immutable; guards `close` against running
     # `z_close`/`z_session_drop` twice and lets every handle accessor fail loudly
@@ -24,7 +49,7 @@ struct Session
     closed::Base.RefValue{Bool}
     Session() = new(Ref{LibZenohC.z_owned_session_t}(),
                     Ref{Any}(nothing), Ref{Any}(nothing), Ref{Symbol}(:none),
-                    Ref(false))
+                    ReentrantLock(), Ref(false))
 end
 
 # Loan the session for any operation; throws once closed so a use-after-free

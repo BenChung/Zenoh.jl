@@ -23,6 +23,18 @@
 
 # ── LogSeverity (mirrors the singleton-enum pattern in core/qos.jl) ──────
 
+"""
+    LogSeverities
+
+Namespace holding the five log-severity levels as singleton instances:
+`LogSeverities.TRACE`, `DEBUG`, `INFO`, `WARN`, and `ERROR`. Each is a distinct
+singleton type under the shared [`LogSeverity`](@ref Zenoh.LogSeverity) supertype and maps 1:1 to
+a `ZC_LOG_SEVERITY_*` value in the underlying C enum.
+
+The levels order `TRACE < DEBUG < INFO < WARN < ERROR` (via `isless`/`<=`),
+matching the C enum's `0..4` ranking. Pass a level to [`setup_logging`](@ref Zenoh.setup_logging) as
+the stderr fallback or to [`open_log_stream`](@ref Zenoh.open_log_stream) as the capture floor.
+"""
 module LogSeverities
     import ..LibZenohC
 
@@ -41,6 +53,16 @@ module LogSeverities
     const ERROR = Error()
 end
 
+"""
+    LogSeverity
+
+Abstract supertype of the five severity levels in [`LogSeverities`](@ref)
+(`TRACE`, `DEBUG`, `INFO`, `WARN`, `ERROR`). Accepted wherever a level is named:
+the `filter` argument to [`setup_logging`](@ref), the `min_severity` floor of
+[`open_log_stream`](@ref), and the `severity` field of a [`LogRecord`](@ref).
+
+Levels are ordered `TRACE < DEBUG < INFO < WARN < ERROR` via `isless`/`<=`.
+"""
 const LogSeverity = LogSeverities.LogSeverity
 
 _raw(::LogSeverities.Trace) = LibZenohC.ZC_LOG_SEVERITY_TRACE
@@ -233,9 +255,8 @@ A bounded, pull-based view of Zenoh's log stream, returned by
 
 Records arrive from Zenoh's internal threads into a fixed-capacity ring;
 overflow drops the oldest (count via [`dropped_count`](@ref)). Because Zenoh's
-logger is global and one-shot, only one `LogStream` can exist per process and
-`close` cannot uninstall the logger — it stops delivery and frees buffered
-records.
+logger is global and one-shot, only one `LogStream` exists per process. `close`
+stops delivery and frees buffered records, but cannot uninstall the global logger.
 """
 mutable struct LogStream
     bridge::_LogBridge

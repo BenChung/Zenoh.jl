@@ -76,7 +76,7 @@ Call `close(q)` to undeclare.
 """
 mutable struct Querier
     querier::Base.RefValue{LibZenohC.z_owned_querier_t}
-    keyexpr::Keyexpr   # GC pin
+    keyexpr::AbstractKeyexpr   # GC pin
     closed::Bool
 end
 

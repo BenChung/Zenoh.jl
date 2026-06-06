@@ -27,6 +27,25 @@ struct _ZRefView
     view::Base.RefValue{LibZenohC.z_view_slice_t}
 end
 
+"""
+    ZRef{T, B}
+
+A typed, transport-agnostic, minimum-copy handle over a payload buffer for an
+isbits type `T`. The authoring API (`r[] = x`, `r[]`, `pointer(r)`), the send
+path ([`put`](@ref)), and the receive constructor are identical whether the
+bytes live in Julia heap, a shared-memory segment, or a network view; the backing
+`B` is the only axis of variation.
+
+Construct one with [`zref`](@ref): a writable handle backed by Julia memory or an
+SHM segment on the send side, or a reconstruction of a received [`Sample`](@ref)
+on the receive side. [`isborrowed`](@ref) reports whether the handle is a
+zero-copy view or owns a materialized copy.
+
+A send-side `ZRef` is single-use: `put` borrows or moves its backing and marks it
+consumed, after which any access throws. A receive-side borrowed `ZRef` is valid
+only while reachable (it pins the sample) — read or copy out before the callback
+returns.
+"""
 mutable struct ZRef{T, B}
     backing::B
     ptr::Ptr{T}
@@ -103,10 +122,19 @@ function zref(s::Session, ::Type{T}) where {T}
         try
             return zref(prov::AbstractShmProvider, T)
         catch e
-            e isa ShmAllocError || rethrow()      # out-of-memory / needs-defrag → degrade
-            @debug "SHM allocation failed; falling back to Julia memory" exception=e type=T bytes=sizeof(T)
-            handler = s.shm_alloc_handler[]
-            handler === nothing || handler(e)     # user callback may rethrow to escalate
+            # Both operational SHM errors degrade to Julia memory: a full/fragmented
+            # segment (ShmAllocError), or a layout the provider can't honor even
+            # unaligned (ShmLayoutError, which `zref(p,T)`'s unaligned retry lets
+            # escape). Anything else is a genuine bug — rethrow.
+            if e isa ShmAllocError
+                @debug "SHM allocation failed; falling back to Julia memory" exception=e type=T bytes=sizeof(T)
+                handler = s.shm_alloc_handler[]
+                handler === nothing || handler(e)     # user callback may rethrow to escalate
+            elseif e isa ShmLayoutError
+                @debug "SHM provider layout-incompatible; falling back to Julia memory" exception=e type=T bytes=sizeof(T)
+            else
+                rethrow()
+            end
         end
     end
     return zref(T)
@@ -200,6 +228,15 @@ end
 # NOTE: property access is forwarded, so this type's own fields are reached only
 # via `getfield`/`setfield!` internally, never `b.field`.
 
+"""
+    BorrowError <: Exception
+
+Signals that a [`Borrowed`](@ref) view (or a [`GuardedPayloadView`](@ref)) was
+used outside its valid scope: after `close`, or after it escaped the
+[`with_memory`](@ref) / [`with_payload_memory_checked`](@ref) call that produced
+it. The check fires on every access so a stale view raises a catchable error
+rather than reading freed memory.
+"""
 struct BorrowError <: Exception
     msg::String
 end
@@ -210,6 +247,23 @@ Base.showerror(io::IO, e::BorrowError) = print(io, "BorrowError: ",
          `with_memory`, and must not be used after `close`)" :
         e.msg)
 
+"""
+    Borrowed{T}
+
+A scope-validated, value-first view of a payload reinterpreted as `T`. It reads
+both like the struct — `b[]` dereferences the single element, `b.field` reads a
+field — and like an array — `b[i]`, iteration, `length`, `collect`. While valid
+it pins its source (the [`Sample`](@ref)/[`ZBytes`](@ref) or an owned copy) so
+the bytes stay live; `close(b)` drops the pin, after which every access throws a
+[`BorrowError`](@ref).
+
+Mutation (`b.field = v`, `b[i] = v`, `b[] = v`) requires a writable borrow, which
+owns a private copy. A zero-copy view of a received payload is read-only, since
+its backing is loaned or shared memory.
+
+Construct one with [`borrow`](@ref), or scope it to a block with
+[`with_memory`](@ref), which closes it automatically and so catches escapes.
+"""
 mutable struct Borrowed{T}
     ptr::Ptr{T}
     n::Int            # number of T-elements in the view (1 for the common struct case)
@@ -617,6 +671,17 @@ function _zref_to_bytes(r::ZRef)
     return bytes
 end
 
+"""
+    put(p::Publisher, r::ZRef; kwargs...)
+    put(s::Session, k::Keyexpr, r::ZRef; congestion_control, priority, express, allowed_destination, kwargs...)
+
+Publish the value held by [`ZRef`](@ref) `r`. A Julia-backed handle is borrowed
+(pinned for the lifetime of the payload); an SHM-backed handle is moved into the
+payload zero-copy. Either way the backing becomes the published bytes and `r` is
+marked consumed — a second `put` (or any access) on it throws.
+
+`kwargs` set per-put options such as `encoding`, `attachment`, and `timestamp`.
+"""
 function put(p::Publisher, r::ZRef; kwargs...)
     bytes = _zref_to_bytes(r)
     opts, enc_ref, attach_ref, ts = _make_put_opts(LibZenohC.z_publisher_put_options_t; kwargs...)

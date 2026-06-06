@@ -61,6 +61,14 @@ _loaned_sample(s::Sample{Ptr{LibZenohC.z_loaned_sample_t}}) = s.s
 _loaned_sample(s::Sample{Base.RefValue{LibZenohC.z_owned_sample_t}}) = _loan(s.s)
 _loaned_sample(h::SampleHolder) = _loan(h.s)
 
+"""
+    timestamp(s::AbstractSample) -> Union{ZTimestamp, Nothing}
+
+The sample's [`ZTimestamp`](@ref) (NTP64 time plus the generating node's id),
+or `nothing` when the sample carries none. The first Zenoh router to receive a
+put stamps it; samples that were never routed through a timestamping node arrive
+unstamped.
+"""
 function timestamp(s::AbstractSample)
     ts = LibZenohC.z_sample_timestamp(_loaned_sample(s))
     if ts == C_NULL
@@ -70,14 +78,34 @@ function timestamp(s::AbstractSample)
     end
 end
 
+"""
+    payload(s::AbstractSample) -> ZBytes
+
+The sample's data as a loaned `ZBytes` borrowing from `s`, so the bytes stay
+valid for as long as the returned value is reachable. Pair with [`encoding`](@ref)
+to interpret them.
+"""
 function payload(s::AbstractSample)
     # Pass `s` as owner so the returned (loaned) ZBytes keeps the sample —
     # and thus the borrowed buffer — alive for as long as it is reachable.
     return ZBytes(LibZenohC.z_sample_payload(_loaned_sample(s)), s)
 end
 
+"""
+    kind(s::AbstractSample) -> SampleKind
+
+The sample's [`SampleKind`](@ref) singleton: `SampleKinds.PUT` for a
+value-carrying put, `SampleKinds.DELETE` for a key deletion. Compare with `===`.
+"""
 kind(s::AbstractSample) = _sample_kind_from_raw(LibZenohC.z_sample_kind(_loaned_sample(s)))
 
+"""
+    keyexpr(s::AbstractSample) -> String
+
+The sample's key expression, copied into a freshly allocated `String`. On decode
+hot paths that only hash or compare the key, [`keyexpr_view`](@ref) avoids this
+allocation.
+"""
 function keyexpr(s::AbstractSample)
     # The view string borrows from the sample; GC.@preserve keeps `s` alive
     # until unsafe_string has copied the bytes out.
@@ -113,6 +141,12 @@ a cold miss.
     end
 end
 
+"""
+    attachment(s::AbstractSample) -> Union{ZBytes, Nothing}
+
+The sample's attachment as a loaned `ZBytes` borrowing from `s`, or `nothing`
+when the sample carries no attachment.
+"""
 function attachment(s::AbstractSample)
     a = LibZenohC.z_sample_attachment(_loaned_sample(s))
     if a == C_NULL
@@ -122,11 +156,40 @@ function attachment(s::AbstractSample)
     end
 end
 
+"""
+    congestion_control(s::AbstractSample) -> CongestionControl
+
+The `CongestionControl` QoS the sample was published with.
+"""
 congestion_control(s::AbstractSample) = _congestion_control_from_raw(LibZenohC.z_sample_congestion_control(_loaned_sample(s)))
+
+"""
+    priority(s::AbstractSample) -> Priority
+
+The `Priority` QoS the sample was published with.
+"""
 priority(s::AbstractSample) = _priority_from_raw(LibZenohC.z_sample_priority(_loaned_sample(s)))
+
+"""
+    express(s::AbstractSample) -> Bool
+
+Whether the sample was sent express, bypassing the batching layer for lower
+latency.
+"""
 express(s::AbstractSample) = LibZenohC.z_sample_express(_loaned_sample(s))
+
+"""
+    reliability(s::AbstractSample) -> Reliability
+
+The `Reliability` QoS the sample was published with.
+"""
 reliability(s::AbstractSample) = _reliability_from_raw(LibZenohC.z_sample_reliability(_loaned_sample(s)))
 
+"""
+    encoding(s::AbstractSample) -> Encoding
+
+The `Encoding` describing the format of the sample's [`payload`](@ref).
+"""
 function encoding(s::AbstractSample)
     return _from_loaned_encoding(LibZenohC.z_sample_encoding(_loaned_sample(s)))
 end

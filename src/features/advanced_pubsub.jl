@@ -199,7 +199,7 @@ keyword is set). Supports `put`, `delete!`, `MatchingListener`,
 """
 mutable struct AdvancedPublisher <: AbstractPublisher
     pub::Base.RefValue{LibZenohC.ze_owned_advanced_publisher_t}
-    keyexpr::Keyexpr  # GC pin
+    keyexpr::AbstractKeyexpr  # GC pin
     closed::Bool
     AdvancedPublisher(pub::Base.RefValue{LibZenohC.ze_owned_advanced_publisher_t}, k::Keyexpr) =
         new(pub, k, false)
@@ -222,6 +222,15 @@ function Base.close(p::AdvancedPublisher)
     return nothing
 end
 
+"""
+    put(ap::AdvancedPublisher, payload; shm=nothing, timestamp, encoding, attachment)
+
+Publish `payload` through advanced publisher `ap` via `ze_advanced_publisher_put`,
+caching it and stamping the configured per-source sequence number. The
+declare-time QoS applies, so the per-call options match the plain
+[`put(::Publisher, …)`](@ref) form (`timestamp`, `encoding`, `attachment`, and
+an SHM provider as `shm`).
+"""
 function put(ap::AdvancedPublisher, payload; shm=nothing, kwargs...)
     bytes = _shm_zbytes(shm, payload)
     inner, enc_ref, attach_ref, ts = _make_put_opts(LibZenohC.z_publisher_put_options_t; kwargs...)
@@ -301,7 +310,7 @@ mutable struct AdvancedSubscriber <: AbstractCallbackSubscriber
     ctx::CallbackCtx{LibZenohC.z_owned_sample_t}
     async_cond::Base.AsyncCondition
     task::Task
-    keyexpr::Keyexpr  # GC pin
+    keyexpr::AbstractKeyexpr  # GC pin
     closed::Bool
 end
 
@@ -316,7 +325,7 @@ mutable struct AdvancedSubscriberHandler <: AbstractSubscriberHandler
     sub::Base.RefValue{LibZenohC.ze_owned_advanced_subscriber_t}
     ctx::CallbackCtx{LibZenohC.z_owned_sample_t}
     async_cond::Base.AsyncCondition
-    keyexpr::Keyexpr
+    keyexpr::AbstractKeyexpr
     closed::Bool
 end
 

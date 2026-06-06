@@ -19,8 +19,22 @@ end
 _loaned_reply(r::Reply{Ptr{LibZenohC.z_loaned_reply_t}}) = r.r
 _loaned_reply(r::Reply{Base.RefValue{LibZenohC.z_owned_reply_t}}) = _loan(r.r)
 
+"""
+    is_ok(r::Reply) -> Bool
+
+Discriminates a [`Reply`](@ref): `true` when it carries a successful
+[`Sample`](@ref) (read it with [`sample`](@ref)), `false` when it carries an
+error (read it with [`error_payload`](@ref) / [`error_encoding`](@ref)).
+"""
 is_ok(r::Reply) = LibZenohC.z_reply_is_ok(_loaned_reply(r))
 
+"""
+    sample(r::Reply) -> Sample
+
+The [`Sample`](@ref) carried by a successful [`Reply`](@ref). The returned
+sample borrows from `r`, which it keeps alive while reachable. Throws
+`ArgumentError` on an error reply — guard with [`is_ok`](@ref) first.
+"""
 function sample(r::Reply)
     is_ok(r) || throw(ArgumentError("Reply is an error; check is_ok(r) first"))
     # Pass `r` as owner: the returned Sample borrows from the reply, so it
@@ -28,11 +42,25 @@ function sample(r::Reply)
     return Sample(LibZenohC.z_reply_ok(_loaned_reply(r)), r)
 end
 
+"""
+    error_payload(r::Reply) -> ZBytes
+
+The error payload of an error [`Reply`](@ref), as a [`ZBytes`](@ref) borrowing
+`r`. Throws `ArgumentError` on a successful reply — guard with [`is_ok`](@ref)
+first; pair with [`error_encoding`](@ref) to interpret the bytes.
+"""
 function error_payload(r::Reply)
     is_ok(r) && throw(ArgumentError("Reply is ok; no error payload"))
     return ZBytes(LibZenohC.z_reply_err_payload(LibZenohC.z_reply_err(_loaned_reply(r))), r)
 end
 
+"""
+    error_encoding(r::Reply) -> Encoding
+
+The [`Encoding`](@ref) of an error [`Reply`](@ref)'s payload, describing how to
+interpret [`error_payload`](@ref). Throws `ArgumentError` on a successful
+reply — guard with [`is_ok`](@ref) first.
+"""
 function error_encoding(r::Reply)
     is_ok(r) && throw(ArgumentError("Reply is ok; no error encoding"))
     return _from_loaned_encoding(LibZenohC.z_reply_err_encoding(LibZenohC.z_reply_err(_loaned_reply(r))))
@@ -95,7 +123,7 @@ mutable struct SubscriberHandler <: AbstractSubscriberHandler
     sub::Base.RefValue{LibZenohC.z_owned_subscriber_t}
     ctx::CallbackCtx{LibZenohC.z_owned_sample_t}
     async_cond::Base.AsyncCondition
-    keyexpr::Keyexpr     # GC pin
+    keyexpr::AbstractKeyexpr     # GC pin
     closed::Bool
 end
 
@@ -118,7 +146,7 @@ _undeclare_sub_handle(s::Base.RefValue{LibZenohC.z_owned_subscriber_t}) =
 # picks the C declare entrypoint (data vs. liveliness vs. advanced) and
 # supplies any extra options. `T` is the concrete handler type to construct;
 # its `sub` handle type is derived from `T`.
-function _open_buffered_sub(declare_fn::F, ::Type{T}, k::Keyexpr,
+function _open_buffered_sub(declare_fn::F, ::Type{T}, k::AbstractKeyexpr,
         capacity::Integer, channel::Symbol) where {F, T<:AbstractSubscriberHandler}
     # KEEP_ALL routes to the heap-backed consume-task form (no drop-oldest).
     channel === :keep_all &&
@@ -164,12 +192,33 @@ function Base.iterate(sh::AbstractSubscriberHandler, box=nothing)
     return (_borrow_sample(box), box)
 end
 
+"""
+    take!(sh::AbstractSubscriberHandler) -> Sample
+
+Block until the next buffered sample arrives and return it as an owned
+[`Sample`](@ref). Throws [`ZenohError`](@ref) once the subscriber is closed and
+its buffer is drained. [`tryrecv!`](@ref) is the non-blocking counterpart;
+[`recv!`](@ref) with a [`SampleHolder`](@ref) is the allocation-free loop.
+"""
 function Base.take!(sh::AbstractSubscriberHandler)
     r = _ring_take(sh.ctx, sh.async_cond)
     r === nothing && throw(ZenohError(LibZenohC.Z_CHANNEL_DISCONNECTED))
     return Sample(r)
 end
 
+"""
+    tryrecv!(sub) -> Sample | Reply | nothing
+    tryrecv!(sub::AbstractSubscriberHandler, h::SampleHolder) -> h | nothing
+
+Non-blocking receive: returns the next buffered item — a [`Sample`](@ref) from a
+buffered subscriber, a [`Reply`](@ref) from a [`GetHandler`](@ref) — or `nothing`
+when nothing is buffered (or the endpoint is closed and drained). The
+[`SampleHolder`](@ref) method fills `h` in place (dropping its previous occupant)
+for an allocation-free poll loop, returning `h` or `nothing`.
+
+The non-blocking counterpart to [`take!`](@ref) / [`recv!`](@ref): poll it when
+you want to do other work rather than park waiting for an item.
+"""
 function tryrecv!(sh::AbstractSubscriberHandler)
     r = _ring_pop!(sh.ctx)
     r isa Base.RefValue && return Sample(r)
@@ -251,13 +300,28 @@ Base.eltype(::Type{<:AbstractSubscriberHandler}) = Sample
 #
 # Buffering is reimplemented in Julia because libzenohc's FIFO handler exposes
 # no push notification to drive a slot-free drain.
+"""
+    KeepAllSubscriber
+
+Lossless buffered subscriber returned by `Base.open(s, k; channel=:keep_all)`.
+Iterate or use [`take!`](@ref)/[`tryrecv!`](@ref) to consume [`Sample`](@ref)s;
+iteration terminates once the subscriber is closed and the backlog is drained.
+
+Keeps every matching sample (ROS `KEEP_ALL`): a consume task drains the
+slot-free callback ring into an unbounded, heap-backed `Channel{Sample}`, so the
+ring stays near-empty and the I/O thread never blocks. The backlog accumulates
+on the Julia heap, bounded only by memory — sustained overload exhausts memory
+rather than deadlocking. Yielded samples are owned and safe to hold across
+iterations, unlike the per-step samples of a drop-oldest
+[`SubscriberHandler`](@ref).
+"""
 mutable struct KeepAllSubscriber{H}
     sub::Base.RefValue{H}
     ctx::CallbackCtx{LibZenohC.z_owned_sample_t}
     async_cond::Base.AsyncCondition
     ch::Channel{Sample}
     task::Task
-    keyexpr::Keyexpr     # GC pin
+    keyexpr::AbstractKeyexpr     # GC pin
     closed::Bool
 end
 
@@ -307,7 +371,7 @@ end
 # notifying FIFO handler.
 const _KEEPALL_HANDOFF = 8192
 
-function _open_keepall_sub(declare_fn::F, ::Type{H}, k::Keyexpr,
+function _open_keepall_sub(declare_fn::F, ::Type{H}, k::AbstractKeyexpr,
         capacity::Integer) where {F, H}
     ctx, async_cond, closure =
         _setup_callback(Val(:sample), max(capacity, _KEEPALL_HANDOFF))
@@ -530,7 +594,7 @@ Keyword arguments:
 - `accept_replies`     — `ReplyKeyexprs.ANY` or `MATCHING_QUERY`
 - `cancellation`       — a [`CancellationToken`](@ref); `cancel` it to abort this get
 """
-function Base.get(s::Session, k::Keyexpr, parameters::AbstractString="";
+function Base.get(s::Session, k::AbstractKeyexpr, parameters::AbstractString="";
         channel::Symbol = :fifo,
         capacity::Integer = 16,
         kwargs...)

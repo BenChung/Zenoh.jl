@@ -14,7 +14,12 @@ const EP = "tcp/localhost:$PORT"
 # blocked indefinitely instead of seeing the failure. A file also keeps the
 # test summary readable and preserves router logs for postmortem.
 const ROUTER_LOG = joinpath(tempdir(), "zenohd-test-$PORT.log")
-router = run(pipeline(`$(Zenohd_jll.zenohd()) -l $EP`,
+# `scouting/multicast/enabled:false`: keep this router from multicast-discovering
+# an unrelated zenohd on the box (e.g. a dev router on the default :7447). Without
+# it the test router connects out to that stray router and gossips it to the test
+# sessions, which then wedge on `close` (10s open_timeout → -128). Sessions also
+# disable multicast (see `_NO_SCOUT`); gossip stays on for matching_status.
+router = run(pipeline(`$(Zenohd_jll.zenohd()) -l $EP --cfg scouting/multicast/enabled:false`,
                       stdout = ROUTER_LOG, stderr = ROUTER_LOG), wait=false)
 
 # Two long-lived router-connected sessions, shared across the semantically
@@ -23,7 +28,20 @@ router = run(pipeline(`$(Zenohd_jll.zenohd()) -l $EP`,
 # Testsets that need distinct peers for their semantics (locality /
 # allowed_origin), SHM (`shm_clients=`), liveliness propagation, or that close
 # the session under test, keep opening their own — they do NOT use S1/S2.
-rcfg() = Zenoh.Config(; str = """{connect: { endpoints: ["$EP"]}}""")
+# Test sessions must talk ONLY to this run's isolated router on $EP. Left at
+# zenoh's default, *multicast* scouting also discovers any other zenohd on the
+# machine — e.g. a dev router on the default :7447 — and that stray
+# cross-connection wedges session `close` (it parks the full 10s open_timeout,
+# then throws ZenohError(-128)). So every test config disables multicast
+# scouting. Gossip stays ON: it only propagates over already-established links
+# (here just the test router), so it can't reach an external zenohd, and the
+# matching_status / MatchingListener tests rely on it to learn a peer's
+# subscriptions through the router. `epcfg` additionally points `connect` at the
+# test router; pass extra JSON5 sections (shm, timestamping, …) via `extra`.
+const _NO_SCOUT = "scouting:{multicast:{enabled:false}}"
+epcfg(extra::AbstractString="") = Zenoh.Config(; str =
+    "{connect:{endpoints:[\"$EP\"]}, $_NO_SCOUT$(isempty(extra) ? "" : ", $extra")}")
+rcfg() = epcfg()
 sleep(0.3)            # let the router bind
 S1 = open(rcfg())
 S2 = open(rcfg())
@@ -88,7 +106,11 @@ try
         @test_throws ArgumentError Config(ZenohConfig(mode = :bogus))
 
         # A typed config opens a working session, like the string-built form.
-        s = open(Config(ZenohConfig(connect = Connect(endpoints = ["$EP"]))))
+        # Scouting off (built through the typed structs) keeps it isolated to the
+        # test router; see the _NO_SCOUT note at the top.
+        s = open(Config(ZenohConfig(
+            connect  = Connect(endpoints = ["$EP"]),
+            scouting = Scouting(multicast = Multicast(enabled = false)))))
         close(s)
     end
 
@@ -270,12 +292,14 @@ try
         # throwaway subprocess and check it captured records.
         script = tempname() * ".jl"
         open(script, "w") do io
-            # Default Config (no nested quotes — keep this raw block escape-free);
-            # session startup alone emits plenty of TRACE/DEBUG records.
+            # Scouting off (JSON5 needs no quotes — keeps this raw block
+            # escape-free) so the throwaway session doesn't discover an external
+            # zenohd and hang on shutdown; session startup alone still emits
+            # plenty of TRACE/DEBUG records.
             println(io, raw"""
             using Zenoh
             ls = Zenoh.open_log_stream(min_severity=Zenoh.LogSeverities.TRACE, capacity=128)
-            s = open(Zenoh.Config())
+            s = open(Zenoh.Config(; str = "{scouting:{multicast:{enabled:false}}}"))
             sleep(2.0)
             recs = Zenoh.LogRecord[]
             while (r = Zenoh.tryrecv!(ls)) !== nothing
@@ -1675,8 +1699,10 @@ try
     end
 
     @timed_testset "Session idempotent close" begin
-        # No router needed — a default peer session opens without connecting.
-        s = open(Zenoh.Config())
+        # No router needed — a standalone peer opens without connecting. Scouting
+        # off so it doesn't discover (and then hang on close against) an external
+        # zenohd; see the _NO_SCOUT note at the top.
+        s = open(Zenoh.Config(; str = "{$_NO_SCOUT}"))
         @test isopen(s)
         close(s)
         @test !isopen(s)          # closed → false (no use-after-free on the freed handle)
@@ -1722,8 +1748,8 @@ try
         @test buf2 isa Zenoh.ShmBufMut
         @test_throws Zenoh.ShmLayoutError Zenoh.alloc(p, 128; align=64)
 
-        # Blocking alloc.
-        buf3 = Zenoh.alloc(p, 64; blocking=true)
+        # Blocking alloc (GC + defragment + blocking policy; its own entrypoint).
+        buf3 = Zenoh.alloc_blocking(p, 64)
         @test length(buf3) == 64
 
         # copyto! convenience.
@@ -1736,10 +1762,82 @@ try
         @test_throws ArgumentError Zenoh.alloc(p, 16; align=3)  # not power of 2
     end
 
+    @timed_testset "try_alloc + shm_serialize + ZBytes(buf,n)" timeout=20 begin
+        p = Zenoh.ShmProvider(1 << 20)
+
+        # try_alloc: success returns a writable ShmBufMut of the requested size.
+        b = Zenoh.try_alloc(p, 128)
+        @test b isa Zenoh.ShmBufMut
+        @test length(b) == 128
+        Zenoh.close(b)                                   # release the unsent buffer on this task
+
+        # try_alloc validates layout up front, like alloc: a non-power-of-two
+        # align is a hard ArgumentError, and an unsupported (non-1) alignment is
+        # a genuine ShmLayoutError — neither degrades to `nothing`.
+        @test_throws ArgumentError Zenoh.try_alloc(p, 64; align=3)
+        @test_throws Zenoh.ShmLayoutError Zenoh.try_alloc(p, 64; align=64)
+
+        # try_alloc's reason for being: a full/fragmented segment is a non-error
+        # outcome, returned as `nothing` rather than thrown. Exhaust a small
+        # provider, then the next request degrades cleanly.
+        small = Zenoh.ShmProvider(1 << 14)
+        held = Zenoh.ShmBufMut[]
+        while (bb = Zenoh.try_alloc(small, 4096)) !== nothing
+            push!(held, bb)
+        end
+        @test !isempty(held)                             # it satisfied at least one before filling
+        @test Zenoh.try_alloc(small, 4096) === nothing   # ALLOC_ERROR → nothing, no throw
+        foreach(Zenoh.close, held)
+
+        # shm_serialize: fill! writes straight into the segment; the result is a
+        # sendable owned, SHM-backed ZBytes.
+        payload = collect(UInt8, 1:64)
+        z = Zenoh.shm_serialize(p, 64) do mem
+            @test mem isa Memory{UInt8}
+            @test length(mem) == 64
+            copyto!(mem, payload)
+        end
+        @test z isa Zenoh.ZBytes
+        @test Vector{UInt8}(z) == payload                # bytes survived the alloc→fill→move
+        @test Zenoh.is_shm(z)                            # and it stayed in shared memory
+        shmview = Zenoh.as_shm(z)
+        @test shmview !== nothing
+        @test Vector{UInt8}(Zenoh.data(shmview)) == payload
+
+        # shm_serialize: a throwing fill! releases the half-filled buffer and
+        # rethrows — no leak, and the provider still satisfies a later alloc.
+        @test_throws ErrorException Zenoh.shm_serialize(p, 32) do mem
+            error("boom")
+        end
+        @test Zenoh.alloc(p, 32) isa Zenoh.ShmBufMut
+
+        # ZBytes(buf, n): the full-length move is the supported case; it consumes
+        # buf, after which close is a no-op (the handle was moved/gravestoned).
+        buf = Zenoh.alloc(p, 48)
+        copyto!(buf, collect(UInt8, 1:48))
+        zf = Zenoh.ZBytes(buf, 48)
+        @test Vector{UInt8}(zf) == collect(UInt8, 1:48)
+        Zenoh.close(buf)                                 # no-op after the move
+
+        # ZBytes(buf): the convenience defaults n to the full granted length.
+        buf2 = Zenoh.alloc(p, 16)
+        @test length(Vector{UInt8}(Zenoh.ZBytes(buf2))) == 16
+
+        # n past the granted length is a BoundsError.
+        buf3 = Zenoh.alloc(p, 16)
+        @test_throws BoundsError Zenoh.ZBytes(buf3, 32)
+        Zenoh.close(buf3)
+        # A shorter n is unsupported (no length-bounded SHM move) → ArgumentError,
+        # not a silent over-send.
+        buf4 = Zenoh.alloc(p, 16)
+        @test_throws ArgumentError Zenoh.ZBytes(buf4, 8)
+        Zenoh.close(buf4)
+    end
+
     @timed_testset "SHM client storage + open kwarg" timeout=20 begin
         cs = Zenoh.default_shm_clients()
         @test cs isa Zenoh.ShmClientStorage
-        c = Zenoh.Config(; str = """{connect: { endpoints: ["$EP"]}}""")
+        c = epcfg()
         s = open(c; shm_clients = cs)
         try
             @test isopen(s)
@@ -1749,8 +1847,8 @@ try
     end
 
     @timed_testset "SHM round-trip publish/subscribe" timeout=20 begin
-        c1 = Zenoh.Config(; str = """{connect: { endpoints: ["$EP"]}}""")
-        c2 = Zenoh.Config(; str = """{connect: { endpoints: ["$EP"]}}""")
+        c1 = epcfg()
+        c2 = epcfg()
         s_pub = open(c1; shm_clients = Zenoh.default_shm_clients())
         s_sub = open(c2; shm_clients = Zenoh.default_shm_clients())
         sleep(0.5)
@@ -1811,8 +1909,8 @@ try
     end
 
     @timed_testset "ZRef typed round-trip (transport-agnostic)" timeout=30 begin
-        c1 = Zenoh.Config(; str = """{connect: { endpoints: ["$EP"]}}""")
-        c2 = Zenoh.Config(; str = """{connect: { endpoints: ["$EP"]}}""")
+        c1 = epcfg()
+        c2 = epcfg()
         s_pub = open(c1; shm_clients = Zenoh.default_shm_clients())
         s_sub = open(c2; shm_clients = Zenoh.default_shm_clients())
         sleep(0.5)
@@ -2018,7 +2116,7 @@ try
 
     @timed_testset "SHM capability discovery" timeout=20 begin
         # Opened without shm_clients: SHM never requested.
-        c0 = Zenoh.Config(; str = """{connect: { endpoints: ["$EP"]}}""")
+        c0 = epcfg()
         s0 = open(c0)
         try
             @test Zenoh.shm_state(s0) == :none
@@ -2031,7 +2129,7 @@ try
         # session-side provider, so discovery reports a non-usable state and
         # zref falls back to Julia. (We assert the shape, not the exact symbol,
         # since it depends on whether obtain fails outright or reports disabled.)
-        c1 = Zenoh.Config(; str = """{connect: { endpoints: ["$EP"]}}""")
+        c1 = epcfg()
         s1 = open(c1; shm_clients = Zenoh.default_shm_clients())
         try
             st = Zenoh.shm_state(s1)
@@ -2048,7 +2146,7 @@ try
 
         # shm_ready never re-probes (or clobbers) a session that never requested
         # SHM — it stays :none and reports false.
-        s2 = open(Zenoh.Config(; str = """{connect: { endpoints: ["$EP"]}}"""))
+        s2 = open(epcfg())
         try
             @test !Zenoh.shm_ready(s2)
             @test Zenoh.shm_state(s2) == :none
@@ -2071,8 +2169,8 @@ try
         # capability consistent with state, SHM backing whenever capable) rather
         # than hard-requiring :ready. The happy path (sub-second warm-up to
         # :ready with a ShmBufMut backing) is verified standalone.
-        shm_cfg = """{connect:{endpoints:["$EP"]}, transport:{shared_memory:{enabled:true}}}"""
-        s = open(Zenoh.Config(; str = shm_cfg);
+        shm_cfg = epcfg("transport:{shared_memory:{enabled:true}}")
+        s = open(shm_cfg;
                  shm_clients = cs, wait_for_shm = true, shm_wait_timeout = 10.0)
         try
             st = Zenoh.shm_state(s)
@@ -2091,7 +2189,7 @@ try
         # comes up (it can — even a connect-only session warms up against an SHM
         # router — so we only assert the *bound*, not the transport).
         t0 = time()
-        s2 = open(Zenoh.Config(; str = """{connect: { endpoints: ["$EP"]}}""");
+        s2 = open(epcfg();
                   shm_clients = cs, wait_for_shm = 0.5, shm_wait_timeout = 0.5)
         try
             @test (time() - t0) < 5.0           # bounded by the 0.5s timeout, no hang
@@ -2102,7 +2200,7 @@ try
 
         # Deterministic Julia fallback: a session opened WITHOUT shm_clients is
         # never SHM-capable, so zref always backs onto Julia memory.
-        s3 = open(Zenoh.Config(; str = """{connect: { endpoints: ["$EP"]}}"""))
+        s3 = open(epcfg())
         try
             @test Zenoh.shm_state(s3) == :none
             @test !Zenoh.shm_capable(s3)
@@ -2114,7 +2212,7 @@ try
 
     @timed_testset "ZRef session alloc-error handler" timeout=20 begin
         cs = Zenoh.default_shm_clients()
-        c  = Zenoh.Config(; str = """{connect: { endpoints: ["$EP"]}}""")
+        c  = epcfg()
 
         # (a) Registered handler is notified, then zref still degrades to Julia.
         seen = Ref{Any}(nothing)
@@ -2157,7 +2255,7 @@ try
         # enable. Verify the API is callable and either succeeds (provider
         # returned) or surfaces a ZenohError — exercising the error path is
         # what matters for v1 coverage of this entrypoint.
-        c = Zenoh.Config(; str = """{connect: { endpoints: ["$EP"]}}""")
+        c = epcfg()
         s = open(c; shm_clients = Zenoh.default_shm_clients())
         try
             local provider
@@ -2185,7 +2283,7 @@ try
     # their session needs timestamping enabled — otherwise the declare fails
     # with Z_EGENERIC. Dedicated router-connected sessions for the advanced
     # testsets below; closed after the last one.
-    atscfg() = Zenoh.Config(; str = """{connect:{endpoints:["$EP"]},timestamping:{enabled:true}}""")
+    atscfg() = epcfg("timestamping:{enabled:true}")
     ATS1 = open(atscfg())
     ATS2 = open(atscfg())
     sleep(0.5)

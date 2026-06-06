@@ -68,6 +68,23 @@ function _from_loaned_encoding(p::Ptr{LibZenohC.z_loaned_encoding_t})
     end
 end
 
+"""
+    Zenoh.Encodings
+
+Named [`Encoding`](@ref) constants for the well-known media types Zenoh
+recognizes, mirroring Rust's `Encoding` associated constants and the C
+`z_encoding_*` accessor set. Each is a precomputed literal-string value
+(e.g. `APPLICATION_JSON == Encoding("application/json")`), spanning the
+`application/*`, `audio/*`, `image/*`, `text/*`, `video/*`, and `zenoh/*`
+families plus `ZENOH_BYTES`, `ZENOH_STRING`, and `ZENOH_SERIALIZED`.
+
+The constants are not exported, so reach them with qualified access:
+
+```julia
+Zenoh.Encodings.APPLICATION_JSON
+Zenoh.Encodings.TEXT_PLAIN
+```
+"""
 module Encodings
     import ..Zenoh: Encoding
     const APPLICATION_CBOR                 = Encoding("application/cbor")

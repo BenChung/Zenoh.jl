@@ -31,7 +31,7 @@ Keyword arguments mirror the channel-form `get`: `target`,
 `accept_replies`. Plus `should_close_on_error::Bool=true` — if `f`
 throws, abandon the remaining replies.
 """
-function Base.get(f::Function, s::Session, k::Keyexpr,
+function Base.get(f::Function, s::Session, k::AbstractKeyexpr,
         parameters::AbstractString="";
         should_close_on_error::Bool=true,
         kwargs...)

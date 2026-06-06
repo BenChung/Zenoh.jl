@@ -16,11 +16,34 @@
 # clients stay type-stable: `Publisher` remains a concrete type, and a client
 # that wants to hold either kind parameterizes (`struct Foo{P<:AbstractPublisher}
 # pub::P end`) rather than storing the abstract field directly.
+"""
+    abstract type AbstractPublisher
+
+Supertype of the plain [`Publisher`](@ref) and the `AdvancedPublisher`. Each
+subtype stays concrete, so a client that holds either kind parameterizes on
+`P<:AbstractPublisher` (`struct Foo{P<:AbstractPublisher}; pub::P; end`) and
+keeps its field type-stable.
+"""
 abstract type AbstractPublisher end
 
+"""
+    Publisher <: AbstractPublisher
+
+Long-lived publisher declared on a [`Keyexpr`](@ref), wrapping an owned
+`z_owned_publisher_t` (the `keyexpr` field pins the key expression alive for
+the C handle's lifetime). QoS — congestion control, priority, express,
+reliability, allowed destination — is fixed at declare time, so [`put`](@ref)
+and [`delete!`](@ref) on a publisher carry only per-call timestamp, encoding,
+and attachment.
+
+Build one with `Publisher(s::Session, k::Keyexpr; …)`, publish with
+`put(p, payload; …)`, and release the C handle with `close(p)` (a finalizer
+drops the handle as a GC safety net). For the convenience one-shot path that
+publishes without a long-lived handle, see `put(s::Session, k, payload; …)`.
+"""
 mutable struct Publisher <: AbstractPublisher
     pub::Base.RefValue{LibZenohC.z_owned_publisher_t}
-    keyexpr::Keyexpr # we have to keep this for GC
+    keyexpr::AbstractKeyexpr # we have to keep this for GC
     closed::Bool
     # Low-level inner constructor: wraps an already-declared owned handle.
     Publisher(pub::Base.RefValue{LibZenohC.z_owned_publisher_t}, k::Keyexpr) =
@@ -141,8 +164,26 @@ end
 
 # Default for `shm=` kwarg routing. shm.jl specializes on AbstractShmProvider
 # to alloc + copy into SHM and produce an SHM-backed ZBytes.
+#
+# The `::Nothing` (no `shm=`) arm forwards an *already-built* owned ZBytes
+# unchanged via the `ZBytes(::ZBytes)` identity (types/bytes.jl), which `put`
+# then `_move`s into `z_publisher_put` — so an SHM payload built upstream (e.g.
+# from a ShmBufMut) is sent zero-copy with no `shm=` kwarg. The paired
+# `_shm_zbytes(::AbstractShmProvider, ::ZBytes)` arm in shm.jl is the same
+# passthrough when a provider happens to be named.
 _shm_zbytes(::Nothing, payload) = ZBytes(payload)
 
+"""
+    put(p::Publisher, payload; shm=nothing, timestamp, encoding, attachment)
+
+Publish `payload` (an update [`Sample`](@ref)) through a declared publisher via
+`z_publisher_put`. The publisher's declare-time QoS applies, so the only
+per-call options are `timestamp`, `encoding`, and `attachment`; an SHM-backed
+payload is selected by passing an SHM provider as `shm`.
+
+For a one-shot publish without declaring a publisher — and with per-call QoS —
+use `put(s::Session, k, payload; …)`.
+"""
 function put(p::Publisher, payload; shm=nothing, kwargs...)
     bytes = _shm_zbytes(shm, payload)
     opts, enc_ref, attach_ref, ts = _make_put_opts(LibZenohC.z_publisher_put_options_t; kwargs...)
@@ -153,7 +194,21 @@ function put(p::Publisher, payload; shm=nothing, kwargs...)
     end
 end
 
-function put(s::Session, k::Keyexpr, payload;
+"""
+    put(s::Session, k::Keyexpr, payload; shm=nothing, congestion_control, priority,
+        express, reliability, allowed_destination, timestamp, encoding, attachment)
+
+Publish `payload` on keyexpr `k` in one shot via `z_put`, the lightweight path
+that needs no declared [`Publisher`](@ref). Because there is no long-lived
+handle to bake QoS into, this form accepts the full per-call QoS set
+(`congestion_control`, `priority`, `express`, `reliability`,
+`allowed_destination`) alongside the shared `timestamp`/`encoding`/`attachment`
+options; pass an SHM provider as `shm` for an SHM-backed payload.
+
+Reach for [`Publisher`](@ref) plus `put(p, payload; …)` when publishing
+repeatedly on the same key.
+"""
+function put(s::Session, k::AbstractKeyexpr, payload;
         shm=nothing,
         congestion_control::Union{Nothing, CongestionControl} = nothing,
         priority::Union{Nothing, Priority}                    = nothing,
@@ -190,7 +245,7 @@ end
 
 Publish a delete (tombstone) sample on keyexpr `k`.
 """
-function Base.delete!(s::Session, k::Keyexpr;
+function Base.delete!(s::Session, k::AbstractKeyexpr;
         timestamp::Union{Nothing, ZTimestamp}                 = nothing,
         congestion_control::Union{Nothing, CongestionControl} = nothing,
         priority::Union{Nothing, Priority}                    = nothing,

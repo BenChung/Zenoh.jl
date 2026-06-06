@@ -31,6 +31,7 @@ include("messaging/channel.jl")     # Reply, SubscriberHandler, GetHandler, get
 include("messaging/subscriber.jl")  # Subscriber, callback + channel open
 include("messaging/get_callback.jl")# callback-form get
 include("messaging/queryable.jl")   # Query, Queryable
+include("types/declared_keyexpr.jl")# DeclaredKeyexpr (declared keyexpr id + session put/get/delete!)
 
 # Higher-level features
 include("features/liveliness.jl")

@@ -18,6 +18,33 @@ function _release(data::Ptr{Cvoid}, ctx::Ptr{Cvoid})
     return C_NULL
 end
 
+"""
+    ZBytes
+
+Zenoh's raw byte payload, with minimized copying. The `R` type parameter selects
+the underlying C handle: an owned `z_owned_bytes_t` for payloads you build to send,
+or a borrowed `z_loaned_bytes_t` for inbound payloads that borrow a [`Sample`](@ref)'s
+buffer. A single payload may stitch together multiple network fragments, so iterating
+a `ZBytes` walks its byte slices (see `iterate`); materialize the whole
+thing with `String(z)` or `Vector{UInt8}(z)`.
+
+Constructors:
+- `ZBytes()` — empty owned payload.
+- `ZBytes(v::Vector{T}; copy=false)`, `ZBytes(m::Memory{T})`, `ZBytes(r::Ref{T})` —
+  by default zero-copy: the source is pinned and handed to libzenoh with a deleter, so
+  it is freed only once the C side is done. Pass `copy=true` for libzenoh to take its
+  own copy immediately, releasing the source.
+- `ZBytes(s::String; copy=false)` — same zero-copy/copy choice for a string.
+- `ZBytes(s::Symbol)` — a static-lifetime string payload, no pinning.
+
+Owned `ZBytes` deliberately carry no GC finalizer: reclaim one by moving it into
+[`put`](@ref)/`reply`/`get`, which hands ownership to zenoh, or by [`close`](@ref)ing
+it on your own task. A moved `ZBytes` is consumed and must not be reused. This keeps
+cleanup on the caller's task, never a finalizer thread, which avoids an SHM bookkeeping
+deadlock.
+
+See also [`ZBytesWriter`](@ref) for incremental construction.
+"""
 struct ZBytes{R <: Union{Base.RefValue{LibZenohC.z_owned_bytes_t}, Ptr{LibZenohC.z_loaned_bytes_t}}}
         b::R
         # For the loaned form (`b::Ptr`), `owner` holds the Julia value the
@@ -179,6 +206,18 @@ function Base.Vector{UInt8}(z::ZBytes)
     end
 end
 
+"""
+    ZBytesReader
+
+An `IO`-conforming, seekable reader over a [`ZBytes`](@ref) payload. Obtain one with
+`open(z, Val(:read))`; it borrows the payload's buffer (so the source `ZBytes` must
+outlive it) and reads the bytes back via the usual `IO` interface — `read`,
+`readbytes!`, `unsafe_read`, `readavailable`, plus `seek`/`skip`/`position`,
+`bytesavailable`, and `eof`. Borrowing nothing of its own, [`close`](@ref) is a no-op.
+
+For walking the payload one network fragment at a time without copying, see
+[`ZBytesSliceReader`](@ref).
+"""
 struct ZBytesReader{Z <: ZBytes} <: IO
     z::Z
     r::Base.RefValue{LibZenohC.z_bytes_reader_t}
@@ -236,6 +275,19 @@ function Base.iterate(b::ZBytes, biterator::ZBytesSliceIterator)
     end
 end
 
+"""
+    ZBytesSliceReader
+
+An `IO`-conforming reader that streams a [`ZBytes`](@ref) payload across its underlying
+network fragments, copying out of one borrowed slice at a time rather than materializing
+the whole payload. Obtain one with `open(z, Val(:readslice))`; it borrows the payload's
+buffer (so the source `ZBytes` must outlive it). Reads — `read`, `readbytes!`,
+`unsafe_read` — transparently advance to the next slice when the current one is
+exhausted; `skip`, `position`, `bytesavailable`, and `eof` track progress over the whole
+payload. Borrowing nothing of its own, [`close`](@ref) is a no-op.
+
+For a seekable reader over the payload as a single stream, see [`ZBytesReader`](@ref).
+"""
 mutable struct ZBytesSliceReader{Z <: ZBytes} <: IO
     z::Z
 
@@ -327,6 +379,26 @@ end
 # form below guarantees one of these always fires. The only way to leak the
 # writer is to build one with the bare constructor and then drop the
 # reference without `finish`/`close` — a misuse, not a normal path.
+"""
+    ZBytesWriter()
+
+An `IO`-conforming, incremental builder for a [`ZBytes`](@ref) payload. `write(w, x)`
+appends a value's raw bytes and `append!``(w, z)` splices an existing `ZBytes`
+onto the tail (moving it, zero-copy when possible). [`finish`](@ref)`(w)` consumes the
+writer and returns the assembled payload.
+
+The writer owns a C resource and carries no GC finalizer, so reclaim it explicitly on
+your own task: [`finish`](@ref) consumes it, or [`close`](@ref) drops an unfinished one.
+The do-block form `open(ZBytes, Val(:write)) do w … end` guarantees one of these always
+fires and returns the finished payload:
+
+```julia
+bytes = open(ZBytes, Val(:write)) do w
+    write(w, "header")
+    write(w, payload)
+end
+```
+"""
 mutable struct ZBytesWriter <: IO
     w::Base.RefValue{LibZenohC.z_owned_bytes_writer_t}
     done::Bool
@@ -352,7 +424,16 @@ function Base.append!(w::ZBytesWriter, z::ZBytes)
     return w
 end
 
-# Consume the writer and produce the assembled payload.
+"""
+    finish(w::ZBytesWriter) -> ZBytes
+
+Consume the writer and return the assembled owned [`ZBytes`](@ref) payload. This moves
+the writer's C resource out, so the writer is spent afterward and any further
+`write`/`append!`/`finish` errors.
+
+`finish` is also defined for [`ZSerializer`](@ref), where it closes out the structured
+codec into a payload.
+"""
 function finish(w::ZBytesWriter)
     w.done && error("ZBytesWriter already finished")
     b = Ref{LibZenohC.z_owned_bytes_t}()

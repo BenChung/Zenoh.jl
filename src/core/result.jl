@@ -1,4 +1,12 @@
-struct ZenohError <: Exception 
+"""
+    ZenohError <: Exception
+
+The exception raised when a Zenoh C call returns a non-`Z_OK` result.
+
+The `code` field holds the `LibZenohC.z_result_t` status code returned by the
+failed call.
+"""
+struct ZenohError <: Exception
     code::LibZenohC.z_result_t
 end
 

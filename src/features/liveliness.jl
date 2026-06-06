@@ -27,7 +27,7 @@ safety net (a no-op on the null slot left by `close`).
 """
 mutable struct LivelinessToken
     t::Base.RefValue{LibZenohC.z_owned_liveliness_token_t}
-    keyexpr::Keyexpr  # GC pin
+    keyexpr::AbstractKeyexpr  # GC pin
     closed::Bool
     function LivelinessToken(s::Session, k::Keyexpr)
         opts = Ref{LibZenohC.z_liveliness_token_options_t}()
@@ -92,7 +92,7 @@ mutable struct LivelinessSubscriber <: AbstractCallbackSubscriber
     ctx::CallbackCtx{LibZenohC.z_owned_sample_t}
     async_cond::Base.AsyncCondition
     task::Task
-    keyexpr::Keyexpr  # GC pin
+    keyexpr::AbstractKeyexpr  # GC pin
     closed::Bool
 end
 
@@ -119,7 +119,7 @@ mutable struct LivelinessSubscriberHandler <: AbstractSubscriberHandler
     sub::Base.RefValue{LibZenohC.z_owned_subscriber_t}
     ctx::CallbackCtx{LibZenohC.z_owned_sample_t}
     async_cond::Base.AsyncCondition
-    keyexpr::Keyexpr
+    keyexpr::AbstractKeyexpr
     closed::Bool
 end
 

@@ -2,6 +2,28 @@
 # finalizer; the buffer-borrowing constructor pins the source `Vector`
 # until libzenoh releases it via the _release callback (see bytes.jl).
 
+"""
+    ZSlice{S}
+
+A contiguous byte slice, Zenoh's `z_owned_slice_t` / `z_loaned_slice_t`. The `S`
+type parameter selects the ownership state: an owned slice (`Ref{z_owned_slice_t}`)
+or a borrowed one (`Ptr{z_loaned_slice_t}`).
+
+Construct one of three ways:
+
+- `ZSlice()` — an empty owned slice.
+- `ZSlice(buf::Vector{UInt8}; copy=false)` — wraps a Julia byte vector. The
+  default takes ownership zero-copy: `buf` is pinned and freed only once libzenoh
+  releases it, so it must stay reachable. Pass `copy=true` to have libzenoh take
+  its own copy immediately, freeing `buf` from that obligation.
+- `ZSlice(ref::Ptr{z_loaned_slice_t})` — a loaned slice borrowing C-owned memory.
+
+Owned slices carry a GC drop finalizer; loaned slices own nothing and need no
+cleanup. `length` and `isempty` report the slice's byte count.
+
+Unlike an owned [`ZBytes`](@ref), which deliberately omits a finalizer, owned
+slices finalize on the GC because they are never SHM-backed.
+"""
 struct ZSlice{S <: Union{Base.RefValue{LibZenohC.z_owned_slice_t}, Ptr{LibZenohC.z_loaned_slice_t}}}
     s::S
     function ZSlice()

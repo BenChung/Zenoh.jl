@@ -22,6 +22,22 @@
 
 # ── Locality ────────────────────────────────────────────────────────────
 
+"""
+    Localities
+
+Singleton sum type for message locality, scoping which nodes a publication reaches
+or a query accepts: `Localities.ANY` (both session-local and remote),
+`Localities.SESSION_LOCAL` (the same session only), or
+`Localities.REMOTE` (remote peers only).
+
+Each level is a distinct zero-field type under the abstract supertype
+[`Locality`](@ref Zenoh.Locality). Pass the instance constants `Localities.ANY`,
+`Localities.SESSION_LOCAL`, or `Localities.REMOTE` as the `allowed_destination=`
+keyword on a publisher declaration, session `put`, or `get`. `Localities.DEFAULT`
+is `ANY`, mirroring libzenoh's `Z_LOCALITY_DEFAULT == Z_LOCALITY_ANY`.
+
+See also [`Locality`](@ref Zenoh.Locality).
+"""
 module Localities
     import ..LibZenohC
 
@@ -38,6 +54,16 @@ module Localities
     const DEFAULT       = ANY
 end
 
+"""
+    Locality
+
+Abstract supertype for the [`Localities`](@ref) singletons. Method signatures
+take `Union{Nothing, Locality}` to dispatch on locality and reject any other
+value at parse time. The concrete instances are `Localities.ANY`,
+`Localities.SESSION_LOCAL`, and `Localities.REMOTE`.
+
+See also [`Localities`](@ref).
+"""
 const Locality = Localities.Locality
 
 _raw(::Localities.Any)          = LibZenohC.Z_LOCALITY_ANY
@@ -57,6 +83,26 @@ Base.show(io::IO, ::Localities.Remote)       = print(io, "Localities.REMOTE")
 
 # ── Priority ────────────────────────────────────────────────────────────
 
+"""
+    Priorities
+
+Singleton sum type for the seven transmission-queue priority levels, from highest
+to lowest: `Priorities.REAL_TIME`,
+`Priorities.INTERACTIVE_HIGH`,
+`Priorities.INTERACTIVE_LOW`,
+`Priorities.DATA_HIGH`, `Priorities.DATA`,
+`Priorities.DATA_LOW`, and
+`Priorities.BACKGROUND`.
+
+When QoS is enabled in the transport config, zenoh keeps one transmission queue per
+priority and services them highest-first. Each level is a distinct zero-field type
+under the abstract supertype [`Priority`](@ref Zenoh.Priority); pass an instance constant as the
+`priority=` keyword on a publisher declaration or session `put`, and read it back
+off an inbound sample with [`priority`](@ref Zenoh.priority). `Priorities.DEFAULT` is `DATA`,
+mirroring libzenoh's `Z_PRIORITY_DEFAULT`.
+
+See also [`Priority`](@ref Zenoh.Priority).
+"""
 module Priorities
     import ..LibZenohC
 
@@ -81,6 +127,16 @@ module Priorities
     const DEFAULT          = DATA
 end
 
+"""
+    Priority
+
+Abstract supertype for the [`Priorities`](@ref) singletons. Method signatures take
+`Union{Nothing, Priority}` to dispatch on priority and reject any other value at
+parse time. The seven concrete instances run `Priorities.REAL_TIME` (highest)
+through `Priorities.BACKGROUND` (lowest).
+
+See also [`Priorities`](@ref), [`priority`](@ref).
+"""
 const Priority = Priorities.Priority
 
 _raw(::Priorities.RealTime)        = LibZenohC.Z_PRIORITY_REAL_TIME
@@ -112,6 +168,21 @@ Base.show(io::IO, ::Priorities.Background)      = print(io, "Priorities.BACKGROU
 
 # ── CongestionControl ───────────────────────────────────────────────────
 
+"""
+    CongestionControls
+
+Singleton sum type for the strategy applied when a message hits a full transmission
+queue: `CongestionControls.BLOCK` waits for the queue to drain, while
+`CongestionControls.DROP` discards the message.
+
+Each level is a distinct zero-field type under the abstract supertype
+[`CongestionControl`](@ref Zenoh.CongestionControl). Pass an instance constant as the `congestion_control=`
+keyword on a publisher declaration or session `put`, and read it back off an inbound
+sample with [`congestion_control`](@ref Zenoh.congestion_control). `CongestionControls.DEFAULT` is `DROP`,
+mirroring libzenoh's `Z_CONGESTION_CONTROL_DEFAULT`.
+
+See also [`CongestionControl`](@ref Zenoh.CongestionControl).
+"""
 module CongestionControls
     import ..LibZenohC
 
@@ -126,6 +197,16 @@ module CongestionControls
     const DEFAULT = DROP
 end
 
+"""
+    CongestionControl
+
+Abstract supertype for the [`CongestionControls`](@ref) singletons. Method
+signatures take `Union{Nothing, CongestionControl}` to dispatch on the strategy and
+reject any other value at parse time. The concrete instances are
+`CongestionControls.BLOCK` and `CongestionControls.DROP`.
+
+See also [`CongestionControls`](@ref), [`congestion_control`](@ref).
+"""
 const CongestionControl = CongestionControls.CongestionControl
 
 _raw(::CongestionControls.Block) = LibZenohC.Z_CONGESTION_CONTROL_BLOCK
@@ -148,6 +229,24 @@ Base.show(io::IO, ::CongestionControls.Drop)  = print(io, "CongestionControls.DR
 # (A publisher's reliability can't be overridden per-`put`: zenoh's
 # `z_publisher_put_options_t` carries no reliability field.)
 
+"""
+    Reliabilities
+
+Singleton sum type for writer-side delivery reliability:
+`Reliabilities.RELIABLE` has the network layer retransmit lost
+messages, while `Reliabilities.BEST_EFFORT` tolerates loss.
+
+Each level is a distinct zero-field type under the abstract supertype
+[`Reliability`](@ref Zenoh.Reliability). Set it as the `reliability=` keyword at publisher declare time
+or per session `put`; it is fixed on the sender, so a `Publisher` has no per-`put`
+override. The chosen value is reported back on each inbound sample via
+[`reliability`](@ref Zenoh.reliability). The same singletons also drop into static
+`PublicationRule`/`QosOverwriteValues` config sections, emitting the zenoh config
+tokens `"reliable"` / `"best_effort"`. `Reliabilities.DEFAULT` is `RELIABLE`,
+mirroring libzenoh's `Z_RELIABILITY_DEFAULT`.
+
+See also [`Reliability`](@ref Zenoh.Reliability).
+"""
 module Reliabilities
     import ..LibZenohC
 
@@ -162,6 +261,16 @@ module Reliabilities
     const DEFAULT     = RELIABLE
 end
 
+"""
+    Reliability
+
+Abstract supertype for the [`Reliabilities`](@ref) singletons. Method signatures
+take `Union{Nothing, Reliability}` to dispatch on reliability and reject any other
+value at parse time. The concrete instances are `Reliabilities.RELIABLE` and
+`Reliabilities.BEST_EFFORT`.
+
+See also [`Reliabilities`](@ref), [`reliability`](@ref).
+"""
 const Reliability = Reliabilities.Reliability
 
 _raw(::Reliabilities.BestEffort) = LibZenohC.Z_RELIABILITY_BEST_EFFORT
@@ -184,6 +293,21 @@ _to_json5(::Reliabilities.BestEffort) = _to_json5("best_effort")
 
 # ── ReplyKeyexpr ────────────────────────────────────────────────────────
 
+"""
+    ReplyKeyexprs
+
+Singleton sum type controlling which key expressions a query accepts on its replies:
+`ReplyKeyexprs.MATCHING_QUERY` requires each reply to match
+the query key expression, while `ReplyKeyexprs.ANY` admits replies under
+any key.
+
+Each level is a distinct zero-field type under the abstract supertype
+[`ReplyKeyexpr`](@ref Zenoh.ReplyKeyexpr). Pass an instance constant as the `accept_replies=` keyword on
+a `get`. `ReplyKeyexprs.DEFAULT` is `MATCHING_QUERY`, mirroring libzenoh's
+`Z_REPLY_KEYEXPR_DEFAULT`.
+
+See also [`ReplyKeyexpr`](@ref Zenoh.ReplyKeyexpr).
+"""
 module ReplyKeyexprs
     import ..LibZenohC
 
@@ -198,6 +322,16 @@ module ReplyKeyexprs
     const DEFAULT        = MATCHING_QUERY
 end
 
+"""
+    ReplyKeyexpr
+
+Abstract supertype for the [`ReplyKeyexprs`](@ref) singletons. Method signatures
+take `Union{Nothing, ReplyKeyexpr}` to dispatch on the policy and reject any other
+value at parse time. The concrete instances are `ReplyKeyexprs.ANY` and
+`ReplyKeyexprs.MATCHING_QUERY`.
+
+See also [`ReplyKeyexprs`](@ref).
+"""
 const ReplyKeyexpr = ReplyKeyexprs.ReplyKeyexpr
 
 _raw(::ReplyKeyexprs.Any)           = LibZenohC.Z_REPLY_KEYEXPR_ANY
@@ -219,6 +353,23 @@ Base.show(io::IO, ::ReplyKeyexprs.MatchingQuery) = print(io, "ReplyKeyexprs.MATC
 # value everywhere (`QueryTargets.ALL`); a `Symbol` shorthand (`:all`)
 # is also accepted at the call sites via `_as_query_target`.
 
+"""
+    QueryTargets
+
+Singleton sum type selecting which matching queryables a `get` or `Querier` reaches:
+`QueryTargets.BEST_MATCHING` follows the routing strategy,
+`QueryTargets.ALL` reaches every matching queryable, and
+`QueryTargets.ALL_COMPLETE` reaches every queryable declared
+complete.
+
+Each level is a distinct zero-field type under the abstract supertype
+[`QueryTarget`](@ref Zenoh.QueryTarget). Pass an instance constant as the `target=` keyword on a `get`
+or `Querier`; the matching `Symbol` shorthand (`:best_matching`, `:all`,
+`:all_complete`) is accepted there too. `QueryTargets.DEFAULT` is `BEST_MATCHING`,
+mirroring libzenoh's `Z_QUERY_TARGET_DEFAULT`.
+
+See also [`QueryTarget`](@ref Zenoh.QueryTarget).
+"""
 module QueryTargets
     import ..LibZenohC
 
@@ -235,6 +386,16 @@ module QueryTargets
     const DEFAULT       = BEST_MATCHING
 end
 
+"""
+    QueryTarget
+
+Abstract supertype for the [`QueryTargets`](@ref) singletons. Method signatures take
+`Union{Nothing, QueryTarget}` to dispatch on the target and reject any other value at
+parse time. The concrete instances are `QueryTargets.BEST_MATCHING`,
+`QueryTargets.ALL`, and `QueryTargets.ALL_COMPLETE`.
+
+See also [`QueryTargets`](@ref).
+"""
 const QueryTarget = QueryTargets.QueryTarget
 
 _raw(::QueryTargets.BestMatching) = LibZenohC.Z_QUERY_TARGET_BEST_MATCHING
@@ -252,6 +413,26 @@ Base.show(io::IO, ::QueryTargets.AllComplete)  = print(io, "QueryTargets.ALL_COM
 # these singletons drop straight into the options builders. As with
 # QueryTarget, a `Symbol` shorthand (`:none`, …) is accepted too.
 
+"""
+    QueryConsolidations
+
+Singleton sum type for the reply de-duplication strategy applied to a `get` or
+`Querier`: `QueryConsolidations.AUTO` defers to the queryable's
+preferences, `QueryConsolidations.NONE` forwards every sample,
+`QueryConsolidations.MONOTONIC` forwards immediately unless a
+same-or-newer timestamp was already sent for the key, and
+`QueryConsolidations.LATEST` holds back samples to send only the
+highest-timestamp set per key.
+
+Each level is a distinct zero-field type under the abstract supertype
+[`QueryConsolidation`](@ref Zenoh.QueryConsolidation); `_raw` builds the libzenoh `z_query_consolidation_t`
+struct directly via the matching constructor function. Pass an instance constant as
+the `consolidation=` keyword on a `get` or `Querier`; the matching `Symbol` shorthand
+(`:auto`, `:none`, `:monotonic`, `:latest`) is accepted there too.
+`QueryConsolidations.DEFAULT` is `AUTO`.
+
+See also [`QueryConsolidation`](@ref Zenoh.QueryConsolidation).
+"""
 module QueryConsolidations
     import ..LibZenohC
 
@@ -269,6 +450,17 @@ module QueryConsolidations
     const DEFAULT   = AUTO
 end
 
+"""
+    QueryConsolidation
+
+Abstract supertype for the [`QueryConsolidations`](@ref) singletons. Method
+signatures take `Union{Nothing, QueryConsolidation}` to dispatch on the strategy and
+reject any other value at parse time. The concrete instances are
+`QueryConsolidations.AUTO`, `QueryConsolidations.NONE`,
+`QueryConsolidations.MONOTONIC`, and `QueryConsolidations.LATEST`.
+
+See also [`QueryConsolidations`](@ref).
+"""
 const QueryConsolidation = QueryConsolidations.QueryConsolidation
 
 _raw(::QueryConsolidations.Auto)      = LibZenohC.z_query_consolidation_auto()
@@ -286,6 +478,19 @@ Base.show(io::IO, ::QueryConsolidations.Latest)    = print(io, "QueryConsolidati
 # Whether a Sample carries a value (PUT) or signals a key deletion
 # (DELETE). Read off an inbound Sample via `kind(::Sample)`.
 
+"""
+    SampleKinds
+
+Singleton sum type recording how a sample was produced:
+`SampleKinds.PUT` carries a value, while
+`SampleKinds.DELETE` signals a key deletion.
+
+Each level is a distinct zero-field type under the abstract supertype
+[`SampleKind`](@ref Zenoh.SampleKind). Read it off an inbound sample with [`kind`](@ref Zenoh.kind).
+`SampleKinds.DEFAULT` is `PUT`, mirroring libzenoh's `Z_SAMPLE_KIND_DEFAULT`.
+
+See also [`SampleKind`](@ref Zenoh.SampleKind).
+"""
 module SampleKinds
     import ..LibZenohC
 
@@ -300,6 +505,15 @@ module SampleKinds
     const DEFAULT = PUT
 end
 
+"""
+    SampleKind
+
+Abstract supertype for the [`SampleKinds`](@ref) singletons. The concrete instances
+are `SampleKinds.PUT` and `SampleKinds.DELETE`, recovered from an inbound sample by
+[`kind`](@ref).
+
+See also [`SampleKinds`](@ref).
+"""
 const SampleKind = SampleKinds.SampleKind
 
 _raw(::SampleKinds.Put)    = LibZenohC.Z_SAMPLE_KIND_PUT
@@ -318,6 +532,20 @@ Base.show(io::IO, ::SampleKinds.Delete) = print(io, "SampleKinds.DELETE")
 #
 # The role a discovered node announces in a scouting `Hello`.
 
+"""
+    WhatAmIs
+
+Singleton sum type for the role a node announces during discovery:
+`WhatAmIs.ROUTER`, `WhatAmIs.PEER`, or
+`WhatAmIs.CLIENT`.
+
+Each role is a distinct zero-field type under the abstract supertype
+[`WhatAmI`](@ref Zenoh.WhatAmI). It surfaces on the [`Hello`](@ref Zenoh.Hello) messages delivered by
+[`scout`](@ref Zenoh.scout). Discovery roles carry no settable default, so this submodule
+defines no `DEFAULT` constant.
+
+See also [`WhatAmI`](@ref Zenoh.WhatAmI).
+"""
 module WhatAmIs
     import ..LibZenohC
 
@@ -332,6 +560,15 @@ module WhatAmIs
     const CLIENT = Client()
 end
 
+"""
+    WhatAmI
+
+Abstract supertype for the [`WhatAmIs`](@ref) singletons. The concrete instances are
+`WhatAmIs.ROUTER`, `WhatAmIs.PEER`, and `WhatAmIs.CLIENT`, read off the
+[`Hello`](@ref) messages produced by [`scout`](@ref).
+
+See also [`WhatAmIs`](@ref).
+"""
 const WhatAmI = WhatAmIs.WhatAmI
 
 _raw(::WhatAmIs.Router) = LibZenohC.Z_WHATAMI_ROUTER

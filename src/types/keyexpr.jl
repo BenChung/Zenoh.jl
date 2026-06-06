@@ -1,7 +1,41 @@
 # Keyexpr — owned key expression handle plus relations, composition,
 # canonicalization, and the `kexpr"…"` string macro.
 
-struct Keyexpr
+"""
+    Keyexpr(s::AbstractString; autocanonize=false) -> Keyexpr
+
+Owned, validated handle denoting a *set* of keys. A key is a `/`-separated
+list of UTF-8 chunks (`/` is the hierarchical separator); a key expression
+adds the wildcards `*` (any chunk), `\$*` (any run within a chunk), and `**`
+(zero or more chunks). See the
+[key-expression language](https://zenoh.io/docs/manual/abstractions/#key-expression)
+for the full grammar and canonical-form rules.
+
+Build one from a literal with [`@kexpr_str`](@ref) (which also supports
+`\$name`/`\$(expr)` interpolation), or from a runtime string with this
+constructor. The input is copied into Zenoh-owned storage and freed when the
+`Keyexpr` is garbage-collected. Pass `autocanonize=true` to reduce redundant
+wildcard runs while constructing; otherwise a non-canonical input throws
+[`ZenohError`](@ref) rather than being silently rewritten.
+
+The set-relation API ([`relation_to`](@ref), [`includes`](@ref),
+[`intersects`](@ref), [`issubset`](@ref), [`isdisjoint`](@ref)) and the
+composition functions [`concat`](@ref) and [`join`](@ref Base.join) all operate
+on `Keyexpr` values. Textual read-back is available through `String`, `string`,
+and `print`.
+
+`==` and `hash` use canonical-string equality. This differs from set equality:
+`relation_to(a, b) == IntersectionLevels.EQUALS` can hold for keyexprs that are
+not `==` (e.g. `a/**` and `a/**/**` denote the same key-set but differ as text).
+"""
+# Common supertype for the plain `Keyexpr` and the network-optimized
+# `DeclaredKeyexpr` (types/declared_keyexpr.jl). Both wrap an owned
+# `z_owned_keyexpr_t` in a `.k` field and answer `_loan`, so either flows
+# through every operation that loans a key expression. `Keyexpr` stays the
+# concrete default; `DeclaredKeyexpr` is the opt-in id-backed form.
+abstract type AbstractKeyexpr end
+
+struct Keyexpr <: AbstractKeyexpr
     k::Base.RefValue{LibZenohC.z_owned_keyexpr_t}
     function Keyexpr(s::String; kwargs...)
         return Keyexpr(Base.unsafe_convert(Cstring, s); kwargs...)
@@ -28,11 +62,12 @@ end
 
 _loan(s::Keyexpr) = _loan(s.k)
 
-export Keyexpr, @kexpr_str
+export AbstractKeyexpr, Keyexpr, @kexpr_str
 export includes, intersects, concat, canonize, is_canon
 export relation_to, IntersectionLevel, IntersectionLevels
 
-function _as_view_string(k::Keyexpr)
+# Works for any AbstractKeyexpr (plain or declared) — both expose `.k`.
+function _as_view_string(k::AbstractKeyexpr)
     view = Ref{LibZenohC.z_view_string_t}()
     LibZenohC.z_keyexpr_as_view_string(_loan(k.k), view)
     loaned = LibZenohC.z_view_string_loan(view)
@@ -40,9 +75,9 @@ function _as_view_string(k::Keyexpr)
                         LibZenohC.z_string_len(loaned))
 end
 
-Base.String(k::Keyexpr) = _as_view_string(k)
-Base.string(k::Keyexpr) = _as_view_string(k)
-Base.print(io::IO, k::Keyexpr) = print(io, _as_view_string(k))
+Base.String(k::AbstractKeyexpr) = _as_view_string(k)
+Base.string(k::AbstractKeyexpr) = _as_view_string(k)
+Base.print(io::IO, k::AbstractKeyexpr) = print(io, _as_view_string(k))
 Base.show(io::IO, k::Keyexpr) = print(io, "Keyexpr(\"", _as_view_string(k), "\")")
 
 function Base.:(==)(a::Keyexpr, b::Keyexpr)
@@ -81,6 +116,18 @@ end
 # onto Julia's set-comparison predicates: `a ⊆ b` (`issubset`) and
 # `isdisjoint(a, b)`, alongside the existing `includes` (⊇) / `intersects`.
 
+"""
+    IntersectionLevels
+
+Namespace holding the four set-relation singletons returned by
+[`relation_to`](@ref Zenoh.relation_to): `DISJOINT` (no key in common),
+`INTERSECTS` (some keys shared, neither key-set contains the other),
+`INCLUDES` (the first key-set contains the second), and `EQUALS` (identical
+key-sets). They mirror Zenoh's `SetIntersectionLevel` lattice, where equality
+implies inclusion implies intersection. Each constant is an instance of a
+like-named singleton type (`Disjoint`, `Intersects`, `Includes`, `Equals`),
+all subtypes of [`IntersectionLevel`](@ref Zenoh.IntersectionLevel).
+"""
 module IntersectionLevels
     import ..LibZenohC
 
@@ -97,6 +144,13 @@ module IntersectionLevels
     const EQUALS     = Equals()
 end
 
+"""
+    IntersectionLevel
+
+Abstract supertype of the four set-relation singletons in
+[`IntersectionLevels`](@ref) and the declared return type of
+[`relation_to`](@ref).
+"""
 const IntersectionLevel = IntersectionLevels.IntersectionLevel
 
 _raw(::IntersectionLevels.Disjoint)   = LibZenohC.Z_KEYEXPR_INTERSECTION_LEVEL_DISJOINT
@@ -126,9 +180,9 @@ other), `INCLUDES` (`a` ⊇ `b`), or `EQUALS` (same key-set). This is the
 lattice level behind [`includes`](@ref), [`intersects`](@ref),
 [`issubset`](@ref), and [`isdisjoint`](@ref).
 
-Note `EQUALS` is *set* equality, which can differ from `==` (canonical
-string equality) — e.g. `a/**` and `a/**/**` are set-equal but not
-string-equal.
+`EQUALS` is *set* equality. For constructed `Keyexpr` values it coincides
+with `==`, since every `Keyexpr` is stored canonical and `==` compares
+that canonical text.
 """
 function relation_to(a::Keyexpr, b::Keyexpr)
     return _intersection_level_from_raw(
@@ -182,8 +236,10 @@ end
 """
     canonize(s::AbstractString) -> String
 
-Return the canonical form of keyexpr string `s` (collapses `//`, `**/**`,
-etc.). Throws [`ZenohError`](@ref) if `s` is not a valid key expression.
+Return the canonical form of keyexpr string `s`, reducing redundant
+wildcard runs (`**/**` → `**`, `**/*` → `*/**`, `\$*\$*` → `\$*`). Throws
+[`ZenohError`](@ref) if `s` is not a valid key expression; an empty chunk
+such as the `//` in `a//b` is invalid and throws rather than collapsing.
 """
 function canonize(s::AbstractString)
     buf = Vector{UInt8}(codeunits(String(s)))
@@ -346,7 +402,7 @@ end
 
 """
     kexpr"key/expr"
-    kexpr"key//expr"c
+    kexpr"key/**/**"c
     kexpr"prefix/\$inner/suffix"
     kexpr"\$a/\$(b)"c
 
@@ -356,12 +412,13 @@ interpolation of `Keyexpr` or `AbstractString` values.
 The interpolating form assembles the result in a single byte buffer
 with one `z_keyexpr_from_substr` call — `Keyexpr` pieces are read via
 `z_keyexpr_as_view_string` directly out of their canonical-storage
-bytes, so no intermediate Julia `String` is constructed per
-interpolation.
+bytes, splicing in their bytes without a per-interpolation Julia
+`String`.
 
-The `c` flag opts into autocanonicalization (collapses `//`, `**/**`,
-…). Without it, the assembled result must already be canonical or the
-call throws [`ZenohError`](@ref).
+The `c` flag opts into autocanonicalization, reducing redundant
+wildcard runs (`**/**` → `**`, `**/*` → `*/**`). Without it, the
+assembled result must already be canonical or the call throws
+[`ZenohError`](@ref).
 """
 macro kexpr_str(s, flags="")
     autocanonize = false

@@ -76,30 +76,19 @@ end
 
 # ── `what` keyword ───────────────────────────────────────────────────
 
-const _WHAT_BITS = (
-    router = UInt32(LibZenohC.Z_WHAT_ROUTER),
-    peer   = UInt32(LibZenohC.Z_WHAT_PEER),
-    client = UInt32(LibZenohC.Z_WHAT_CLIENT),
-)
-
-function _what_bits(atom::Symbol)
-    bits = UInt32(0)
-    for part in split(String(atom), '_')
-        sym = Symbol(part)
-        haskey(_WHAT_BITS, sym) ||
-            throw(ArgumentError("unknown scout `what` atom: $(part)"))
-        bits |= _WHAT_BITS[sym]
-    end
-    return bits
-end
+# `Z_WHAT_*` are the scout filter bitflags — distinct from the `Z_WHATAMI_*`
+# role enum that `_raw(::WhatAmI)` returns and that `Hello.whatami` carries.
+_what_bits(::WhatAmIs.Router) = UInt32(LibZenohC.Z_WHAT_ROUTER)
+_what_bits(::WhatAmIs.Peer)   = UInt32(LibZenohC.Z_WHAT_PEER)
+_what_bits(::WhatAmIs.Client) = UInt32(LibZenohC.Z_WHAT_CLIENT)
 
 _what_value(::Nothing) = nothing
-_what_value(s::Symbol) = LibZenohC.z_what_t(_what_bits(s))
+_what_value(w::WhatAmI) = LibZenohC.z_what_t(_what_bits(w))
 function _what_value(xs::Union{Tuple, AbstractVector})
     bits = UInt32(0)
     for x in xs
-        x isa Symbol || throw(ArgumentError(
-            "scout `what` collection must contain Symbols, got $(typeof(x))"))
+        x isa WhatAmI || throw(ArgumentError(
+            "scout `what` collection must contain WhatAmI values, got $(typeof(x))"))
         bits |= _what_bits(x)
     end
     return LibZenohC.z_what_t(bits)
@@ -133,10 +122,10 @@ Invoke `f(::Hello)` on a dedicated Julia task for each peer announcement
 heard during a scouting round. Blocks until libzenohc finishes the round
 (timeout elapsed or scout otherwise terminated).
 
-`what` filters which node roles to scout for; accepts a `Symbol`, a
-collection of symbols, or `nothing` to use the libzenohc default.
-Recognised atoms: `:router`, `:peer`, `:client`. Compound symbols are
-split on `_`, so `:router_peer` and `(:router, :peer)` are equivalent.
+`what` filters which node roles to scout for; accepts a [`WhatAmI`](@ref)
+singleton, a collection of them, or `nothing` to use the libzenohc default.
+Pass `WhatAmIs.ROUTER`, `.PEER`, or `.CLIENT`; combine roles with a tuple,
+e.g. `what=(WhatAmIs.ROUTER, WhatAmIs.PEER)`.
 
 `config` is cloned — `z_scout` consumes its config, so the caller's
 `Config` remains usable.

@@ -50,6 +50,13 @@ function keyexpr(q::Query)
     end
 end
 
+"""
+    parameters(q::Query) -> String
+
+The selector parameters of query `q` — the URL-query-style key/value part
+following `?` in the selector that issued the query (e.g. `"arg1=val1;arg2=val2"`),
+empty when the `get` carried none.
+"""
 function parameters(q::Query)
     GC.@preserve q begin
         view = Ref{LibZenohC.z_view_string_t}()
@@ -76,6 +83,13 @@ function attachment(q::Query)
     return a == C_NULL ? nothing : ZBytes(a, q)
 end
 
+"""
+    accepts_replies(q::Query) -> Bool
+
+Whether query `q` accepts replies. When `false`, the originating `get`
+wants no data, so [`reply`](@ref) / [`reply_err`](@ref) / [`reply_del`](@ref)
+calls are wasted.
+"""
 accepts_replies(q::Query) = LibZenohC.z_query_accepts_replies(_loaned_query(q))
 
 # ── Reply option builders ──────────────────────────────────────────────
@@ -244,12 +258,19 @@ Call `close(q)` to undeclare; idempotent in both forms.
 """
 mutable struct Queryable{B}
     qable::Base.RefValue{LibZenohC.z_owned_queryable_t}
-    keyexpr::Keyexpr     # GC pin
+    keyexpr::AbstractKeyexpr     # GC pin
     backing::B
     closed::Bool
 end
 
 # Alias for the channel (buffered, ring-backed) Queryable form.
+"""
+    QueryableHandler
+
+The channel form of [`Queryable`](@ref): the buffered, ring-backed
+[`Queryable`](@ref)`{RingBacking}` returned by `Queryable(s, k; channel=…)`.
+`iterate` / `take!` / [`tryrecv!`](@ref) consume the buffered [`Query`](@ref)s.
+"""
 const QueryableHandler = Queryable{RingBacking}
 
 """

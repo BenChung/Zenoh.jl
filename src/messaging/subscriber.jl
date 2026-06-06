@@ -35,7 +35,7 @@ mutable struct Subscriber <: AbstractCallbackSubscriber
     ctx::CallbackCtx{LibZenohC.z_owned_sample_t}
     async_cond::Base.AsyncCondition
     task::Task
-    keyexpr::Keyexpr  # GC pin
+    keyexpr::AbstractKeyexpr  # GC pin
     closed::Bool
 end
 
@@ -50,7 +50,7 @@ _callback_sub_handle(::Type{T}) where {T<:AbstractCallbackSubscriber} =
 # supplies any extra options. `T` is the concrete subscriber type to
 # construct on success; its `sub` handle type is derived from `T`.
 function _open_callback_sub(declare_fn::F, ::Type{T}, f::Function,
-        k::Keyexpr; should_close_on_error::Bool=true) where {F, T<:AbstractCallbackSubscriber}
+        k::AbstractKeyexpr; should_close_on_error::Bool=true) where {F, T<:AbstractCallbackSubscriber}
     ctx, async_cond, closure = _setup_callback(Val(:sample))
 
     sub = Ref{_callback_sub_handle(T)}()
@@ -88,7 +88,7 @@ const ADVANCED_SUB_KW = (:history, :recovery, :query_timeout_ms, :detection)
 
 # --- Plain (data-plane) subscriber bodies ----------------------------
 
-function _open_plain_callback(f::Function, s::Session, k::Keyexpr;
+function _open_plain_callback(f::Function, s::Session, k::AbstractKeyexpr;
         should_close_on_error::Bool=true,
         allowed_origin::Union{Nothing, Locality} = nothing)
     opts = _make_subscriber_opts(allowed_origin)
@@ -99,7 +99,7 @@ function _open_plain_callback(f::Function, s::Session, k::Keyexpr;
     end
 end
 
-function _open_plain_buffered(s::Session, k::Keyexpr;
+function _open_plain_buffered(s::Session, k::AbstractKeyexpr;
         channel::Symbol = :fifo, capacity::Integer = 16,
         allowed_origin::Union{Nothing, Locality} = nothing)
     opts = _make_subscriber_opts(allowed_origin)
@@ -134,7 +134,7 @@ the cell until `close(sub)` is called.
 `allowed_origin` filters which peers' samples are delivered. Accepts a
 `Locality` singleton (`Localities.ANY` / `SESSION_LOCAL` / `REMOTE`).
 """
-function Base.open(f::Function, s::Session, k::Keyexpr; kwargs...)
+function Base.open(f::Function, s::Session, k::AbstractKeyexpr; kwargs...)
     _wants_advanced((; kwargs...), Val(ADVANCED_SUB_KW)) &&
         return AdvancedSubscriber(f, s, k; kwargs...)
     return _open_plain_callback(f, s, k; kwargs...)
@@ -165,7 +165,7 @@ feature keyword routes to an [`AdvancedSubscriberHandler`](@ref).
 
 `allowed_origin` accepts a `Locality` singleton (`Localities.ANY` etc.).
 """
-function Base.open(s::Session, k::Keyexpr; kwargs...)
+function Base.open(s::Session, k::AbstractKeyexpr; kwargs...)
     _wants_advanced((; kwargs...), Val(ADVANCED_SUB_KW)) &&
         return AdvancedSubscriber(s, k; kwargs...)
     return _open_plain_buffered(s, k; kwargs...)

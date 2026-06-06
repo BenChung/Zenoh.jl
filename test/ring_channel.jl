@@ -76,12 +76,35 @@ end
         for _ in 1:8; Zenoh.put(pub, "w"); end          # warm up + force compilation
         sleep(0.3); drain!(sub, h, 8)
         N = 100
-        for _ in 1:N; Zenoh.put(pub, "x"); end
-        sleep(0.5)                                       # all N buffered (capacity 256)
-        GC.gc()
-        a = @allocated drain!(sub, h, N)
-        @info "recv! steady-state allocations" total_bytes=a per_sample=a/N
-        @test a == 0                                     # zero-allocation receive
+        # Assert the steady-state `recv!` fast path (item already buffered) is
+        # zero-alloc by observing one allocation-free drain. We measure several
+        # and take the MINIMUM rather than trusting a single shot, because
+        # `@allocated` reads the *process-global* byte counter and the test
+        # subprocess is multi-threaded (Julia ships a default :interactive
+        # thread, so `Threads.nthreads()` here is 1+1). Concurrent allocation on
+        # that thread — event-loop callbacks from the shared S1/S2 sessions,
+        # finalizers — lands in the measurement window and is misattributed to
+        # `drain!`, so a lone measurement is routinely nonzero under full-suite
+        # load. That noise is strictly additive (a foreign thread can't *reduce*
+        # our counter), so a single exact-0 observation proves the path itself
+        # allocates nothing; we just need a window free of concurrent allocation.
+        # Loop until one is clean (cap well under the 10s watchdog). Two extra
+        # guards make clean windows frequent: gate on all N being buffered so
+        # `recv!` never parks on `wait(async_cond)` (~2.7KB/park; capacity 256 >
+        # N ⇒ no drop), and `yield()` after `GC.gc()` to drain GC-scheduled
+        # finalizers out of the window.
+        best = typemax(Int)
+        for _ in 1:50
+            for _ in 1:N; Zenoh.put(pub, "x"); end
+            t0 = time()
+            while sub.ctx.count < N && time() - t0 < 5; sleep(0.02); end
+            sub.ctx.count >= N || continue               # delivery stalled; skip round
+            GC.gc(); yield()
+            best = min(best, @allocated drain!(sub, h, N))
+            best == 0 && break
+        end
+        @info "recv! steady-state allocations" min_bytes=best
+        @test best == 0                                  # zero-allocation fast path
     finally
         close(sub); close(pub)
     end
