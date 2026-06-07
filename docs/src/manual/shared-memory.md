@@ -134,6 +134,7 @@ shm_ready
 AbstractShmProvider
 ShmProvider
 SharedShmProvider
+session_shm_provider
 obtain_shm_provider
 alloc
 available
@@ -183,6 +184,8 @@ with_payload_memory
 with_payload_memory_checked
 unsafe_with_memory
 unsafe_memory
+try_alloc
+alloc_blocking
 put(::Zenoh.Publisher, ::Zenoh.ZRef)
 ```
 
