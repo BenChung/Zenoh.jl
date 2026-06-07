@@ -311,10 +311,15 @@ mutable struct ShmBuf{R <: Union{Base.RefValue{LibZenohC.z_owned_shm_t},
     parent::Any
 end
 
+# Recycle token for a borrowed ShmBuf view: forwarded from the parent ZBytes (and
+# thence the sample/holder). `nothing` for the owned freeze form (parent=nothing),
+# so the gated accessors below are a no-op on the send side.
+@inline _token(b::ShmBuf) = b.parent isa ZBytes ? _token(b.parent::ZBytes) : nothing
+
 Base.length(b::ShmBufMut) = length(b.mem)
-Base.length(b::ShmBuf)    = length(b.mem)
+Base.length(b::ShmBuf)    = (_check_token(_token(b)); length(b.mem))
 Base.pointer(b::ShmBufMut) = pointer(b.mem)
-Base.pointer(b::ShmBuf)    = pointer(b.mem)
+Base.pointer(b::ShmBuf)    = (_check_token(_token(b)); pointer(b.mem))
 """
     data(b::ShmBufMut) -> Memory{UInt8}
     data(b::ShmBuf)    -> Memory{UInt8}
@@ -324,7 +329,7 @@ segment (zero-copy). Mutating the result of `data(::ShmBufMut)` writes the
 segment in place.
 """
 data(b::ShmBufMut) = b.mem
-data(b::ShmBuf)    = b.mem
+data(b::ShmBuf)    = (_check_token(_token(b)); b.mem)
 Base.copyto!(b::ShmBufMut, src::AbstractVector{UInt8}) =
     (length(src) <= length(b.mem) || throw(BoundsError(b.mem, length(src)));
      unsafe_copyto!(pointer(b.mem), pointer(src), length(src)); b)

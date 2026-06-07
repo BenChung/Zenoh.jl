@@ -50,6 +50,11 @@ mutable struct ZRef{T, B}
     backing::B
     ptr::Ptr{T}
     consumed::Bool       # send-side: true once `put` moved/borrowed the backing
+    # Recycle token for a borrowed receive-side ZRef (tier-1 SHM / tier-2 slice over
+    # an in-place-reused source); `nothing` for send-side and owned-copy (tier-3)
+    # handles. Checked in `_check_live` so a read after the source recycled throws
+    # `BorrowError` instead of reading freed memory.
+    tok::Union{Nothing,Tuple{_RecycleEpoch,UInt64}}
 end
 
 @inline _check_isbits(::Type{T}) where {T} =
@@ -70,7 +75,7 @@ the buffer on send — no copy into a zenoh buffer.
 function zref(::Type{T}) where {T}
     _check_isbits(T)
     box = Ref{T}()
-    return ZRef{T, typeof(box)}(box, Base.unsafe_convert(Ptr{T}, box), false)
+    return ZRef{T, typeof(box)}(box, Base.unsafe_convert(Ptr{T}, box), false, nothing)
 end
 
 """
@@ -89,7 +94,7 @@ function zref(p::AbstractShmProvider, ::Type{T}) where {T}
         e isa ShmLayoutError || rethrow()
         alloc(p, sizeof(T))                       # provider can't align → unaligned
     end
-    return ZRef{T, ShmBufMut}(buf, Ptr{T}(pointer(buf)), false)
+    return ZRef{T, ShmBufMut}(buf, Ptr{T}(pointer(buf)), false, nothing)
 end
 
 """
@@ -160,7 +165,7 @@ function zref(sample::Sample, ::Type{T}) where {T}
     # Tier 1 — SHM: contiguous and sender-aligned.
     shm = as_shm(zb)
     if shm !== nothing && length(shm) >= n && _aligned(pointer(shm), T)
-        return ZRef{T, typeof(shm)}(shm, Ptr{T}(pointer(shm)), false)
+        return ZRef{T, typeof(shm)}(shm, Ptr{T}(pointer(shm)), false, _token(zb))
     end
 
     # Tier 2 — non-SHM, single contiguous slice, if it happens to be aligned.
@@ -170,7 +175,7 @@ function zref(sample::Sample, ::Type{T}) where {T}
         p  = LibZenohC.z_slice_data(sl)
         if LibZenohC.z_slice_len(sl) >= n && _aligned(p, T)
             backing = _ZRefView(zb, view)
-            return ZRef{T, _ZRefView}(backing, Ptr{T}(p), false)
+            return ZRef{T, _ZRefView}(backing, Ptr{T}(p), false, _token(zb))
         end
     end
 
@@ -183,7 +188,7 @@ function zref(sample::Sample, ::Type{T}) where {T}
         rdr = open(zb, Val(:read))
         Base.unsafe_read(rdr, dst, UInt(n))
     end
-    return ZRef{T, typeof(box)}(box, Base.unsafe_convert(Ptr{T}, box), false)
+    return ZRef{T, typeof(box)}(box, Base.unsafe_convert(Ptr{T}, box), false, nothing)
 end
 
 # --- payload as Memory{T} (serialization buffers) --------------------
@@ -271,10 +276,16 @@ mutable struct Borrowed{T}
     owner::Any        # pins the source while valid; cleared on close
     valid::Bool
     writable::Bool    # true ⇒ owns a private copy; mutation is allowed
+    # Recycle token for a zero-copy borrow over an in-place-reused source (iterate
+    # box / SampleHolder); `nothing` for an owned-copy borrow. Checked after `valid`
+    # so a held view fails with `BorrowError` once its source slot recycled.
+    tok::Union{Nothing,Tuple{_RecycleEpoch,UInt64}}
 end
 
-@inline _check(b::Borrowed) =
-    getfield(b, :valid) || throw(BorrowError())
+@inline function _check(b::Borrowed)
+    getfield(b, :valid) || throw(BorrowError())   # closed/escaped first — never deref a stale tok
+    _check_token(getfield(b, :tok))               # source recycled out from under a zero-copy view
+end
 @inline _check_writable(b::Borrowed{T}) where {T} =
     getfield(b, :writable) || throw(ArgumentError(
         "Borrowed{$T} is a read-only view; create it with `writable=true` (which copies) to mutate"))
@@ -357,6 +368,7 @@ Base.propertynames(::Borrowed{T}) where {T} = fieldnames(T)
 function Base.close(b::Borrowed)
     setfield!(b, :valid, false)
     setfield!(b, :owner, nothing)      # release the pin so the source can be reclaimed
+    setfield!(b, :tok, nothing)        # drop the recycle-token reference
     return nothing
 end
 
@@ -392,7 +404,7 @@ function borrow(z::ZBytes, ::Type{T}=UInt8; writable::Bool=false) where {T}
         # Zero-copy tier 1 — SHM segment.
         shm = as_shm(z)
         if shm !== nothing && length(shm) >= nb && _aligned(pointer(shm), T)
-            return Borrowed{T}(Ptr{T}(pointer(shm)), n, shm, true, false)
+            return Borrowed{T}(Ptr{T}(pointer(shm)), n, shm, true, false, _token(z))
         end
         # Zero-copy tier 2 — single contiguous, aligned network slice.
         view = Ref{LibZenohC.z_view_slice_t}()
@@ -400,7 +412,7 @@ function borrow(z::ZBytes, ::Type{T}=UInt8; writable::Bool=false) where {T}
             sl = LibZenohC.z_view_slice_loan(view)
             p  = LibZenohC.z_slice_data(sl)
             if LibZenohC.z_slice_len(sl) >= nb && _aligned(p, T)
-                return Borrowed{T}(Ptr{T}(p), n, _ZRefView(z, view), true, false)
+                return Borrowed{T}(Ptr{T}(p), n, _ZRefView(z, view), true, false, _token(z))
             end
         end
     end
@@ -408,7 +420,7 @@ function borrow(z::ZBytes, ::Type{T}=UInt8; writable::Bool=false) where {T}
     # Owned copy — the fragmented/misaligned fallback, and the only safely
     # mutable backing. `owner = mem` keeps it alive while the borrow is valid.
     mem = as_memory(z, T)
-    return Borrowed{T}(Ptr{T}(pointer(mem)), n, mem, true, writable)
+    return Borrowed{T}(Ptr{T}(pointer(mem)), n, mem, true, writable, nothing)
 end
 borrow(s::Sample, ::Type{T}=UInt8; writable::Bool=false) where {T} =
     borrow(payload(s), T; writable=writable)
@@ -632,6 +644,7 @@ end
 
 @inline function _check_live(r::ZRef)
     r.consumed && throw(ArgumentError("ZRef has been consumed by put; its buffer is no longer valid"))
+    _check_token(r.tok)   # borrowed receive ZRef: throw if its source slot was recycled
 end
 
 @inline function Base.getindex(r::ZRef{T}) where {T}

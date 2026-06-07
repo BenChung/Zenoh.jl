@@ -205,3 +205,102 @@ end
         # already closed
     end
 end
+
+# Use-after-recycle guard: a tier-1/2 zero-copy view held over an in-place-reused
+# source (SampleHolder / iterate box) must raise BorrowError once the source
+# recycles, instead of silently reading freed memory. UInt8 views are always a
+# contiguous, aligned zero-copy tier (tier-1 SHM if available, else tier-2 slice),
+# so the recycle token is always captured.
+@timed_testset "UAF guard: SampleHolder recv! invalidates a held view" begin
+    s = S1
+    k = Zenoh.Keyexpr("test/ring/uaf_holder")
+    sub = open(s, k; channel=:fifo, capacity=64)
+    pub = Zenoh.Publisher(s, k)
+    sleep(0.4)
+    try
+        Zenoh.put(pub, UInt8[0x11, 0x22, 0x33, 0x44])
+        Zenoh.put(pub, UInt8[0x55, 0x66, 0x77, 0x88])
+        sleep(0.4)
+        h = Zenoh.SampleHolder()
+        @test Zenoh.recv!(sub, h) === h
+        b1 = Zenoh.borrow(Zenoh.payload(h), UInt8)              # Borrowed over occupant #1
+        @test b1[1] == 0x11
+        r1 = zref(Zenoh._borrow_sample(h.s, h.epoch), UInt8)    # ZRef over the same occupant
+        @test r1[] == 0x11
+        @test Zenoh.recv!(sub, h) === h                         # in-place recycle: bumps the epoch
+        @test_throws Zenoh.BorrowError b1[1]                    # was a silent read of recycled memory
+        @test_throws Zenoh.BorrowError r1[]                     # ZRef path now throws too (closed gap)
+        b2 = Zenoh.borrow(Zenoh.payload(h), UInt8)              # fresh occupant -> fresh epoch works
+        @test b2[1] == 0x55
+        Zenoh.put(pub, UInt8[0x99]); sleep(0.3); Zenoh.recv!(sub, h)
+        @test_throws Zenoh.BorrowError b1[1]                    # ABA: stale view never re-validates
+    finally
+        close(sub); close(pub)
+    end
+end
+
+@timed_testset "UAF guard: iterate box reuse invalidates a held view" begin
+    s = S1
+    k = Zenoh.Keyexpr("test/ring/uaf_iter")
+    sub = open(s, k; channel=:fifo, capacity=64)
+    pub = Zenoh.Publisher(s, k)
+    sleep(0.4)
+    try
+        Zenoh.put(pub, UInt8[0xAA, 0xBB]); Zenoh.put(pub, UInt8[0xCC, 0xDD])
+        sleep(0.4)
+        it = iterate(sub); @test it !== nothing
+        smp, st = it
+        held = Zenoh.borrow(smp, UInt8)                         # Borrowed over iterate occupant #1
+        zr   = zref(smp, UInt8)                                 # ZRef over the same occupant
+        @test held[1] == 0xAA
+        @test zr[] == 0xAA
+        it2 = iterate(sub, st); @test it2 !== nothing           # advance: bump + drop + refill the box
+        @test_throws Zenoh.BorrowError held[1]
+        @test_throws Zenoh.BorrowError zr[]
+    finally
+        close(sub); close(pub)
+    end
+end
+
+@timed_testset "UAF guard: owned-sample view survives a source advance" begin
+    s = S1
+    k = Zenoh.Keyexpr("test/ring/uaf_owned")
+    sub = open(s, k; channel=:fifo, capacity=64)
+    pub = Zenoh.Publisher(s, k)
+    sleep(0.4)
+    try
+        Zenoh.put(pub, UInt8[0xEE, 0xEF]); Zenoh.put(pub, UInt8[0xEE, 0xEF])
+        sleep(0.4)
+        owned = take!(sub)                                      # owned Sample (token-free, pinned)
+        b = Zenoh.borrow(owned, UInt8)
+        take!(sub)                                              # advance the ring; must NOT invalidate owned
+        @test b[1] == 0xEE                                      # still valid — no false BorrowError
+        @test Zenoh.isvalid(b)
+    finally
+        close(sub); close(pub)
+    end
+end
+
+@timed_testset "UAF guard: view held past iterate exit is invalidated on GC" begin
+    s = S1
+    k = Zenoh.Keyexpr("test/ring/uaf_break")
+    sub = open(s, k; channel=:fifo, capacity=64)
+    pub = Zenoh.Publisher(s, k)
+    sleep(0.4)
+    # Return the view from INSIDE the loop so the iterate state (the _IterBox that
+    # carries the break-safety finalizer) is released on return — the view pins
+    # box.s/box.epoch but NOT the wrapper, so GC finalizes it. The finalizer must
+    # bump the epoch before dropping, else the held view would silently read freed
+    # memory (the gap the #5 review found).
+    grab(sub) = (for smp in sub; return Zenoh.borrow(smp, UInt8); end; nothing)
+    try
+        Zenoh.put(pub, UInt8[0x7A, 0x7B]); sleep(0.3)
+        held = grab(sub)
+        @test held !== nothing
+        @test held[1] == 0x7A                                   # valid before GC (occupant not yet dropped)
+        GC.gc(); GC.gc()                                        # finalize the _IterBox -> bump+drop invalidates held
+        @test_throws Zenoh.BorrowError held[1]
+    finally
+        close(sub); close(pub)
+    end
+end

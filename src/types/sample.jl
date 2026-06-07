@@ -4,6 +4,33 @@
 # representations share one set of accessors.
 abstract type AbstractSample end
 
+# Per-occupant recycle epoch for the in-place-reused sample sources (the iterate
+# box and SampleHolder). One cell per source; its `gen` is bumped — never
+# reallocated, so zero per-item allocation — each time the source drops its
+# occupant and refills. A zero-copy view over such a source captures `(cell, gen)`
+# by value; `_check_token` fails once the cell's gen has moved on, turning the
+# otherwise-silent use-after-recycle into a catchable `BorrowError`. A monotone
+# counter (not a re-armed bool) is ABA-safe: a stale view's captured gen can never
+# match again.
+mutable struct _RecycleEpoch
+    gen::UInt64
+end
+_RecycleEpoch() = _RecycleEpoch(UInt64(1))
+@inline _bump!(e::_RecycleEpoch) = (e.gen += UInt64(1); nothing)
+
+# Views over already-safe sources (owned/loaned samples) carry `nothing` and skip
+# the check (a not-taken branch — zero overhead, no behavior change). `BorrowError`
+# is defined in types/zref.jl (included after this file); it is referenced here
+# only in the late-bound throw body, resolved at call time.
+@inline _check_token(::Nothing) = nothing
+@inline function _check_token(t::Tuple{_RecycleEpoch,UInt64})
+    t[1].gen == t[2] || throw(BorrowError(
+        "received zero-copy view used after its sample slot was recycled (iterate \
+         advanced, or recv!/tryrecv! refilled the holder); copy out with \
+         `collect`/`as_memory`, or take an owned sample with `take!`/`:keep_all`"))
+    return nothing
+end
+
 """
     Sample
 
@@ -37,25 +64,43 @@ don't stash it or anything derived from it (`payload`, `keyexpr`, …) past then
 """
 mutable struct SampleHolder <: AbstractSample
     s::Base.RefValue{LibZenohC.z_owned_sample_t}
+    epoch::_RecycleEpoch     # bumped on each in-place refill; views capture it to detect staleness
 end
 function SampleHolder()
     r = Ref{LibZenohC.z_owned_sample_t}()
     # Gravestone init so an unfilled/finished holder drops cleanly (drop of a
     # null owned sample is a no-op).
     LibZenohC.z_internal_sample_null(r)
-    h = SampleHolder(r)
-    finalizer(hh -> LibZenohC.z_sample_drop(_move(hh.s)), h)
+    h = SampleHolder(r, _RecycleEpoch())
+    # Bump before the finalizer drop too, for the same reason as the iterate box:
+    # a view built via the internal `_borrow_sample(h.s, h.epoch)` pins h.s/h.epoch
+    # but not `h`, so a finalize-time drop must invalidate it. (The public `payload(h)`
+    # path pins `h` itself, blocking this finalizer while a view is live; this covers
+    # the rest, keeping the every-drop-bumps invariant uniform.)
+    finalizer(hh -> (_bump!(hh.epoch); LibZenohC.z_sample_drop(_move(hh.s))), h)
     return h
 end
 # Drop the holder's current occupant (no-op on the gravestone), readying it for
-# the next in-place refill.
-@inline _drop_current!(h::SampleHolder) = LibZenohC.z_sample_drop(_move(h.s))
+# the next in-place refill. Bump the epoch FIRST so any view still held over the
+# previous occupant fails its `_check_token` rather than reading the recycled slot.
+@inline _drop_current!(h::SampleHolder) = (_bump!(h.epoch); LibZenohC.z_sample_drop(_move(h.s)))
 
 # Non-finalized owned `Sample` borrowing a caller-managed box (the iterate
-# reusable box owns the drop). Concrete `Sample` so it satisfies `::Sample`
-# call sites; valid only while the box holds this occupant.
-@inline _borrow_sample(box::Base.RefValue{LibZenohC.z_owned_sample_t}) =
-    Sample{Base.RefValue{LibZenohC.z_owned_sample_t}}(box, nothing)
+# reusable box owns the drop). Concrete `Sample` so it satisfies `::Sample` call
+# sites; valid only while the box holds this occupant. The box's recycle `epoch`
+# rides in `owner` (otherwise `nothing` for this form), so views derived from the
+# sample capture it and detect a later in-place recycle.
+@inline _borrow_sample(box::Base.RefValue{LibZenohC.z_owned_sample_t}, epoch::_RecycleEpoch) =
+    Sample{Base.RefValue{LibZenohC.z_owned_sample_t}}(box, epoch)
+
+# Recycle token for a view's backing source: a `(cell, gen)` pair for the in-place
+# reusable sources (iterate box / SampleHolder), `nothing` for owned/loaned samples
+# (whose views pin the sample and are safe to hold). Recovered from `owner` without
+# changing its role as the GC pin; owned (`owner=nothing`) and loaned (`owner=Reply`)
+# forms both yield `nothing`.
+@inline _token(s::Sample) = (o = getfield(s, :owner); o isa _RecycleEpoch ? (o, o.gen) : nothing)
+@inline _token(h::SampleHolder) = (h.epoch, h.epoch.gen)
+@inline _token(z::ZBytes) = (o = getfield(z, :owner); (o isa Sample || o isa SampleHolder) ? _token(o) : nothing)
 
 _loaned_sample(s::Sample{Ptr{LibZenohC.z_loaned_sample_t}}) = s.s
 _loaned_sample(s::Sample{Base.RefValue{LibZenohC.z_owned_sample_t}}) = _loan(s.s)

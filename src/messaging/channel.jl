@@ -173,23 +173,37 @@ end
 # is valid only until the next iteration — don't stash it or `collect` it (use
 # `take!`, or `:keep_all`, for owned samples; `recv!` for a zero-alloc loop).
 # Mirrors the channel `Queryable` query contract.
+# Iterate state carrier: the reusable owned-sample box plus its recycle epoch.
+# The epoch is bumped each step so a view held over the previous occupant fails
+# `_check_token` (BorrowError) instead of reading the recycled slot.
+mutable struct _IterBox
+    s::Base.RefValue{LibZenohC.z_owned_sample_t}
+    epoch::_RecycleEpoch
+end
+
 function Base.iterate(sh::AbstractSubscriberHandler, box=nothing)
     if box === nothing
         # Fresh box: `Ref{z_owned_sample_t}()` is UNINITIALISED memory. Take first and
         # arm the break-safety finalizer only once the box owns a real sample — if the
-        # take fails before any item (closed/drained), the box is dropped by GC as plain
+        # take fails before any item (closed/drained), the Ref is dropped by GC as plain
         # memory with no `z_sample_drop`, never as a garbage owned-sample (which would
         # segfault `drop_in_place` at finalize/atexit).
-        box = Ref{LibZenohC.z_owned_sample_t}()
-        _ring_take_into!(box, sh.ctx, sh.async_cond) || return nothing
-        finalizer(b -> LibZenohC.z_sample_drop(_move(b)), box)
-        return (_borrow_sample(box), box)
+        s = Ref{LibZenohC.z_owned_sample_t}()
+        _ring_take_into!(s, sh.ctx, sh.async_cond) || return nothing
+        box = _IterBox(s, _RecycleEpoch())
+        # Bump in the break-safety finalizer too: a zero-copy view held past a
+        # `break` pins box.s/box.epoch but NOT this _IterBox wrapper, so when the
+        # wrapper is finalized it must invalidate that view — every recycle site
+        # bumps before dropping, or the freed buffer would be read silently.
+        finalizer(b -> (_bump!(b.epoch); LibZenohC.z_sample_drop(_move(b.s))), box)
+        return (_borrow_sample(box.s, box.epoch), box)
     end
-    LibZenohC.z_sample_drop(_move(box))             # drop previous occupant promptly
+    _bump!(box.epoch)                               # invalidate views over the previous occupant
+    LibZenohC.z_sample_drop(_move(box.s))           # drop previous occupant promptly
     # `_move` left the box in the null gravestone, so the finalizer is safe even if the
     # refill below fails (drop of a null owned sample is a no-op).
-    _ring_take_into!(box, sh.ctx, sh.async_cond) || return nothing
-    return (_borrow_sample(box), box)
+    _ring_take_into!(box.s, sh.ctx, sh.async_cond) || return nothing
+    return (_borrow_sample(box.s, box.epoch), box)
 end
 
 """
