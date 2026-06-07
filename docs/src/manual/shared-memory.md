@@ -137,6 +137,8 @@ SharedShmProvider
 session_shm_provider
 obtain_shm_provider
 alloc
+try_alloc
+alloc_blocking
 available
 defragment
 garbage_collect
@@ -184,8 +186,7 @@ with_payload_memory
 with_payload_memory_checked
 unsafe_with_memory
 unsafe_memory
-try_alloc
-alloc_blocking
+shm_serialize
 put(::Zenoh.Publisher, ::Zenoh.ZRef)
 ```
 
