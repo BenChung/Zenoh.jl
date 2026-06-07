@@ -29,4 +29,22 @@ function default_shm_clients()
     return ShmClientStorage(ref)
 end
 
+"""
+    close(cs::ShmClientStorage)
+
+Release the client-storage handle on the calling task rather than at GC.
+Idempotent. `open(...; shm_clients=cs)` only *loans* the storage (zenoh-c clones
+it internally), so closing `cs` after open does not disturb the session.
+"""
+function Base.close(cs::ShmClientStorage)
+    GC.@preserve cs begin
+        sp = Base.unsafe_convert(Ptr{LibZenohC.z_owned_shm_client_storage_t}, cs.s)
+        if LibZenohC.z_internal_shm_client_storage_check(sp)
+            LibZenohC.z_shm_client_storage_drop(_move(cs.s))
+            LibZenohC.z_internal_shm_client_storage_null(sp)
+        end
+    end
+    return nothing
+end
+
 export ShmClientStorage, default_shm_clients

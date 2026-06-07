@@ -185,9 +185,19 @@ For a one-shot publish without declaring a publisher — and with per-call QoS �
 use `put(s::Session, k, payload; …)`.
 """
 function put(p::Publisher, payload; shm=nothing, kwargs...)
-    bytes = _shm_zbytes(shm, payload)
+    # Build the (fallible) options first, then the payload — and if building the
+    # SHM payload throws (a full/fragmented segment is the *expected* steady state
+    # under load), release the already-built attachment on this task so the
+    # finalizer-less owned ZBytes can't leak. (`_shm_zbytes` itself releases a
+    # half-filled buffer; this guards the attachment.)
     opts, enc_ref, attach_ref, ts = _make_put_opts(LibZenohC.z_publisher_put_options_t; kwargs...)
-
+    local bytes
+    try
+        bytes = _shm_zbytes(shm, payload)
+    catch
+        attach_ref === nothing || close(attach_ref)
+        rethrow()
+    end
     GC.@preserve enc_ref attach_ref ts begin
         rtc = LibZenohC.z_publisher_put(_loan(p.pub), _move(bytes), opts)
         _handle_result(rtc)
@@ -216,18 +226,26 @@ function put(s::Session, k::AbstractKeyexpr, payload;
         reliability::Union{Nothing, Reliability}              = nothing,
         allowed_destination::Union{Nothing, Locality}         = nothing,
         kwargs...)
-    bytes = _shm_zbytes(shm, payload)
-    opts, enc_ref, attach_ref, ts = _make_put_opts(LibZenohC.z_put_options_t; kwargs...)
-    optsP = Base.unsafe_convert(Ptr{LibZenohC.z_put_options_t}, opts)
-    isnothing(congestion_control)  || (optsP.congestion_control  = _raw(congestion_control))
-    isnothing(priority)            || (optsP.priority            = _raw(priority))
-    isnothing(express)             || (optsP.is_express          = express)
-    isnothing(reliability)         || (optsP.reliability         = _raw(reliability))
-    isnothing(allowed_destination) || (optsP.allowed_destination = _raw(allowed_destination))
-
-    GC.@preserve enc_ref attach_ref ts begin
-        rtc = LibZenohC.z_put(_loan(s), _loan(k), _move(bytes), opts)
-        _handle_result(rtc)
+    GC.@preserve s k begin
+        sp = _loan(s); kp = _loan(k)        # closed-check before any owned payload is built
+        opts, enc_ref, attach_ref, ts = _make_put_opts(LibZenohC.z_put_options_t; kwargs...)
+        optsP = Base.unsafe_convert(Ptr{LibZenohC.z_put_options_t}, opts)
+        isnothing(congestion_control)  || (optsP.congestion_control  = _raw(congestion_control))
+        isnothing(priority)            || (optsP.priority            = _raw(priority))
+        isnothing(express)             || (optsP.is_express          = express)
+        isnothing(reliability)         || (optsP.reliability         = _raw(reliability))
+        isnothing(allowed_destination) || (optsP.allowed_destination = _raw(allowed_destination))
+        local bytes
+        try
+            bytes = _shm_zbytes(shm, payload)
+        catch
+            attach_ref === nothing || close(attach_ref)
+            rethrow()
+        end
+        GC.@preserve enc_ref attach_ref ts begin
+            rtc = LibZenohC.z_put(sp, kp, _move(bytes), opts)
+            _handle_result(rtc)
+        end
     end
 end
 

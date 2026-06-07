@@ -137,11 +137,20 @@ struct ZBytes{R <: Union{Base.RefValue{LibZenohC.z_owned_bytes_t}, Ptr{LibZenohC
     end
 end
 # NOTE on ownership: owned ZBytes deliberately carry NO GC finalizer, and one
-# must not be added. `z_bytes_drop` invokes the zero-copy deleter (`_release`,
-# which touches the Julia heap); on the GC/finalizer thread, dropping an
-# SHM-backed payload off-thread corrupts zenoh's SHM segment bookkeeping and
-# wedges SHM delivery (a session-fast-path round-trip hangs) under GC pressure.
-# Cleanup must run on the caller's task.
+# must not be added. The reason is `_release`: a ZBytes built from a Julia buffer
+# (`z_bytes_from_buf`/`z_bytes_from_str`) carries the zero-copy deleter, and
+# `z_bytes_drop` invokes it — running `unsafe_pointer_to_objref`/`unpreserve_handle`,
+# which TOUCH THE JULIA HEAP. zenoh may fire that drop from a foreign runtime
+# thread, so doing it from the GC/finalizer thread too risks heap re-entrancy
+# against a concurrent collection. Cleanup must therefore run on the caller's task.
+#
+# (Verified 2026-06: the SHM *segment* bookkeeping itself is NOT the hazard. An
+# SHM-backed ZBytes — `z_bytes_from_shm`/`_shm_mut` — carries no deleter, and its
+# Rust `Drop` is a single atomic refcount decrement with the actual chunk-free
+# decoupled to a lock-guarded provider GC and an independent native watchdog
+# thread; dropping it off-thread is safe and was confirmed by stress test. So the
+# rule is about the `_release` heap touch, not SHM corruption — see
+# shm-remediation-plan.md § Issue closeout.)
 #
 # This is safe because no API forces a user to hold an owned ZBytes: the
 # pub/sub/query paths all `_move` their bytes into a C call, and inbound

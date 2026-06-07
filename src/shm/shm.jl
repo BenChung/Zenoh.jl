@@ -210,7 +210,7 @@ fallback for the session's life. For the transparent self-healing path that
 re-checks on every call, use [`zref`](@ref)`(s::Session, T)` instead.
 """
 session_shm_provider(s::Session) =
-    (p = s.shm[]; p === nothing ? nothing : p::SharedShmProvider)
+    (s.closed[] ? nothing : (p = s.shm[]; p === nothing ? nothing : p::SharedShmProvider))
 
 """
     shm_ready(s::Session) -> Bool
@@ -257,7 +257,7 @@ _loan_provider(p::SharedShmProvider) =
 Bytes currently free for allocation from the provider. Wraps
 `z_shm_provider_available`.
 """
-available(p::AbstractShmProvider)       = Int(LibZenohC.z_shm_provider_available(_loan_provider(p)))
+available(p::AbstractShmProvider)       = GC.@preserve p Int(LibZenohC.z_shm_provider_available(_loan_provider(p)))
 """
     defragment(p::AbstractShmProvider) -> Int
 
@@ -265,14 +265,14 @@ Coalesce the provider's free space into larger contiguous runs and return the
 resulting size. Useful to recover from a [`ShmAllocError`](@ref)`(:need_defragment)`
 before retrying [`alloc`](@ref). Wraps `z_shm_provider_defragment`.
 """
-defragment(p::AbstractShmProvider)      = Int(LibZenohC.z_shm_provider_defragment(_loan_provider(p)))
+defragment(p::AbstractShmProvider)      = GC.@preserve p Int(LibZenohC.z_shm_provider_defragment(_loan_provider(p)))
 """
     garbage_collect(p::AbstractShmProvider) -> Int
 
 Reclaim free chunks no longer referenced anywhere in the SHM domain and return
 the collected size. Wraps `z_shm_provider_garbage_collect`.
 """
-garbage_collect(p::AbstractShmProvider) = Int(LibZenohC.z_shm_provider_garbage_collect(_loan_provider(p)))
+garbage_collect(p::AbstractShmProvider) = GC.@preserve p Int(LibZenohC.z_shm_provider_garbage_collect(_loan_provider(p)))
 
 """
     ShmBufMut
@@ -332,12 +332,14 @@ Base.copyto!(b::ShmBufMut, src::AbstractVector{UInt8}) =
 """
     close(buf::ShmBufMut)
 
-Release an allocated-but-unsent [`ShmBufMut`](@ref) on the calling task rather
-than leaving it to the GC finalizer — dropping an SHM handle off-thread corrupts
-zenoh's segment bookkeeping (see the ownership note in `types/bytes.jl`), so
-error/cleanup paths that abandon a buffer should `close` it. Idempotent, and a
-no-op once the buffer was moved into a [`ZBytes`](@ref)/[`ShmBuf`](@ref): the
-check guard skips a moved-from or already-closed handle.
+Release an allocated-but-unsent [`ShmBufMut`](@ref) promptly on the calling task
+rather than waiting for the GC finalizer. The off-thread finalizer drop is itself
+safe (the SHM segment refcount is atomic — see the ownership note in
+`types/bytes.jl`), but error/cleanup paths that abandon a buffer should still
+`close` it to free the segment deterministically instead of at an arbitrary later
+GC. Idempotent, and a no-op once the buffer was moved into a
+[`ZBytes`](@ref)/[`ShmBuf`](@ref): the check guard skips a moved-from or
+already-closed handle.
 """
 function Base.close(buf::ShmBufMut)
     GC.@preserve buf begin
@@ -345,6 +347,59 @@ function Base.close(buf::ShmBufMut)
         if LibZenohC.z_internal_shm_mut_check(bp)
             LibZenohC.z_shm_mut_drop(_move(buf.b))   # real symbol; _move is the pointer-cast
             LibZenohC.z_internal_shm_mut_null(bp)    # gravestone so the finalizer no-ops
+        end
+    end
+    return nothing
+end
+
+"""
+    close(b::ShmBuf)
+
+Release an owned (frozen) [`ShmBuf`](@ref) on the calling task — the on-task twin
+of [`close`](@ref)`(::ShmBufMut)` for a buffer frozen via `ShmBuf(buf)` but not
+sent. The off-thread finalizer drop is itself safe; this just frees the segment
+deterministically. Idempotent; a no-op for a borrowed view (from [`as_shm`](@ref),
+which owns nothing) and once the buffer was moved into a [`ZBytes`](@ref).
+"""
+function Base.close(b::ShmBuf{Base.RefValue{LibZenohC.z_owned_shm_t}})
+    GC.@preserve b begin
+        bp = Base.unsafe_convert(Ptr{LibZenohC.z_owned_shm_t}, b.b)
+        if LibZenohC.z_internal_shm_check(bp)
+            LibZenohC.z_shm_drop(_move(b.b))
+            LibZenohC.z_internal_shm_null(bp)
+        end
+    end
+    return nothing
+end
+Base.close(::ShmBuf{Ptr{LibZenohC.z_loaned_shm_t}}) = nothing
+
+"""
+    close(p::ShmProvider)
+    close(p::SharedShmProvider)
+
+Release a provider's handle on the calling task instead of waiting for the GC
+finalizer. Idempotent. This frees the Julia-side handle, not the provider's
+`/dev/shm` segments (those are reference-counted across the domain; a crashed
+process's leftovers need [`cleanup_orphaned_shm_segments`](@ref)). Don't close a
+[`SharedShmProvider`](@ref) still cached in its session — [`close`](@ref)`(::Session)`
+releases that one.
+"""
+function Base.close(p::ShmProvider)
+    GC.@preserve p begin
+        pp = Base.unsafe_convert(Ptr{LibZenohC.z_owned_shm_provider_t}, p.p)
+        if LibZenohC.z_internal_shm_provider_check(pp)
+            LibZenohC.z_shm_provider_drop(_move(p.p))
+            LibZenohC.z_internal_shm_provider_null(pp)
+        end
+    end
+    return nothing
+end
+function Base.close(p::SharedShmProvider)
+    GC.@preserve p begin
+        pp = Base.unsafe_convert(Ptr{LibZenohC.z_owned_shared_shm_provider_t}, p.p)
+        if LibZenohC.z_internal_shared_shm_provider_check(pp)
+            LibZenohC.z_shared_shm_provider_drop(_move(p.p))
+            LibZenohC.z_internal_shared_shm_provider_null(pp)
         end
     end
     return nothing
@@ -362,11 +417,21 @@ end
 # throws ArgumentError for a non-power-of-two before any ccall.
 function _native_alloc!(result, lp, n::Integer, align::Union{Nothing,Integer}, blocking::Bool)
     if blocking
+        # `gc_safe`: the blocking allocator parks the calling thread waiting for
+        # room; marking the ccall GC-safe lets a stop-the-world GC on another
+        # thread treat it as parked instead of deadlocking in
+        # `jl_gc_wait_for_the_world` (see core/gc_safe_threadcall.jl for the same
+        # hazard on the recv path). Sound because the call writes only into the C
+        # `result` struct — it touches no Julia heap during the gc-safe window.
         if align === nothing
-            LibZenohC.z_shm_provider_alloc_gc_defrag_blocking(result, lp, Csize_t(n))
+            @ccall gc_safe=true LibZenohC.libzenohc.z_shm_provider_alloc_gc_defrag_blocking(
+                result::Ptr{LibZenohC.z_buf_layout_alloc_result_t},
+                lp::Ptr{LibZenohC.z_loaned_shm_provider_t}, Csize_t(n)::Csize_t)::Cvoid
         else
-            LibZenohC.z_shm_provider_alloc_gc_defrag_blocking_aligned(
-                result, lp, Csize_t(n), _alignment(align))
+            @ccall gc_safe=true LibZenohC.libzenohc.z_shm_provider_alloc_gc_defrag_blocking_aligned(
+                result::Ptr{LibZenohC.z_buf_layout_alloc_result_t},
+                lp::Ptr{LibZenohC.z_loaned_shm_provider_t}, Csize_t(n)::Csize_t,
+                _alignment(align)::LibZenohC.z_alloc_alignment_t)::Cvoid
         end
     else
         if align === nothing
@@ -442,12 +507,12 @@ policy: it reclaims and coalesces free space and **waits** for room rather than
 failing fast.
 
 !!! warning
-    This **parks the calling OS thread in GC-unsafe state** for the duration of
-    the wait (a plain, non-`gc_safe` ccall). Never call it on a publish/serialize
-    hot path — a stalled allocator there can wedge the runtime. Use it only off
-    the hot path, where blocking until room frees up is acceptable. The split from
-    [`alloc`](@ref) is deliberate: the hot path cannot reach the blocking policy
-    by flipping a flag.
+    This **blocks the calling task** until room frees up — keep it off a
+    publish/serialize hot path, where a stall would back up your own pipeline.
+    The blocking ccall is marked `gc_safe`, so it does **not** stall a
+    stop-the-world GC on another thread (unlike a plain blocking ccall, which
+    would — see `core/gc_safe_threadcall.jl`). The split from [`alloc`](@ref) is
+    deliberate: the hot path cannot reach the blocking policy by flipping a flag.
 """
 alloc_blocking(p::AbstractShmProvider, n::Integer; align::Union{Nothing,Integer}=nothing) =
     _alloc(p, n, align, true)
@@ -593,32 +658,48 @@ cleanup_orphaned_shm_segments() = LibZenohC.zc_cleanup_orphaned_shm_segments()
 # both rely on the `ZBytes(::ZBytes)` identity (types/bytes.jl) to forward an
 # already-built owned (e.g. SHM-backed) payload zero-copy.
 _shm_zbytes(::AbstractShmProvider, z::ZBytes) = z
+# Each variant allocs then copies into the segment. If the copy throws (a lazy
+# source's `pointer` faults, an unexpected length, an interrupt), `close` the
+# buffer on THIS task before rethrowing — abandoning it would leave the only
+# release path the GC finalizer (mirrors `shm_serialize`'s guard).
 function _shm_zbytes(provider::AbstractShmProvider, data::AbstractVector{UInt8})
     buf = alloc(provider, length(data))
-    copyto!(buf, data)
+    try
+        copyto!(buf, data)
+    catch
+        close(buf); rethrow()
+    end
     return ZBytes(buf)
 end
 function _shm_zbytes(provider::AbstractShmProvider, s::AbstractString)
     bytes = codeunits(s)
     buf = alloc(provider, length(bytes))
-    GC.@preserve s begin
-        unsafe_copyto!(pointer(buf.mem), Base.unsafe_convert(Ptr{UInt8}, s), length(bytes))
+    try
+        GC.@preserve s unsafe_copyto!(pointer(buf.mem), Base.unsafe_convert(Ptr{UInt8}, s), length(bytes))
+    catch
+        close(buf); rethrow()
     end
     return ZBytes(buf)
 end
 function _shm_zbytes(provider::AbstractShmProvider, r::Base.RefValue{T}) where T
     buf = alloc(provider, sizeof(T))
-    GC.@preserve r begin
-        src = Base.unsafe_convert(Ptr{UInt8}, Base.unsafe_convert(Ptr{T}, r))
-        unsafe_copyto!(pointer(buf.mem), src, sizeof(T))
+    try
+        GC.@preserve r begin
+            src = Base.unsafe_convert(Ptr{UInt8}, Base.unsafe_convert(Ptr{T}, r))
+            unsafe_copyto!(pointer(buf.mem), src, sizeof(T))
+        end
+    catch
+        close(buf); rethrow()
     end
     return ZBytes(buf)
 end
 function _shm_zbytes(provider::AbstractShmProvider, v::AbstractVector{T}) where T
     nbytes = length(v) * sizeof(T)
     buf = alloc(provider, nbytes)
-    GC.@preserve v begin
-        unsafe_copyto!(pointer(buf.mem), Base.unsafe_convert(Ptr{UInt8}, pointer(v)), nbytes)
+    try
+        GC.@preserve v unsafe_copyto!(pointer(buf.mem), Base.unsafe_convert(Ptr{UInt8}, pointer(v)), nbytes)
+    catch
+        close(buf); rethrow()
     end
     return ZBytes(buf)
 end

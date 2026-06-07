@@ -85,6 +85,20 @@ function Base.open(c::Config; shm_clients=nothing, on_shm_alloc_error=nothing,
         wait_for_shm::Union{Bool,Real}=false, shm_wait_timeout::Real=10.0)
     s = Session()
     s.shm_alloc_handler[] = on_shm_alloc_error
+    # Put the handle in a valid (null) state and arm the safety-net finalizer
+    # BEFORE the fallible open, so a throwing `z_open` can't strand a
+    # partially-initialized session for the process lifetime: the finalizer then
+    # drops a null handle (a documented no-op) on failure, or the real handle once
+    # open succeeds. It frees on GC only if the session wasn't explicitly closed —
+    # `close` tears down deterministically on the caller's thread and flips
+    # `closed`, keeping the graceful `z_session_drop` (which drains the tokio
+    # runtime) off the GC / process-exit finalizer thread.
+    LibZenohC.z_internal_session_null(s.s)
+    let handle = s.s, closed = s.closed
+        finalizer(handle) do h
+            closed[] || _drop(_move(h))
+        end
+    end
     cfg_copy = Ref{LibZenohC.z_owned_config_t}()
     LibZenohC.z_config_clone(cfg_copy, LibZenohC.z_config_loan(c.c))
 
@@ -95,17 +109,6 @@ function Base.open(c::Config; shm_clients=nothing, on_shm_alloc_error=nothing,
     else
         _handle_result(LibZenohC.z_open_with_custom_shm_clients(
             s.s, _move(cfg_copy), _loan(shm_clients.s)))
-    end
-
-    # Safety net: free the handle on GC only if it wasn't explicitly closed.
-    # `close` does the teardown deterministically on the caller's thread and
-    # flips `closed`, so for a closed session this no-ops — keeping the
-    # graceful `z_session_drop` (which drains the tokio runtime) off the GC /
-    # process-exit finalizer thread, where ordering is unpredictable.
-    let handle = s.s, closed = s.closed
-        finalizer(handle) do h
-            closed[] || _drop(_move(h))
-        end
     end
 
     # Discover the session's SHM capability once, here — the one place SHM is
@@ -124,17 +127,43 @@ end
 
 """
 Closes a Zenoh session: gracefully shuts it down (`z_close`) and frees the
-handle (`z_session_drop`), deterministically on the calling task. Idempotent —
-a second `close` is a no-op, and the GC finalizer skips an already-closed
-session. After `close` the session is unusable; operations on it throw.
+handle (`z_session_drop`), deterministically on the calling task. The handle is
+freed even if the graceful `z_close` reports an error, so a transient
+shutdown/runtime error can't leak the session. Idempotent — a second `close` is
+a no-op, and the GC finalizer skips an already-closed session. After `close` the
+session is unusable; operations on it throw.
+
+!!! warning
+    `close` must not run concurrently with in-flight operations on the *same*
+    session from other tasks. It frees the handle, so an operation parked in a C
+    call holding a pointer loaned from this session (the `_loan` chokepoint checks
+    `closed` but does not hold a lock across the call) could touch freed memory.
+    Quiesce a shared session — join its publisher/subscriber tasks — before
+    closing it.
 """
 function Base.close(s::Session)
     s.closed[] && return nothing
+    # Disarm the retry guard and the safety-net finalizer up front, then free the
+    # handle in a `finally` so it happens on THIS task even if the graceful
+    # `z_close` errors. Doing the drop unconditionally is what closes the leak: a
+    # throwing `z_close` (this build returns -128 intermittently) must NOT strand
+    # the owned session — and thus its tokio runtime / SHM subsystem — for the
+    # process lifetime. Flipping `closed` first is safe precisely because the drop
+    # is guaranteed below, so the finalizer never double-drops.
     s.closed[] = true
     opts = Ref{LibZenohC.z_close_options_t}()
     LibZenohC.z_close_options_default(opts)
-    GC.@preserve s _handle_result(LibZenohC.z_close(_loan(s.s), opts))
-    _drop(_move(s.s))   # free now, on this task — not later on the GC thread
+    try
+        GC.@preserve s _handle_result(LibZenohC.z_close(_loan(s.s), opts))
+    finally
+        _drop(_move(s.s))   # free now, on this task — even if z_close errored
+        # Release the cached SHM provider with the session; `zref(::Session,T)` and
+        # `session_shm_provider` gate on `closed`, so this also prevents allocating
+        # from a provider whose session is gone.
+        lock(s.shm_lock) do
+            s.shm[] = nothing
+        end
+    end
     return nothing
 end
 

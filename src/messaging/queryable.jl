@@ -158,8 +158,17 @@ Keyword arguments: `encoding`, `timestamp`, `attachment`,
 `congestion_control`, `priority`, `express`.
 """
 function reply(q::Query, payload, k::Union{Nothing, Keyexpr} = nothing; kwargs...)
-    bytes = ZBytes(payload)
+    # Build the (fallible) options BEFORE the payload: a wrong-typed attachment
+    # throws here, not after an owned, finalizer-less `bytes` was already built and
+    # then orphaned. If building `bytes` throws, release the attachment on this task.
     opts, enc_ref, attach_ref, ts = _make_reply_opts(; kwargs...)
+    local bytes
+    try
+        bytes = ZBytes(payload)
+    catch
+        attach_ref === nothing || close(attach_ref)
+        rethrow()
+    end
     # Default keyexpr: borrow the query's own loaned keyexpr directly rather
     # than round-tripping it through a Julia String and a fresh owned
     # Keyexpr. `q` is preserved so that borrowed pointer stays valid.
@@ -176,8 +185,11 @@ end
 Send an error reply to query `q`. `payload` is anything `ZBytes` accepts.
 """
 function reply_err(q::Query, payload; kwargs...)
-    bytes = ZBytes(payload)
+    # Build the (fallible) options first; `enc_ref` self-cleans via its finalizer
+    # if building the payload then throws, so no owned, finalizer-less `bytes` is
+    # orphaned before the consuming C call.
     opts, enc_ref = _make_reply_err_opts(; kwargs...)
+    bytes = ZBytes(payload)
     GC.@preserve enc_ref begin
         rtc = LibZenohC.z_query_reply_err(_loaned_query(q), _move(bytes), opts)
         _handle_result(rtc)

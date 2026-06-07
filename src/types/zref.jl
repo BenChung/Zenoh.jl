@@ -113,6 +113,7 @@ error — it may `throw` to escalate instead of falling back.
 """
 function zref(s::Session, ::Type{T}) where {T}
     _check_isbits(T)
+    s.closed[] && throw(ArgumentError("session is closed"))   # don't alloc from a closed session
     prov = s.shm[]
     if prov === nothing && s.shm_state[] ∉ (:none, :disabled, :error)
         _bind_session_shm!(s)        # leak-safe: no-op if cached; cheap failed obtain while warming up
@@ -644,6 +645,16 @@ end
 end
 function Base.pointer(r::ZRef)
     _check_live(r)
+    # A borrowed (receive-side) ZRef views a loaned payload that's valid only while
+    # reachable in the handler / before iteration advances. Handing out the raw
+    # pointer lets it escape that scope with NO GC pin (unlike `r[]`, which loads
+    # under `GC.@preserve r`), the worst silent use-after-free. Read with `r[]`
+    # in-scope, or copy out (`collect`/`as_memory`); a writable send-side ZRef
+    # (the common `pointer` use, for field-wise authoring) is unaffected.
+    isborrowed(r) && throw(ArgumentError(
+        "pointer() on a borrowed (receive-side) ZRef would escape the payload's loan; \
+         read with `r[]` before the handler returns / iteration advances, or copy out \
+         with `collect`/`as_memory`"))
     return r.ptr
 end
 
@@ -666,9 +677,12 @@ _zref_bytes(b::ShmBufMut)     = ZBytes(b)        # z_bytes_from_shm_mut, moves h
 
 function _zref_to_bytes(r::ZRef)
     _check_live(r)
-    bytes = _zref_bytes(r.backing)
+    # Claim before the move: `_zref_bytes` hands the backing to a C consumer that
+    # gravestones it even on a non-OK return, so the backing is gone regardless of
+    # outcome. Marking consumed first keeps `r` from being retried/read over a
+    # gravestoned handle if the move throws.
     r.consumed = true
-    return bytes
+    return _zref_bytes(r.backing)
 end
 
 """
@@ -683,8 +697,18 @@ marked consumed — a second `put` (or any access) on it throws.
 `kwargs` set per-put options such as `encoding`, `attachment`, and `timestamp`.
 """
 function put(p::Publisher, r::ZRef; kwargs...)
-    bytes = _zref_to_bytes(r)
+    # Build the (fallible) options BEFORE moving the backing: a bad `attachment`
+    # throws here, while `r` is still intact, instead of after the irreversible
+    # move had orphaned a finalizer-less owned SHM payload. If the move itself
+    # throws, release the already-built attachment on this task.
     opts, enc_ref, attach_ref, ts = _make_put_opts(LibZenohC.z_publisher_put_options_t; kwargs...)
+    local bytes
+    try
+        bytes = _zref_to_bytes(r)
+    catch
+        attach_ref === nothing || close(attach_ref)
+        rethrow()
+    end
     GC.@preserve enc_ref attach_ref ts begin
         _handle_result(LibZenohC.z_publisher_put(_loan(p.pub), _move(bytes), opts))
     end
@@ -696,15 +720,24 @@ function put(s::Session, k::Keyexpr, r::ZRef;
         express::Union{Nothing, Bool}                         = nothing,
         allowed_destination::Union{Nothing, Locality}         = nothing,
         kwargs...)
-    bytes = _zref_to_bytes(r)
-    opts, enc_ref, attach_ref, ts = _make_put_opts(LibZenohC.z_put_options_t; kwargs...)
-    optsP = Base.unsafe_convert(Ptr{LibZenohC.z_put_options_t}, opts)
-    isnothing(congestion_control)  || (optsP.congestion_control  = _raw(congestion_control))
-    isnothing(priority)            || (optsP.priority            = _raw(priority))
-    isnothing(express)             || (optsP.is_express          = express)
-    isnothing(allowed_destination) || (optsP.allowed_destination = _raw(allowed_destination))
-    GC.@preserve enc_ref attach_ref ts begin
-        _handle_result(LibZenohC.z_put(_loan(s), _loan(k), _move(bytes), opts))
+    GC.@preserve s k begin
+        sp = _loan(s); kp = _loan(k)        # closed-check BEFORE any owned payload is built/moved
+        opts, enc_ref, attach_ref, ts = _make_put_opts(LibZenohC.z_put_options_t; kwargs...)
+        optsP = Base.unsafe_convert(Ptr{LibZenohC.z_put_options_t}, opts)
+        isnothing(congestion_control)  || (optsP.congestion_control  = _raw(congestion_control))
+        isnothing(priority)            || (optsP.priority            = _raw(priority))
+        isnothing(express)             || (optsP.is_express          = express)
+        isnothing(allowed_destination) || (optsP.allowed_destination = _raw(allowed_destination))
+        local bytes
+        try
+            bytes = _zref_to_bytes(r)       # move is the last fallible step before the C call
+        catch
+            attach_ref === nothing || close(attach_ref)
+            rethrow()
+        end
+        GC.@preserve enc_ref attach_ref ts begin
+            _handle_result(LibZenohC.z_put(sp, kp, _move(bytes), opts))
+        end
     end
 end
 

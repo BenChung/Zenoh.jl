@@ -550,11 +550,25 @@ function _make_get_opts(;
     isnothing(consolidation) || (optsP.consolidation = _as_consolidation(consolidation))
     timeout_ms > 0           && (optsP.timeout_ms    = UInt64(timeout_ms))
 
-    payload_bytes = isnothing(payload)    ? nothing : ZBytes(payload)
-    attach_bytes  = isnothing(attachment) ? nothing : ZBytes(attachment)
-    enc_ref       = isnothing(encoding)   ? nothing : _to_owned_encoding(_as_encoding(encoding))
-    # The get consumes (moves) the token; clone so the caller keeps theirs to cancel.
-    cancel_clone  = isnothing(cancellation) ? nothing : _clone(cancellation)
+    # Build the owned inputs; if a later build throws (e.g. a wrong-typed
+    # attachment after a good payload), release the already-built finalizer-less
+    # owned payload/attachment ZBytes on this task so they can't be orphaned
+    # (enc_ref self-cleans via its finalizer; the token clone is built last).
+    payload_bytes = nothing
+    attach_bytes  = nothing
+    enc_ref       = nothing
+    cancel_clone  = nothing
+    try
+        payload_bytes = isnothing(payload)    ? nothing : ZBytes(payload)
+        attach_bytes  = isnothing(attachment) ? nothing : ZBytes(attachment)
+        enc_ref       = isnothing(encoding)   ? nothing : _to_owned_encoding(_as_encoding(encoding))
+        # The get consumes (moves) the token; clone so the caller keeps theirs to cancel.
+        cancel_clone  = isnothing(cancellation) ? nothing : _clone(cancellation)
+    catch
+        payload_bytes === nothing || close(payload_bytes)
+        attach_bytes  === nothing || close(attach_bytes)
+        rethrow()
+    end
     isnothing(payload_bytes) || (optsP.payload    = _move(payload_bytes))
     isnothing(attach_bytes)  || (optsP.attachment = _move(attach_bytes))
     isnothing(enc_ref)       || (optsP.encoding   = _move(enc_ref))
