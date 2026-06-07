@@ -2,6 +2,15 @@
 # canonicalization, and the `kexpr"…"` string macro.
 
 """
+Common supertype for the plain `Keyexpr` and the network-optimized
+`DeclaredKeyexpr` (types/declared_keyexpr.jl). Both wrap an owned
+`z_owned_keyexpr_t` in a `.k` field and answer `_loan`, so either flows
+through every operation that loans a key expression. `Keyexpr` stays the
+concrete default; `DeclaredKeyexpr` is the opt-in id-backed form.
+"""
+abstract type AbstractKeyexpr end
+
+"""
     Keyexpr(s::AbstractString; autocanonize=false) -> Keyexpr
 
 Owned, validated handle denoting a *set* of keys. A key is a `/`-separated
@@ -28,13 +37,6 @@ and `print`.
 `relation_to(a, b) == IntersectionLevels.EQUALS` can hold for keyexprs that are
 not `==` (e.g. `a/**` and `a/**/**` denote the same key-set but differ as text).
 """
-# Common supertype for the plain `Keyexpr` and the network-optimized
-# `DeclaredKeyexpr` (types/declared_keyexpr.jl). Both wrap an owned
-# `z_owned_keyexpr_t` in a `.k` field and answer `_loan`, so either flows
-# through every operation that loans a key expression. `Keyexpr` stays the
-# concrete default; `DeclaredKeyexpr` is the opt-in id-backed form.
-abstract type AbstractKeyexpr end
-
 struct Keyexpr <: AbstractKeyexpr
     k::Base.RefValue{LibZenohC.z_owned_keyexpr_t}
     function Keyexpr(s::String; kwargs...)

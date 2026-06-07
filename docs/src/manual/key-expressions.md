@@ -116,6 +116,7 @@ String(kexpr"demo/**")    # "demo/**"
 ## API
 
 ```@docs
+AbstractKeyexpr
 Keyexpr
 @kexpr_str
 includes
