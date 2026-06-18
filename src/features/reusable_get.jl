@@ -99,13 +99,13 @@ end
 
 """
     call!(rg::ReusableGet, parameters=""; payload=nothing, attachment=nothing,
-          payload_len=length(payload), attachment_len=length(attachment))
-        -> ReplyHolder | nothing
+          payload_len=length(payload), attachment_len=length(attachment),
+          cancellation=nothing) -> ReplyHolder | nothing
 
 Issue one query on `rg` and block until the first reply, returned as the pooled
 [`ReplyHolder`](@ref) (`rg`'s reusable reply slot) — or `nothing` if the get completed
-with no reply (timeout / no matching queryable). Read it with [`is_ok`](@ref) and
-[`sample`](@ref)/[`error_payload`](@ref) and **decode it (copying out) before the next
+with no reply (timeout / no matching queryable / cancelled). Read it with [`is_ok`](@ref)
+and [`sample`](@ref)/[`error_payload`](@ref) and **decode it (copying out) before the next
 `call!`** — the slot is reused on the next call, so the holder and anything borrowed from
 it (its `sample`, the sample's payload) are valid only until then (a zero-copy view held
 across a `call!` throws `BorrowError`).
@@ -115,6 +115,12 @@ first `*_len` bytes) for the duration of the call — **do not mutate those buff
 `call!` returns**. Returning the pooled holder (not a fresh wrapper) and aliasing the
 buffers is what keeps a steady-state `call!` allocation-free on the Zenoh.jl side.
 
+`cancellation` is an optional per-call deadline lever: pass a [`CancellationToken`](@ref)
+(typically armed by a `Base.Timer`) and `cancel` it to abort this call — the get ends and
+`call!` returns `nothing`. The querier's declared `timeout_ms` is the default bound; use
+`cancellation` only when a call needs a different deadline (it allocates a token clone, so
+the no-`cancellation` path stays allocation-free).
+
 Single-in-flight: a concurrent `call!` on the same `rg` throws
 [`ConcurrentUseError`](@ref).
 """
@@ -122,7 +128,8 @@ function call!(rg::ReusableGet, parameters::AbstractString="";
         payload::Union{Nothing,Vector{UInt8}}=nothing,
         attachment::Union{Nothing,Vector{UInt8}}=nothing,
         payload_len::Integer    = payload    === nothing ? 0 : length(payload),
-        attachment_len::Integer = attachment === nothing ? 0 : length(attachment))
+        attachment_len::Integer = attachment === nothing ? 0 : length(attachment),
+        cancellation::Union{Nothing,CancellationToken}=nothing)
     rg.closed && throw(ArgumentError("call! on a closed ReusableGet"))
     # Single-in-flight: claim the slot or bail. THROW (not block) — blocking would hide
     # the misuse, and two gets on one ctx is a use-after-free, not just contention.
@@ -136,10 +143,17 @@ function call!(rg::ReusableGet, parameters::AbstractString="";
         params = parameters isa Union{String,SubString{String}} ? parameters : String(parameters)
         payload_armed = false
         attach_armed  = false
+        # Optional per-call deadline. The get CONSUMES (moves) the token, so clone it — the
+        # clone shares cancellation state with the caller's token (cancel it, e.g. from a
+        # Base.Timer, to abort this call → :closed → call! returns nothing). The clone carries
+        # its own finalizer, so a failed/never-issued get cleans up on GC; only the default
+        # (no-token) path stays allocation-free. z_querier_get_options_default cleared field 5
+        # above, so omitting it leaves no stale token.
+        cancel_clone = cancellation === nothing ? nothing : _clone(cancellation)
         # The aliased payload/attachment carry a no-op deleter, so their buffers MUST stay
         # live until zenoh has sent the query — no later than :closed. This GC.@preserve
         # spans the whole arming + get + drain, guaranteeing that without preserve_handle.
-        got = GC.@preserve payload attachment params rg begin
+        got = GC.@preserve payload attachment params rg cancel_clone begin
             try
                 if payload !== nothing
                     _arm_bytes!(rg.payloadbox, payload, payload_len); payload_armed = true
@@ -149,6 +163,8 @@ function call!(rg::ReusableGet, parameters::AbstractString="";
                     _arm_bytes!(rg.attachbox, attachment, attachment_len); attach_armed = true
                     _store_field!(rg.optsref, 4, _move(rg.attachbox))       # field 4: attachment
                 end
+                cancel_clone === nothing ||
+                    _store_field!(rg.optsref, 5, _move(cancel_clone))       # field 5: cancellation_token
                 _install_closure!(Val(:reply), rg.closurebox, rg.ctx)       # fresh closure into reused box
                 rtc = LibZenohC.z_querier_get_with_parameters_substr(
                     _loan(rg.querier), Ptr{Cchar}(pointer(params)), ncodeunits(params),

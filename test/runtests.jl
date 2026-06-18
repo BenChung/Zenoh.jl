@@ -1646,6 +1646,26 @@ try
         end
     end
 
+    @timed_testset "ReusableGet per-call cancellation" begin
+        # A Base.Timer cancels an in-flight call to a void key whose querier has a long
+        # timeout — call! returns nothing promptly (cancelled), not after the timeout.
+        qrr = nothing; rg = nothing; timer = nothing
+        try
+            qrr = Zenoh.Querier(S2, Zenoh.Keyexpr("test/reusableget/cancel");
+                                target=:best_matching, timeout_ms=30_000)
+            rg = Zenoh.ReusableGet(qrr)
+            tok = Zenoh.CancellationToken()
+            timer = Base.Timer(_ -> Zenoh.cancel(tok), 0.2)
+            t0 = time()
+            @test Zenoh.call!(rg; payload=Vector{UInt8}("c"), cancellation=tok) === nothing
+            @test (time() - t0) < 5.0
+        finally
+            !isnothing(timer) && close(timer)
+            !isnothing(rg)    && close(rg)
+            !isnothing(qrr)   && close(qrr)
+        end
+    end
+
     @timed_testset "Querier MatchingListener + matching_status" begin
         s1 = S1
         s2 = S2
