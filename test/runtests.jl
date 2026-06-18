@@ -1666,6 +1666,24 @@ try
         end
     end
 
+    @timed_testset "idempotent ctx teardown" begin
+        # The precompile workload (and any synchronous teardown) calls _teardown_buffered_*!
+        # directly while the deferred finalizer may also fire later; the destroy_ctx! `destroyed`
+        # guard must make the second teardown a no-op (no double uv_mutex_destroy / async close).
+        sub = Base.open(S1, Zenoh.Keyexpr("test/idempotent/sub"); channel=:fifo, capacity=8,
+                        allowed_origin=Zenoh.Localities.ANY)
+        close(sub)
+        Zenoh._teardown_buffered_sub!(sub)
+        Zenoh._teardown_buffered_sub!(sub)        # second call: no-op, must not crash
+        @test sub.ctx.destroyed
+
+        q = Zenoh.Queryable(S1, Zenoh.Keyexpr("test/idempotent/q"); channel=:fifo, complete=true)
+        close(q)
+        Zenoh._teardown_buffered_queryable!(q)
+        Zenoh._teardown_buffered_queryable!(q)    # second call: no-op
+        @test q.backing.ctx.destroyed
+    end
+
     @timed_testset "Querier MatchingListener + matching_status" begin
         s1 = S1
         s2 = S2

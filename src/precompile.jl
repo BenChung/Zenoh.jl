@@ -1,36 +1,36 @@
 # Precompile the entity-declaration / QoS-option path — the largest inference bucket in a fresh
-# consumer's time-to-first-declare (~200 ms of keyword-sorter bodies + option builders, per
-# ROSNode startup profiling).
+# consumer's time-to-first-declare (~360 ms of keyword-sorter bodies + option builders + declare
+# closures, per ROSNode startup profiling).
 #
 # Constraint: PrecompileTools workloads run during precompilation, where finalizers and
-# `Threads.@spawn`'d tasks do NOT reliably run. The publishers tear down synchronously and own no
-# libuv handle, so they are declared LIVE against a router-free peer session (the biggest bucket,
-# and the kwsorter/option frames are only reachable by an actual call). The subscriber and
-# buffered-queryable declare paths spin up a callback ring whose teardown is finalizer/task-
-# deferred — declaring them live would leave an `AsyncCondition` open at the completion check
-# ("Waiting for background task / IO / timer"). So instead we exercise their option builders and
-# the callback-ctx lifecycle directly (session-free, torn down synchronously) and name the recv
-# frame — covering the inference without leaving an event source alive.
+# `Threads.@spawn`'d tasks do NOT reliably run. So:
+#   • Publishers, the fifo subscriber, and the buffered (ring) queryable own no declare-time task,
+#     and their ctx teardown is now idempotent (see destroy_ctx!), so we declare them LIVE and tear
+#     them down SYNCHRONOUSLY here (the deferred finalizer becomes a harmless no-op). This bakes the
+#     kwsorter + option-builder + `_open_*` declare frames — only reachable by a real call.
+#   • The keep_all subscriber `@spawn`s a drain task at declare that can't be reliably driven to exit
+#     during precompilation, so it would leave a live task at the completion check. Its frames are
+#     instead baked by naming the drain body + recv directly.
 #
-# The callback cfunction pointers (set in `__init__`, which has not run yet) do not matter here:
-# the compiled code reads those pointer `Ref`s at runtime, so codegen is identical whether they
-# are set or null. The whole block is best-effort — a sandbox that cannot open a session still
-# precompiles (the publisher frames just aren't baked).
+# The callback cfunction pointers (set in `__init__`, which has not run yet) do not matter here: the
+# compiled code reads those pointer `Ref`s at runtime, so codegen is identical whether they are set
+# or null. The whole block is best-effort — a sandbox that cannot open a session still precompiles.
 
 using PrecompileTools
 
 @setup_workload begin
     @compile_workload begin
-        # Publishers (plain + advanced) — live declares drive the kwarg-sorter + option-builder
-        # path (_make_publisher_opts / _declare_plain_publisher / _make_advanced_publisher_opts /
-        # _wants_advanced / _cache_value / …). No AsyncCondition or task; close is synchronous.
         try
             s = open(Config(; str =
                 "{mode:\"peer\",scouting:{multicast:{enabled:false}},timestamping:{enabled:true}}"))
             ke = Keyexpr("z/precompile")
+
+            # Plain publisher — _make_publisher_opts / _declare_plain_publisher. No ctx/task.
             p1 = Publisher(s, ke; reliability = Reliabilities.RELIABLE)
-            # Advanced publisher's declare needs session timestamping; its option-builder frames
-            # (the biggest bucket) compile whether or not the declare itself succeeds.
+
+            # Advanced publisher — _make_advanced_publisher_opts / _wants_advanced / _cache_value …,
+            # the biggest bucket. Its declare needs session timestamping; the option-builder frames
+            # compile whether or not the declare itself succeeds, so tolerate failure.
             p2 = try
                 AdvancedPublisher(s, ke; reliability = Reliabilities.RELIABLE,
                     cache = CacheOptions(1), miss_detection = MissDetectionOptions(:periodic),
@@ -39,26 +39,37 @@ using PrecompileTools
                 nothing
             end
             p2 === nothing || close(p2)
+
+            # Fifo buffered subscriber — _open_buffered_sub / _make_subscriber_opts. The kwarg shape
+            # must match ROSNode's (channel + capacity + allowed_origin; ROSNode entity.jl) — the
+            # kwsorter body is specialized per kwarg-NamedTuple shape. `_open_buffered_sub` also
+            # infers its `_open_keepall_sub` branch, so this one declare covers both sub flavours.
+            # No declare-time task; close() defers ctx teardown to a finalizer, so drive that
+            # synchronously here (idempotent destroy_ctx! makes the later finalizer a no-op) to leave
+            # no AsyncCondition open.
+            sf = open(s, ke; channel = :fifo, capacity = 16, allowed_origin = Localities.ANY)
+            close(sf)
+            _teardown_buffered_sub!(sf)
+
+            # Buffered (ring) queryable — matches ROSNode's service queryable shape
+            # `Queryable(s,k; channel=:fifo, complete=true)` (service.jl). Same synchronous-teardown
+            # treatment as the fifo subscriber.
+            qy = Queryable(s, ke; channel = :fifo, complete = true)
+            close(qy)
+            _teardown_buffered_queryable!(qy)
+
             close(p1)
             close(s)
         catch
-            # No session in this environment — skip; the publisher frames just aren't baked.
+            # No session in this environment — skip; these frames just aren't baked.
         end
 
-        # Subscriber / queryable inference, session-free and synchronously torn down so nothing
-        # lingers. The option builders run directly; the callback ring is set up and immediately
-        # destroyed (destroy_ctx! closes the AsyncCondition synchronously — no finalizer/task);
-        # the recv frame is named (unreachable without inbound traffic). This covers everything but
-        # the `_open_*_sub` declare closures, which are only reachable by a live declare (whose
-        # async teardown is precompile-hostile).
-        for origin in (Localities.ANY, nothing)
-            _make_subscriber_opts(origin)
-        end
-        _make_queryable_opts(; complete = true, allowed_origin = Localities.ANY)
-        for kind in (Val(:sample), Val(:query))
-            ctx, ac, _ = _setup_callback(kind, 16)
-            _teardown_callback(kind, ctx, ac)
-        end
+        # keep_all subscriber frames: its declare `@spawn`s a drain task that can't be exited
+        # reliably during precompilation, so name the drain body + the no-origin opts variant rather
+        # than declaring it live. The recv frames (`_ring_take`) need inbound traffic, so name them too.
+        _make_subscriber_opts(nothing)
+        precompile(_drain_samples,
+            (CallbackCtx{LibZenohC.z_owned_sample_t}, Base.AsyncCondition, Channel{Sample}))
         precompile(_ring_take, (CallbackCtx{LibZenohC.z_owned_sample_t}, Base.AsyncCondition))
         precompile(_ring_take, (CallbackCtx{LibZenohC.z_owned_query_t},  Base.AsyncCondition))
     end

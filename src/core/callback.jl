@@ -45,6 +45,9 @@ mutable struct CallbackCtx{Item}
     dropped::Csize_t                       # field 7 — overflow drop counter (written under mutex)
     closing::UInt8                         # field 8 — 1 ⇔ shutting down; trampoline bails
     buf::Vector{Item}                      # field 9 — GC owner of the ring storage
+    destroyed::Bool                        # field 10 — idempotency guard for destroy_ctx!;
+                                           #   Julia-side only, never read by the foreign thread,
+                                           #   so it adds no foreign-accessed offset
     CallbackCtx{Item}() where {Item} = new()
 end
 
@@ -157,6 +160,7 @@ function init_ctx!(ctx::CallbackCtx{Item}, async_cond::Base.AsyncCondition,
     ctx.count   = 0
     ctx.dropped = 0
     ctx.closing = 0
+    ctx.destroyed = false
     ctx.async   = Base.unsafe_convert(Ptr{Cvoid}, async_cond)
     rc = ccall(:uv_mutex_init, Cint, (Ptr{Cvoid},), ctx_p(ctx))
     rc == 0 || error("uv_mutex_init failed: $rc")
@@ -207,6 +211,13 @@ function destroy_ctx!(ctx::CallbackCtx{Owned},
         async_cond::Base.AsyncCondition,
         drop_fp::Ptr{Cvoid}, ::Type{Moved};
         close_async::Bool=true) where {Owned, Moved}
+    # Idempotent: a synchronous teardown (e.g. the precompile workload) and the deferred
+    # finalizer/drain-task teardown can both target one ctx; only the first runs, so the
+    # foreign-unsafe `uv_mutex_destroy` never double-fires. The two callers are never
+    # concurrent (the finalizer runs after the explicit teardown, or in a later process),
+    # so a plain flag suffices.
+    ctx.destroyed && return
+    ctx.destroyed = true
     GC.@preserve ctx begin
         while ctx.count > 0
             ccall(drop_fp, Cvoid, (Ptr{Moved},),
@@ -223,6 +234,8 @@ end
 function destroy_ctx_pod!(ctx::CallbackCtx{Item},
         async_cond::Base.AsyncCondition;
         close_async::Bool=true) where {Item}
+    ctx.destroyed && return                  # idempotent (see destroy_ctx!)
+    ctx.destroyed = true
     ccall(:uv_mutex_destroy, Cvoid, (Ptr{Cvoid},), ctx_p(ctx))
     close_async && close(async_cond)
 end
