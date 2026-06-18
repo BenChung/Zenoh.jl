@@ -60,4 +60,8 @@ function __init__()
     end
 end
 
+# Precompile the entity-declare / QoS-option path (largest first-declare inference bucket).
+# Last include: every type + declare entrypoint it exercises is defined by here.
+include("precompile.jl")
+
 end # module Zenoh
