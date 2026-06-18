@@ -36,6 +36,7 @@ include("types/declared_keyexpr.jl")# DeclaredKeyexpr (declared keyexpr id + ses
 # Higher-level features
 include("features/liveliness.jl")
 include("features/querier.jl")
+include("features/reusable_get.jl")     # ReusableGet, call! (zero-alloc request/reply over a Querier)
 include("features/matching.jl")
 include("features/advanced_pubsub.jl")  # AdvancedPublisher/Subscriber, delete!, SampleMissListener
 include("features/scout.jl")

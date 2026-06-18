@@ -66,6 +66,52 @@ function error_encoding(r::Reply)
     return _from_loaned_encoding(LibZenohC.z_reply_err_encoding(LibZenohC.z_reply_err(_loaned_reply(r))))
 end
 
+# ── Reusable reply slot (zero-allocation receive for ReusableGet) ─────
+#
+# The Reply analogue of `SampleHolder`: one caller-owned `z_owned_reply_t` box,
+# refilled in place by `_ring_take_into!` (no per-reply `Ref`), with a recycle epoch
+# so a borrowed `Reply` over it detects a later in-place refill. Driven by
+# `ReusableGet` (features/reusable_get.jl).
+mutable struct ReplyHolder
+    r::Base.RefValue{LibZenohC.z_owned_reply_t}
+    epoch::_RecycleEpoch     # bumped on each in-place refill; borrowed replies capture it
+end
+function ReplyHolder()
+    r = Ref{LibZenohC.z_owned_reply_t}()
+    LibZenohC.z_internal_reply_null(r)              # gravestone: drop of a null reply is a no-op
+    h = ReplyHolder(r, _RecycleEpoch())
+    # Bump in the finalizer too: a borrow built via `_borrow_reply(h.r, h.epoch)` pins
+    # h.r/h.epoch but not `h`, so a finalize-time drop must invalidate it.
+    finalizer(hh -> (_bump!(hh.epoch); LibZenohC.z_reply_drop(_move(hh.r))), h)
+    return h
+end
+# Drop the holder's current occupant (no-op on the gravestone), bumping the epoch
+# FIRST so a borrow still held over the previous occupant fails `_check_token` rather
+# than reading the recycled slot. `z_reply_drop` gravestones the box, so the
+# finalizer's later drop is a no-op (no double free).
+@inline _drop_current!(h::ReplyHolder) = (_bump!(h.epoch); LibZenohC.z_reply_drop(_move(h.r)))
+
+# Accessors on a settled `ReplyHolder` — what `call!` returns. They read the held reply
+# in place (no new owned handle, no `Reply` wrapper allocation). A `Sample`/`ZBytes`
+# borrowed from the holder pins it and rides its recycle epoch, so a zero-copy view over
+# the payload throws `BorrowError` if used after the next `call!` refills the slot. The
+# holder handle itself is valid only until the next `call!` — decode out before then.
+is_ok(h::ReplyHolder) = LibZenohC.z_reply_is_ok(_loan(h.r))
+function sample(h::ReplyHolder)
+    is_ok(h) || throw(ArgumentError("Reply is an error; check is_ok(h) first"))
+    return Sample(LibZenohC.z_reply_ok(_loan(h.r)), h)
+end
+function error_payload(h::ReplyHolder)
+    is_ok(h) && throw(ArgumentError("Reply is ok; no error payload"))
+    return ZBytes(LibZenohC.z_reply_err_payload(LibZenohC.z_reply_err(_loan(h.r))), h)
+end
+function error_encoding(h::ReplyHolder)
+    is_ok(h) && throw(ArgumentError("Reply is ok; no error encoding"))
+    return _from_loaned_encoding(LibZenohC.z_reply_err_encoding(LibZenohC.z_reply_err(_loan(h.r))))
+end
+@inline _token(h::ReplyHolder) = (h.epoch, h.epoch.gen)
+@inline _token_owner(h::ReplyHolder) = _token(h)
+
 # ── Buffered (ring) delivery ──────────────────────────────────────────
 #
 # `open(s, k; channel=:fifo)`, `Queryable(s, k; channel=…)`, and the channel
@@ -637,5 +683,5 @@ function Base.get(s::Session, k::AbstractKeyexpr, parameters::AbstractString="";
     end
 end
 
-export Reply, SubscriberHandler, KeepAllSubscriber, GetHandler, tryrecv!, recv!,
+export Reply, ReplyHolder, SubscriberHandler, KeepAllSubscriber, GetHandler, tryrecv!, recv!,
     is_ok, sample, error_payload, error_encoding

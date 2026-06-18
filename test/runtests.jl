@@ -1565,6 +1565,87 @@ try
         end
     end
 
+    @timed_testset "ReusableGet round-trip + reuse" begin
+        # Queryable on s1 echoes "echo:"+request payload; ReusableGet on s2 issues
+        # repeated zero-alloc request/reply calls, settling on the first reply.
+        s1 = S1
+        s2 = S2
+        qh = nothing; qrr = nothing; srv = nothing; rg = nothing
+        try
+            test_key = Zenoh.Keyexpr("test/reusableget/echo")
+            qh = Zenoh.Queryable(s1, test_key; channel=:fifo, capacity=16,
+                                 complete=true, allowed_origin=Zenoh.Localities.ANY)
+            srv = @async for query in qh
+                p = Zenoh.payload(query)
+                body = p === nothing ? "" : String(p)
+                att = Zenoh.attachment(query)
+                Zenoh.reply(query, "echo:" * body * (att === nothing ? "" : "/" * String(att));
+                            encoding=Zenoh.Encodings.TEXT_PLAIN)
+            end
+            sleep(0.2)
+
+            qrr = Zenoh.Querier(s2, test_key; target=:best_matching, timeout_ms=2000)
+            rg = Zenoh.ReusableGet(qrr; capacity=1)
+
+            # round-trip with an aliased payload buffer
+            r = Zenoh.call!(rg; payload=Vector{UInt8}("hello"))
+            @test r !== nothing && Zenoh.is_ok(r)
+            @test String(Zenoh.payload(Zenoh.sample(r))) == "echo:hello"
+
+            # repeated calls reuse the apparatus
+            for i in 1:5
+                ri = Zenoh.call!(rg; payload=Vector{UInt8}("req$i"))
+                @test ri !== nothing && Zenoh.is_ok(ri)
+                @test String(Zenoh.payload(Zenoh.sample(ri))) == "echo:req$i"
+            end
+
+            # steady-state allocation: the pooled apparatus (Channel/@spawn/per-reply
+            # Ref) is gone, so a call! stays well under the old per-call footprint.
+            warm = Vector{UInt8}("warm")
+            Zenoh.call!(rg; payload=warm); Zenoh.call!(rg; payload=warm)
+            @test (@allocated Zenoh.call!(rg; payload=warm)) < 4096
+
+            # single-in-flight is enforced (throws, not blocks), and recoverable
+            rg.inflight[] = true
+            @test_throws Zenoh.ConcurrentUseError Zenoh.call!(rg; payload=warm)
+            rg.inflight[] = false
+            @test Zenoh.is_ok(Zenoh.call!(rg; payload=warm))
+
+            # recycle epoch: a token captured before the next call! fails afterwards
+            held = Zenoh.call!(rg; payload=Vector{UInt8}("first"))
+            tok = Zenoh._token(held)
+            @test tok !== nothing
+            Zenoh.call!(rg; payload=Vector{UInt8}("second"))
+            @test_throws Zenoh.BorrowError Zenoh._check_token(tok)
+
+            # attachment rides along
+            rA = Zenoh.call!(rg; payload=Vector{UInt8}("p"), attachment=Vector{UInt8}("tag42"))
+            @test rA !== nothing && Zenoh.is_ok(rA)
+            @test String(Zenoh.payload(Zenoh.sample(rA))) == "echo:p/tag42"
+        finally
+            !isnothing(rg)  && close(rg)
+            !isnothing(qrr) && close(qrr)
+            !isnothing(qh)  && close(qh)
+            !isnothing(srv) && wait(srv)
+        end
+    end
+
+    @timed_testset "ReusableGet timeout returns nothing" begin
+        # No matching queryable: call! returns nothing, bounded by the querier timeout.
+        qrr = nothing; rg = nothing
+        try
+            qrr = Zenoh.Querier(S2, Zenoh.Keyexpr("test/reusableget/void");
+                                target=:best_matching, timeout_ms=200)
+            rg = Zenoh.ReusableGet(qrr)
+            t0 = time()
+            @test Zenoh.call!(rg; payload=Vector{UInt8}("x")) === nothing
+            @test (time() - t0) < 1.5
+        finally
+            !isnothing(rg)  && close(rg)
+            !isnothing(qrr) && close(qrr)
+        end
+    end
+
     @timed_testset "Querier MatchingListener + matching_status" begin
         s1 = S1
         s2 = S2

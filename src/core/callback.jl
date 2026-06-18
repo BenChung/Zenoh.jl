@@ -163,6 +163,26 @@ function init_ctx!(ctx::CallbackCtx{Item}, async_cond::Base.AsyncCondition,
     return ctx
 end
 
+# Reset a ctx for reuse across gets WITHOUT reallocating — the per-call counterpart
+# to `init_ctx!`. Zero head/count/dropped/closing under the mutex (so the foreign IO
+# thread observes a consistent empty, not-closing ring); KEEP buf/ring/cap/async/mutex.
+# Crucially this does NOT realloc `buf` and does NOT re-run `uv_mutex_init` (which on a
+# live mutex is UB). The caller MUST have observed the prior get's `:closed` — i.e.
+# libzenohc dropped that get's reply closure — before re-arming, so no in-flight foreign
+# callback can race the reset; `ReusableGet.call!` guarantees this by draining to
+# `:closed` before each re-arm. The drained ring's slots hold already-moved-out (stale)
+# handles, never re-dropped here — the next clone overwrites them.
+function rearm_ctx!(ctx::CallbackCtx{Item}) where {Item}
+    cp = ctx_p(ctx)
+    ccall(:uv_mutex_lock, Cvoid, (Ptr{Cvoid},), cp)
+    ctx.head    = 0
+    ctx.count   = 0
+    ctx.dropped = 0
+    ctx.closing = 0
+    ccall(:uv_mutex_unlock, Cvoid, (Ptr{Cvoid},), cp)
+    return ctx
+end
+
 # Number of items the ring has dropped to overflow since declare (advisory:
 # read without the mutex; aligned-word load, may lag the latest push).
 dropped_count(ctx::CallbackCtx) = Int(ctx.dropped)

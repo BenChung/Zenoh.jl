@@ -98,9 +98,16 @@ end
 # (whose views pin the sample and are safe to hold). Recovered from `owner` without
 # changing its role as the GC pin; owned (`owner=nothing`) and loaned (`owner=Reply`)
 # forms both yield `nothing`.
-@inline _token(s::Sample) = (o = getfield(s, :owner); o isa _RecycleEpoch ? (o, o.gen) : nothing)
+@inline _token(s::Sample) = (o = getfield(s, :owner); o isa _RecycleEpoch ? (o, o.gen) : _token_owner(o))
 @inline _token(h::SampleHolder) = (h.epoch, h.epoch.gen)
-@inline _token(z::ZBytes) = (o = getfield(z, :owner); (o isa Sample || o isa SampleHolder) ? _token(o) : nothing)
+@inline _token(z::ZBytes) = _token_owner(getfield(z, :owner))
+# Resolve a captured recycle token from a view's `owner`, whatever its kind: a reusable
+# source forwards its token; anything else (owned/loaned handle, `nothing`) yields none.
+# The `Reply` method is added in messaging/channel.jl (defined later), so a view over a
+# ReplyHolder-borrowed reply's payload is staleness-checked just like one over a Sample.
+@inline _token_owner(@nospecialize(o)) = nothing
+@inline _token_owner(o::Sample) = _token(o)
+@inline _token_owner(o::SampleHolder) = _token(o)
 
 _loaned_sample(s::Sample{Ptr{LibZenohC.z_loaned_sample_t}}) = s.s
 _loaned_sample(s::Sample{Base.RefValue{LibZenohC.z_owned_sample_t}}) = _loan(s.s)
