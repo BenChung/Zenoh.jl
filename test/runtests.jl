@@ -1735,6 +1735,46 @@ try
         end
     end
 
+    @timed_testset "reusable_copy_bytes + copy_bytes!" begin
+        zb = Zenoh.reusable_copy_bytes()
+        @test zb isa Zenoh.OwnedZBytes
+        b1 = Vector{UInt8}("first");         Zenoh.copy_bytes!(zb, b1, length(b1)); @test length(zb) == 5
+        b2 = Vector{UInt8}("second-longer"); Zenoh.copy_bytes!(zb, b2, length(b2)); @test length(zb) == 13
+        Zenoh.copy_bytes!(zb, b2, 6); @test length(zb) == 6                  # partial + re-arm-no-put
+        @test_throws BoundsError Zenoh.copy_bytes!(zb, b2, length(b2) + 1)   # bounds; zb untouched
+        @test length(zb) == 6
+        close(zb); close(zb)                                                 # arm-then-close, idempotent
+    end
+
+    @timed_testset "reusable_copy_bytes round-trip + reuse" begin
+        s1 = S1; s2 = S2
+        pub = nothing; sub = nothing
+        try
+            key = Zenoh.Keyexpr("test/copybytes/rt")
+            sub = open(s2, key; channel=:fifo, capacity=8); sleep(0.2)
+            pub = Zenoh.Publisher(s1, key)
+            pz = Zenoh.reusable_copy_bytes(); az = Zenoh.reusable_copy_bytes()
+            # send 1
+            p1 = Vector{UInt8}("payload-one"); a1 = Vector{UInt8}("attach-one")
+            Zenoh.copy_bytes!(pz, p1, length(p1)); Zenoh.copy_bytes!(az, a1, length(a1))
+            Zenoh.put(pub, pz; attachment = az)            # moves both → gravestoned
+            s = take!(sub)
+            @test String(Zenoh.payload(s)) == "payload-one"
+            @test String(Zenoh.attachment(s)) == "attach-one"
+            # send 2 — reuse the SAME boxes (drop-first on the gravestone is a no-op)
+            p2 = Vector{UInt8}("payload-number-two"); a2 = Vector{UInt8}("attach-two")
+            Zenoh.copy_bytes!(pz, p2, length(p2)); Zenoh.copy_bytes!(az, a2, length(a2))
+            Zenoh.put(pub, pz; attachment = az)
+            s2_ = take!(sub)
+            @test String(Zenoh.payload(s2_)) == "payload-number-two"
+            @test String(Zenoh.attachment(s2_)) == "attach-two"
+            close(pz); close(az)
+        finally
+            !isnothing(pub) && close(pub)
+            !isnothing(sub) && close(sub)
+        end
+    end
+
     @timed_testset "Querier MatchingListener + matching_status" begin
         s1 = S1
         s2 = S2

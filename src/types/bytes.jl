@@ -224,6 +224,58 @@ function lent_bytes(buf::DenseVector{UInt8}, len::Integer,
     return ZBytes(b, Val(:owned))
 end
 
+"""
+    OwnedZBytes
+
+Concrete alias for an owned [`ZBytes`](@ref) (`ZBytes{Ref{z_owned_bytes_t}}`) — the type
+[`reusable_copy_bytes`](@ref) returns, so callers can type a held field concretely.
+"""
+const OwnedZBytes = ZBytes{Base.RefValue{LibZenohC.z_owned_bytes_t}}
+
+"""
+    reusable_copy_bytes() -> OwnedZBytes
+
+A held, re-armable owned `ZBytes` for the **copy** publish path: the `copy=true` analogue of a
+pooled buffer. Allocates the `Ref{z_owned_bytes_t}` box + wrapper **once**; hold it for the
+publisher's lifetime and re-arm it every send with [`copy_bytes!`](@ref) — zero per-send `ZBytes`
+allocation, and none of the deleter / `preserve_handle` / foreign-thread machinery `lent_bytes`
+needs (zenoh takes its own synchronous copy, so the source buffer is free the instant
+`copy_bytes!` returns).
+
+The box is seeded in the gravestone (null) state, so the first `copy_bytes!`'s drop-first is a safe
+no-op. Like every owned `ZBytes` it carries **no GC finalizer** — reclaim it with [`close`](@ref)
+(gravestone-idempotent) on the holder's teardown; do not just drop the reference.
+"""
+function reusable_copy_bytes()
+    b = Ref{LibZenohC.z_owned_bytes_t}()
+    LibZenohC.z_internal_bytes_null(b)        # gravestone seed → first copy_bytes! drop-first is a no-op
+    return ZBytes(b, Val(:owned))
+end
+
+"""
+    copy_bytes!(zb::OwnedZBytes, buf::DenseVector{UInt8}, len::Integer) -> zb
+
+Re-arm a held [`reusable_copy_bytes`](@ref) box in place from `buf[1:len]`, copying into zenoh's
+own storage. **Drop-first, then copy:** `z_bytes_drop` frees any prior owned copy and resets the
+box to gravestone (no-op if already gravestone/moved-from); `z_bytes_copy_from_buf` then
+*constructs into* that slot — it does not free prior content, so the leading drop is the leak
+guard, not an optimization. The two C calls take **different pointer types** (`z_moved_bytes_t*`
+from `_move` vs the bare `z_owned_bytes_t*`), which is why this lives in Zenoh.jl.
+
+Mutates `zb.b[]` in place and returns the same `zb` (re-armed) — never reassign the held field.
+**Single-writer:** the drop+copy is two non-atomic C calls on shared state, so the caller must
+serialize `copy_bytes!`/`put` on a given box (e.g. under the publisher's buffer lock); it is not
+internally thread-safe. `put`/`_make_put_opts` consume (`_move`) the box every send → gravestoned →
+the next `copy_bytes!`'s drop-first is a safe no-op.
+"""
+function copy_bytes!(zb::OwnedZBytes, buf::DenseVector{UInt8}, len::Integer)
+    0 <= len <= length(buf) || throw(BoundsError(buf, len))
+    LibZenohC.z_bytes_drop(_move(zb.b))       # free any prior copy / no-op on gravestone
+    GC.@preserve buf _handle_result(
+        LibZenohC.z_bytes_copy_from_buf(zb.b, pointer(buf), Csize_t(len)))   # construct into the slot
+    return zb
+end
+
 # Materialize the whole payload into a Julia String. Copies out of the
 # (possibly multi-slice) payload, so the result is independent of `z`.
 function Base.String(z::ZBytes)
@@ -514,4 +566,4 @@ function Base.open(f::Function, ::Type{ZBytes}, ::Val{:write})
     end
 end
 
-export ZBytes, ZBytesWriter, finish, lent_bytes
+export ZBytes, ZBytesWriter, finish, lent_bytes, reusable_copy_bytes, copy_bytes!, OwnedZBytes
