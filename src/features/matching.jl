@@ -82,9 +82,15 @@ subscriber departs). See [`MatchingListener`](@ref) for semantics.
 """
 function MatchingListener(f::Function, pub::Publisher;
         should_close_on_error::Bool=true)
-    _matching_listener_setup(f, pub, should_close_on_error) do handle, closure
-        LibZenohC.z_publisher_declare_matching_listener(
-            _loan(pub.pub), handle, _move(closure))
+    # Hold the publisher's lock across the declare (which loans `pub.pub`) so a concurrent close
+    # can't undeclare the publisher mid-declare. Closed → bail before building the ctx. The lock
+    # spans the spawned consume task's creation, which never takes `pub.lock`, so no deadlock.
+    @lock pub.lock begin
+        pub.closed && throw(ArgumentError("MatchingListener on a closed Publisher"))
+        _matching_listener_setup(f, pub, should_close_on_error) do handle, closure
+            LibZenohC.z_publisher_declare_matching_listener(
+                _loan(pub.pub), handle, _move(closure))
+        end
     end
 end
 
@@ -132,8 +138,10 @@ notifications use [`MatchingListener`](@ref).
 """
 function matching_status(pub::Publisher)
     status = Ref{LibZenohC.z_matching_status_t}()
-    rtc = LibZenohC.z_publisher_get_matching_status(_loan(pub.pub), status)
-    _handle_result(rtc)
+    @lock pub.lock begin
+        pub.closed && return false       # a closed publisher has no matching peers
+        _handle_result(LibZenohC.z_publisher_get_matching_status(_loan(pub.pub), status))
+    end
     return status[].matching
 end
 

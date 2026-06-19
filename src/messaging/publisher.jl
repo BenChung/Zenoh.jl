@@ -45,9 +45,15 @@ mutable struct Publisher <: AbstractPublisher
     pub::Base.RefValue{LibZenohC.z_owned_publisher_t}
     keyexpr::AbstractKeyexpr # we have to keep this for GC
     closed::Bool
+    # Held by `close` (which undeclares → gravestones `pub`) AND by every op that loans `pub`
+    # (`put`/`delete!`/`matching_status`/`MatchingListener`), so a concurrent `close` can't move the
+    # handle to a gravestone mid-loan (a null-deref / use-after-free on a libzenoh thread). Any new
+    # op that loans `pub` MUST take this lock. `ReentrantLock`, not `SpinLock`: `z_publisher_put` can
+    # block under `congestion_control = BLOCK`, so a waiter must yield; uncontended it is alloc-free.
+    lock::Base.ReentrantLock
     # Low-level inner constructor: wraps an already-declared owned handle.
     Publisher(pub::Base.RefValue{LibZenohC.z_owned_publisher_t}, k::Keyexpr) =
-        new(pub, k, false)
+        new(pub, k, false, Base.ReentrantLock())
 end
 
 # Advanced-only publisher keywords. Presence of any routes `Publisher(s, k; …)`
@@ -115,9 +121,11 @@ function Publisher(s::Session, k::Keyexpr; kwargs...)
 end
 
 function Base.close(p::Publisher)
-    p.closed && return
-    p.closed = true
-    _handle_result(LibZenohC.z_undeclare_publisher(_move(p.pub)))
+    @lock p.lock begin
+        p.closed && return nothing
+        p.closed = true
+        _handle_result(LibZenohC.z_undeclare_publisher(_move(p.pub)))
+    end
     return nothing
 end
 
@@ -198,10 +206,23 @@ function put(p::Publisher, payload; shm=nothing, kwargs...)
         attach_ref === nothing || close(attach_ref)
         rethrow()
     end
-    GC.@preserve enc_ref attach_ref ts begin
-        rtc = LibZenohC.z_publisher_put(_loan(p.pub), _move(bytes), opts)
-        _handle_result(rtc)
+    # Lock against close/undeclare across the C put so we never loan a gravestoned handle. Options
+    # + payload are built above, OUTSIDE the lock, so a (possibly blocking) SHM alloc doesn't hold it.
+    @lock p.lock begin
+        if p.closed
+            # Undeclared concurrently: drop the built owned bytes/attachment (finalizer-less → would
+            # leak) and no-op — the put is moot post-close. `close` is gravestone-idempotent, so a
+            # reused/held caller box (ROSNode's payload_zb/att_zb) is just re-gravestoned, exactly as
+            # the normal-path `_move` would leave it.
+            close(bytes)
+            attach_ref === nothing || close(attach_ref)
+            return nothing
+        end
+        GC.@preserve enc_ref attach_ref ts begin
+            _handle_result(LibZenohC.z_publisher_put(_loan(p.pub), _move(bytes), opts))
+        end
     end
+    return nothing
 end
 
 """
@@ -296,8 +317,11 @@ function Base.delete!(p::Publisher; timestamp::Union{Nothing, ZTimestamp} = noth
     LibZenohC.z_publisher_delete_options_default(opts)
     optsP = Base.unsafe_convert(Ptr{LibZenohC.z_publisher_delete_options_t}, opts)
     isnothing(timestamp) || (optsP.timestamp = Base.unsafe_convert(Ptr{LibZenohC.z_timestamp_t}, timestamp.ts))
-    GC.@preserve timestamp begin
-        _handle_result(LibZenohC.z_publisher_delete(_loan(p.pub), opts))
+    @lock p.lock begin                       # same put/close race — loan must be lock-guarded
+        p.closed && return nothing           # undeclared concurrently → the delete is moot
+        GC.@preserve timestamp begin
+            _handle_result(LibZenohC.z_publisher_delete(_loan(p.pub), opts))
+        end
     end
     return nothing
 end

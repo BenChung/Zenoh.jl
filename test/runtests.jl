@@ -1775,6 +1775,33 @@ try
         end
     end
 
+    @timed_testset "publisher put/delete!/matching_status race close" begin
+        # put/delete!/matching_status hold the publisher lock across the handle loan, so a concurrent
+        # close can't undeclare it mid-loan (no gravestone loan → no UAF). Heavy multi-thread coverage
+        # is in the standalone .claude/test_pubrace.jl; this guards the bail paths + idempotency.
+        payload = Vector{UInt8}("race-payload-xyz")
+        for trial in 1:8
+            pub = Zenoh.Publisher(S1, Zenoh.Keyexpr("test/race/p/$trial"))
+            ws = [Threads.@spawn begin
+                for _ in 1:15
+                    try; Zenoh.put(pub, Zenoh.ZBytes(payload; copy=true)); catch; end
+                    try; Base.delete!(pub); catch; end
+                    try; Zenoh.matching_status(pub); catch; end
+                end
+            end for _ in 1:3]
+            c = Threads.@spawn (yield(); close(pub))
+            foreach(wait, ws); wait(c)
+            close(pub)                       # idempotent
+            @test pub.closed
+        end
+        # closed-publisher guards: declare throws, ops no-op (no gravestone loan)
+        pub = Zenoh.Publisher(S1, Zenoh.Keyexpr("test/race/closed")); close(pub)
+        @test_throws ArgumentError Zenoh.MatchingListener((_b) -> nothing, pub)
+        @test Zenoh.matching_status(pub) == false
+        Base.delete!(pub)
+        Zenoh.put(pub, Zenoh.ZBytes(payload; copy=true))     # no-op, drops the built bytes
+    end
+
     @timed_testset "Querier MatchingListener + matching_status" begin
         s1 = S1
         s2 = S2

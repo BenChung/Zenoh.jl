@@ -201,8 +201,10 @@ mutable struct AdvancedPublisher <: AbstractPublisher
     pub::Base.RefValue{LibZenohC.ze_owned_advanced_publisher_t}
     keyexpr::AbstractKeyexpr  # GC pin
     closed::Bool
+    lock::Base.ReentrantLock  # serializes put/delete!/matching_status/MatchingListener against
+                              # close/undeclare — see Publisher's `lock` (publisher.jl)
     AdvancedPublisher(pub::Base.RefValue{LibZenohC.ze_owned_advanced_publisher_t}, k::Keyexpr) =
-        new(pub, k, false)
+        new(pub, k, false, Base.ReentrantLock())
 end
 
 function AdvancedPublisher(s::Session, k::Keyexpr; kwargs...)
@@ -216,9 +218,11 @@ function AdvancedPublisher(s::Session, k::Keyexpr; kwargs...)
 end
 
 function Base.close(p::AdvancedPublisher)
-    p.closed && return
-    p.closed = true
-    _handle_result(LibZenohC.ze_undeclare_advanced_publisher(_move(p.pub)))
+    @lock p.lock begin
+        p.closed && return nothing
+        p.closed = true
+        _handle_result(LibZenohC.ze_undeclare_advanced_publisher(_move(p.pub)))
+    end
     return nothing
 end
 
@@ -232,15 +236,28 @@ declare-time QoS applies, so the per-call options match the plain
 an SHM provider as `shm`).
 """
 function put(ap::AdvancedPublisher, payload; shm=nothing, kwargs...)
-    bytes = _shm_zbytes(shm, payload)
     inner, enc_ref, attach_ref, ts = _make_put_opts(LibZenohC.z_publisher_put_options_t; kwargs...)
     opts = Ref{LibZenohC.ze_advanced_publisher_put_options_t}()
     LibZenohC.ze_advanced_publisher_put_options_default(opts)
     _store_field!(opts, 1, inner[])  # ze_advanced_publisher_put_options_t.put_options
-    GC.@preserve enc_ref attach_ref ts begin
-        rtc = LibZenohC.ze_advanced_publisher_put(_loan(ap.pub), _move(bytes), opts)
-        _handle_result(rtc)
+    local bytes
+    try
+        bytes = _shm_zbytes(shm, payload)
+    catch
+        attach_ref === nothing || close(attach_ref)   # release the built attachment (mirrors put(::Publisher))
+        rethrow()
     end
+    @lock ap.lock begin                   # lock the loan against close/undeclare (see put(::Publisher))
+        if ap.closed
+            close(bytes)
+            attach_ref === nothing || close(attach_ref)
+            return nothing
+        end
+        GC.@preserve enc_ref attach_ref ts begin
+            _handle_result(LibZenohC.ze_advanced_publisher_put(_loan(ap.pub), _move(bytes), opts))
+        end
+    end
+    return nothing
 end
 
 """
@@ -257,8 +274,11 @@ function Base.delete!(ap::AdvancedPublisher; timestamp::Union{Nothing, ZTimestam
     opts = Ref{LibZenohC.ze_advanced_publisher_delete_options_t}()
     LibZenohC.ze_advanced_publisher_delete_options_default(opts)
     _store_field!(opts, 1, inner[])  # ze_advanced_publisher_delete_options_t.delete_options
-    GC.@preserve timestamp begin
-        _handle_result(LibZenohC.ze_advanced_publisher_delete(_loan(ap.pub), opts))
+    @lock ap.lock begin
+        ap.closed && return nothing      # undeclared concurrently → moot
+        GC.@preserve timestamp begin
+            _handle_result(LibZenohC.ze_advanced_publisher_delete(_loan(ap.pub), opts))
+        end
     end
     return nothing
 end
@@ -274,9 +294,12 @@ plain [`Publisher`](@ref) form.
 """
 function MatchingListener(f::Function, ap::AdvancedPublisher;
         should_close_on_error::Bool=true)
-    _matching_listener_setup(f, ap, should_close_on_error) do handle, closure
-        LibZenohC.ze_advanced_publisher_declare_matching_listener(
-            _loan(ap.pub), handle, _move(closure))
+    @lock ap.lock begin                  # lock the declare's loan against close (see Publisher form)
+        ap.closed && throw(ArgumentError("MatchingListener on a closed AdvancedPublisher"))
+        _matching_listener_setup(f, ap, should_close_on_error) do handle, closure
+            LibZenohC.ze_advanced_publisher_declare_matching_listener(
+                _loan(ap.pub), handle, _move(closure))
+        end
     end
 end
 
@@ -289,8 +312,10 @@ matching subscriber exists). For change notifications use
 """
 function matching_status(ap::AdvancedPublisher)
     status = Ref{LibZenohC.z_matching_status_t}()
-    rtc = LibZenohC.ze_advanced_publisher_get_matching_status(_loan(ap.pub), status)
-    _handle_result(rtc)
+    @lock ap.lock begin
+        ap.closed && return false        # a closed publisher has no matching peers
+        _handle_result(LibZenohC.ze_advanced_publisher_get_matching_status(_loan(ap.pub), status))
+    end
     return status[].matching
 end
 
