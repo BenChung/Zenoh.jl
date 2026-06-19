@@ -1,6 +1,11 @@
 using Zenoh, Zenohd_jll, Test
 include("test_utils.jl")
 
+# Counting two-arg deleter (top-level → constant @cfunction) for the lent_bytes exactly-once test.
+const _SH_COUNT = Threads.Atomic{Int}(0)
+_sh_count_release(::Ptr{Cvoid}, ::Ptr{Cvoid}) = (Threads.atomic_add!(_SH_COUNT, 1); C_NULL)
+const _SH_COUNT_CFN = @cfunction(_sh_count_release, Ptr{Cvoid}, (Ptr{Cvoid}, Ptr{Cvoid}))
+
 # Distinct random TCP port per run, so a lingering router from a previous
 # (crashed/killed) run can't bind-collide with this run's router or be
 # mistaken for it. All sessions below connect to `$EP`.
@@ -1682,6 +1687,52 @@ try
         Zenoh._teardown_buffered_queryable!(q)
         Zenoh._teardown_buffered_queryable!(q)    # second call: no-op
         @test q.backing.ctx.destroyed
+    end
+
+    @timed_testset "lent_bytes + CompletionCell" begin
+        # CompletionCell lifecycle + lent_bytes deleter firing on drop (no network).
+        c = Zenoh.CompletionCell()
+        @test Zenoh.isdone(c)                      # fresh = done
+        Zenoh.arm!(c); @test !Zenoh.isdone(c)
+        buf = Vector{UInt8}("hello-lent")
+        zb = Zenoh.lent_bytes(buf, length(buf), Zenoh.completion_deleter(), Zenoh.completion_ctx(c))
+        @test !Zenoh.isdone(c)
+        close(zb); wait(c)
+        @test Zenoh.isdone(c)
+        Zenoh.close(c)
+
+        @test_throws BoundsError Zenoh.lent_bytes(buf, length(buf)+1, _SH_COUNT_CFN, Ptr{Cvoid}(C_NULL))
+
+        # exactly-once on drop; double-close is a no-op (gravestone after _move).
+        _SH_COUNT[] = 0
+        zb2 = Zenoh.lent_bytes(buf, length(buf), _SH_COUNT_CFN, Ptr{Cvoid}(C_NULL))
+        @test _SH_COUNT[] == 0
+        close(zb2); @test _SH_COUNT[] == 1
+        close(zb2); @test _SH_COUNT[] == 1
+    end
+
+    @timed_testset "lent_bytes round-trip (deleter fires post-transmission)" begin
+        # Lend a buffer, put it, confirm the subscriber gets the bytes AND the deleter fires once
+        # zenoh has transmitted (the exactly-once-on-put firing guarantee).
+        s1 = S1; s2 = S2
+        pub = nothing; sub = nothing
+        try
+            key = Zenoh.Keyexpr("test/sendhandle/rt")
+            sub = open(s2, key; channel=:fifo, capacity=8)
+            sleep(0.2)
+            pub = Zenoh.Publisher(s1, key)
+            cell = Zenoh.CompletionCell(); Zenoh.arm!(cell)
+            buf = Vector{UInt8}("lent-payload-xyz")
+            zb = Zenoh.lent_bytes(buf, length(buf), Zenoh.completion_deleter(), Zenoh.completion_ctx(cell))
+            Zenoh.put(pub, zb)                     # moved in — do NOT close zb afterward
+            smp = take!(sub)
+            @test String(Zenoh.payload(smp)) == "lent-payload-xyz"
+            @test timedwait(() -> Zenoh.isdone(cell), 5.0) === :ok
+            Zenoh.close(cell)
+        finally
+            !isnothing(pub) && close(pub)
+            !isnothing(sub) && close(sub)
+        end
     end
 
     @timed_testset "Querier MatchingListener + matching_status" begin

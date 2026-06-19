@@ -13,6 +13,7 @@ include("core/callback.jl")         # CallbackCtx, _CB_INIT_HOOKS
 include("core/logging.jl")          # setup_logging, LogSeverity, LogStream, open_log_stream
 include("core/gc_safe_threadcall.jl")# @gc_safe_threadcall (GC-safe blocking-recv trampoline)
 include("core/closure_kinds.jl")    # @closure_kind
+include("core/completion.jl")       # CompletionCell (foreign-thread completion signal for lent_bytes)
 include("core/encoding.jl")         # Encoding, _to_owned_encoding
 include("core/qos.jl")              # Locality, Priority, CongestionControl, …
 

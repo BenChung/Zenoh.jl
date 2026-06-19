@@ -188,6 +188,42 @@ function Base.close(z::ZBytes{Base.RefValue{LibZenohC.z_owned_bytes_t}})
 end
 Base.close(::ZBytes{Ptr{LibZenohC.z_loaned_bytes_t}}) = nothing
 
+"""
+    lent_bytes(buf::DenseVector{UInt8}, len::Integer, on_release::Ptr{Cvoid}, ctx::Ptr{Cvoid}) -> ZBytes
+
+A zero-copy owned `ZBytes` that BORROWS `buf[1:len]` and hands libzenoh a caller-supplied deleter
+`on_release`, invoked once when zenoh is done with the buffer (post-transmission). Unlike
+`ZBytes(buf; copy=false)`, this does **not** `Base.preserve_handle` the buffer — the caller owns
+the lifetime: `buf` (and whatever `ctx` points at) MUST stay alive and unmodified until
+`on_release` fires. Lend a buffer to a fire-and-forget `put` and reclaim it on that signal (see
+[`CompletionCell`](@ref)).
+
+`on_release` must be a **two-arg** C deleter `(data::Ptr{Cvoid}, ctx::Ptr{Cvoid})` — the
+`z_bytes_from_buf` ABI, NOT the one-arg closure-drop ABI — pre-built with `@cfunction` (so it is a
+constant pointer, not allocated per call). libzenoh calls it on one of its own runtime threads, so
+the deleter must follow the foreign-thread discipline (ccalls / pointer arithmetic only); see
+[`CompletionCell`](@ref) for a ready-made one.
+
+Firing contract:
+- On SUCCESS, ownership passes to the returned `ZBytes`; the deleter fires **exactly once** when
+  that `ZBytes` is dropped. After `_move`ing it into a `put`, that drop happens inside zenoh once
+  transmission finishes — the deleter, not the `put` return, is the completion signal.
+- On FAILURE (`z_bytes_from_buf` ≠ `Z_OK`, thrown here as a `ZenohError`), the deleter NEVER fires
+  and nothing is returned, so the caller still owns `buf` and must reclaim it.
+
+Do NOT `close`/drop the returned `ZBytes` after `_move`ing it into a `put` — the move consumed it
+and a second drop would double-fire the deleter. If you build one and don't send, `close(zb)` drops
+it once (firing the deleter once) on the caller's task.
+"""
+function lent_bytes(buf::DenseVector{UInt8}, len::Integer,
+                    on_release::Ptr{Cvoid}, ctx::Ptr{Cvoid})
+    0 <= len <= length(buf) || throw(BoundsError(buf, len))
+    b = Ref{LibZenohC.z_owned_bytes_t}()
+    rtc = GC.@preserve buf LibZenohC.z_bytes_from_buf(b, pointer(buf), Csize_t(len), on_release, ctx)
+    _handle_result(rtc)     # on failure the deleter did NOT fire → caller keeps `buf`
+    return ZBytes(b, Val(:owned))
+end
+
 # Materialize the whole payload into a Julia String. Copies out of the
 # (possibly multi-slice) payload, so the result is independent of `z`.
 function Base.String(z::ZBytes)
@@ -478,4 +514,4 @@ function Base.open(f::Function, ::Type{ZBytes}, ::Val{:write})
     end
 end
 
-export ZBytes, ZBytesWriter, finish
+export ZBytes, ZBytesWriter, finish, lent_bytes
