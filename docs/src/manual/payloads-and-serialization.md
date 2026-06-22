@@ -173,6 +173,31 @@ ZSlice
 finish
 ```
 
+### Reusable and borrowed payloads
+
+The default [`ZBytes`](@ref) constructors allocate a fresh owned payload per call. For hot publish
+loops, two paths reuse one payload across sends and drop that per-send allocation:
+
+- **Copy path.** [`reusable_copy_bytes`](@ref) allocates one owned box; re-arm it each send with
+  [`copy_bytes!`](@ref), which copies the bytes into zenoh's own storage. The source buffer is free
+  to mutate the instant `copy_bytes!` returns. [`OwnedZBytes`](@ref) is the concrete type both
+  return, for typing a held field.
+- **Borrow (zero-copy) path.** [`lent_bytes`](@ref) hands zenoh your buffer in place with no copy,
+  plus a deleter that fires once transmission completes. You own the buffer's lifetime: keep it alive
+  and unmodified until the deleter fires. [`CompletionCell`](@ref) is a ready-made deleter that wakes
+  the lending task when zenoh is done; [`completion_deleter`](@ref) and [`completion_ctx`](@ref)
+  supply its `on_release` and `ctx`.
+
+```@docs
+reusable_copy_bytes
+copy_bytes!
+OwnedZBytes
+lent_bytes
+CompletionCell
+completion_deleter
+completion_ctx
+```
+
 ### Structured codec
 
 ```@docs

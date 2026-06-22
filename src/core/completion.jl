@@ -14,6 +14,24 @@
 # The caller MUST keep the cell GC-rooted until the deleter has fired: its raw pointer is handed to
 # libzenoh as the deleter ctx, and a collected cell makes that pointer dangle.
 
+"""
+    CompletionCell()
+
+A reusable completion signal that tells the lending task when zenoh has released a
+[`lent_bytes`](@ref) buffer (transmission complete). Supply [`completion_deleter`](@ref) and
+[`completion_ctx`](@ref) as that buffer's `on_release` and `ctx`, and the lend's deleter targets
+this cell.
+
+Each send follows three steps:
+
+1. `arm!` the cell, then build the lend and send it.
+2. `wait(cell)` blocks until zenoh's deleter fires on one of its runtime threads.
+3. Reclaim or reuse the buffer — the wake carries the happens-before, so the bytes are safe to touch.
+
+`isdone(cell)` polls the same state without blocking. Keep the cell GC-rooted until its deleter has
+fired: its raw pointer lives inside zenoh, and a collected cell makes that pointer dangle. `close` the
+cell once no deleter can still fire for it.
+"""
 mutable struct CompletionCell
     async::Ptr{Cvoid}            # field 1 (offset 0) — uv_async_t*; read by the foreign deleter
     done::UInt8                  # field 2 — 0 armed / 1 done; written by the foreign deleter

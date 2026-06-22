@@ -294,6 +294,22 @@ get(::Zenoh.Querier, ::AbstractString)
 get(::Function, ::Zenoh.Querier, ::AbstractString)
 ```
 
+### Reusable, allocation-free gets
+
+A [`ReusableGet`](@ref) wraps a [`Querier`](@ref) for the request/reply hot path: it allocates its
+whole apparatus once, and each [`call!`](@ref) re-arms it in place and blocks until the first reply,
+so a steady-state call allocates nothing on the Zenoh.jl side. The reply lands in a pooled
+[`ReplyHolder`](@ref) — read it, and copy out anything you need, before the next `call!` reuses the
+slot. A `ReusableGet` is single-in-flight: a concurrent `call!` throws [`ConcurrentUseError`](@ref),
+so use one per task or a small pool.
+
+```@docs
+ReusableGet
+call!
+ReplyHolder
+ConcurrentUseError
+```
+
 ## Mapping to Zenoh, Rust, and C
 
 | Zenoh.jl | Zenoh abstraction | Rust | zenoh-c |

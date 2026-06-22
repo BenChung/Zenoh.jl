@@ -72,6 +72,20 @@ end
 # refilled in place by `_ring_take_into!` (no per-reply `Ref`), with a recycle epoch
 # so a borrowed `Reply` over it detects a later in-place refill. Driven by
 # `ReusableGet` (features/reusable_get.jl).
+
+"""
+    ReplyHolder
+
+The pooled reply slot a [`ReusableGet`](@ref) settles into. [`call!`](@ref) returns the same
+`ReplyHolder` every call and refills it in place, so a steady-state get allocates nothing on the
+receive side. Read the settled reply with [`is_ok`](@ref), then [`sample`](@ref) on success or
+[`error_payload`](@ref) / [`error_encoding`](@ref) on error.
+
+Its contents — and anything borrowed from them (the [`sample`](@ref)'s payload, key expression, and
+attachment) — stay valid only until the next [`call!`](@ref) reuses the slot. Copy out what you need
+before then; a borrowed view used across a `call!` throws a `BorrowError`, caught by the slot's
+recycle epoch.
+"""
 mutable struct ReplyHolder
     r::Base.RefValue{LibZenohC.z_owned_reply_t}
     epoch::_RecycleEpoch     # bumped on each in-place refill; borrowed replies capture it
