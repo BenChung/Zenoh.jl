@@ -253,7 +253,7 @@ function put(ap::AdvancedPublisher, payload; shm=nothing, kwargs...)
             attach_ref === nothing || close(attach_ref)
             return nothing
         end
-        GC.@preserve enc_ref attach_ref ts begin
+        GC.@preserve enc_ref attach_ref ts bytes begin
             _handle_result(LibZenohC.ze_advanced_publisher_put(_loan(ap.pub), _move(bytes), opts))
         end
     end
@@ -455,7 +455,8 @@ end
 
 Declare a sample-miss listener on advanced subscriber `sub`. `f(::SampleMiss)`
 runs on a dedicated Julia task each time an unrecoverable gap is detected.
-Call `close(ml)` to undeclare.
+Call `close(ml)` to undeclare. A finalizer drops an abandoned listener as a
+safety net.
 """
 mutable struct SampleMissListener
     handle::Base.RefValue{LibZenohC.ze_owned_sample_miss_listener_t}
@@ -477,7 +478,25 @@ function SampleMissListener(f::Function, sub::AdvancedSubscriber;
         _handle_result(rtc)
     end
     task = Threads.@spawn consume(f, _miss_unwrap, ctx, async_cond, should_close_on_error)
-    return SampleMissListener(handle, ctx, async_cond, task, sub, false)
+    ml = SampleMissListener(handle, ctx, async_cond, task, sub, false)
+    finalizer(_finalize_sample_miss_listener, ml)
+    return ml
+end
+
+# GC safety net for an abandoned SampleMissListener. Same hazard and teardown order as
+# `_finalize_matching_listener` (matching.jl): drop the handle first to stop the still-
+# installed C closure firing into a freed ctx, then tear down in close(ml)'s order.
+_finalize_sample_miss_listener(ml::SampleMissListener) =
+    ml.closed || Threads.@spawn _teardown_sample_miss_listener!(ml)
+
+function _teardown_sample_miss_listener!(ml::SampleMissListener)
+    ml.closed && return nothing
+    ml.closed = true
+    signal_closing!(ml.ctx, ml.async_cond)
+    LibZenohC.ze_sample_miss_listener_drop(_move(ml.handle))   # stop foreign delivery (drop, not undeclare)
+    wait(ml.task)
+    _teardown_callback(Val(:miss), ml.ctx, ml.async_cond)
+    return nothing
 end
 
 function Base.close(ml::SampleMissListener)

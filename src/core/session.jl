@@ -42,14 +42,14 @@ struct Session
     # `shm_ready`. The cached fast path (`shm[] !== nothing`) returns before
     # taking this, so there is no hot-path cost.
     shm_lock::ReentrantLock
-    # `true` once `close` (or the finalizer) has torn the session down. In a
-    # mutable cell so `Session` stays immutable; guards `close` against running
-    # `z_close`/`z_session_drop` twice and lets every handle accessor fail loudly
-    # instead of touching a freed handle.
-    closed::Base.RefValue{Bool}
+    # `true` once `close` (or the finalizer) has torn the session down. Atomic on
+    # two counts: it keeps `Session` immutable, and its check-then-set serializes
+    # concurrent closes against a double-drop. Every handle accessor reads it (as
+    # `closed[]`) and throws rather than touch a freed handle.
+    closed::Threads.Atomic{Bool}
     Session() = new(Ref{LibZenohC.z_owned_session_t}(),
                     Ref{Any}(nothing), Ref{Any}(nothing), Ref{Symbol}(:none),
-                    ReentrantLock(), Ref(false))
+                    ReentrantLock(), Threads.Atomic{Bool}(false))
 end
 
 # Loan the session for any operation; throws once closed so a use-after-free
@@ -96,19 +96,29 @@ function Base.open(c::Config; shm_clients=nothing, on_shm_alloc_error=nothing,
     LibZenohC.z_internal_session_null(s.s)
     let handle = s.s, closed = s.closed
         finalizer(handle) do h
-            closed[] || _drop(_move(h))
+            # Flip `closed` before dropping so a closed-gated path racing this
+            # (notably a `DeclaredKeyexpr` finalizer reading `session.closed[]`)
+            # can't observe a live session while the handle is freed.
+            Threads.atomic_xchg!(closed, true) || _drop(_move(h))
         end
     end
     cfg_copy = Ref{LibZenohC.z_owned_config_t}()
-    LibZenohC.z_config_clone(cfg_copy, LibZenohC.z_config_loan(c.c))
+    GC.@preserve c LibZenohC.z_config_clone(cfg_copy, LibZenohC.z_config_loan(c.c))
 
-    if shm_clients === nothing
-        opts = Ref{LibZenohC.z_open_options_t}()
-        LibZenohC.z_open_options_default(opts)
-        _handle_result(LibZenohC.z_open(s.s, _move(cfg_copy), opts))
-    else
-        _handle_result(LibZenohC.z_open_with_custom_shm_clients(
-            s.s, _move(cfg_copy), _loan(shm_clients.s)))
+    try
+        if shm_clients === nothing
+            opts = Ref{LibZenohC.z_open_options_t}()
+            LibZenohC.z_open_options_default(opts)
+            GC.@preserve cfg_copy _handle_result(LibZenohC.z_open(s.s, _move(cfg_copy), opts))
+        else
+            GC.@preserve cfg_copy _handle_result(LibZenohC.z_open_with_custom_shm_clients(
+                s.s, _move(cfg_copy), _loan(shm_clients.s)))
+        end
+    catch
+        # `z_open` consumes `cfg_copy` only on success; a throw before/at the move
+        # leaves the clone owned here, so drop it (a no-op if it was moved).
+        _drop(_move(cfg_copy))
+        rethrow()
     end
 
     # Discover the session's SHM capability once, here — the one place SHM is
@@ -142,15 +152,13 @@ session is unusable; operations on it throw.
     closing it.
 """
 function Base.close(s::Session)
-    s.closed[] && return nothing
-    # Disarm the retry guard and the safety-net finalizer up front, then free the
-    # handle in a `finally` so it happens on THIS task even if the graceful
-    # `z_close` errors. Doing the drop unconditionally is what closes the leak: a
-    # throwing `z_close` (this build returns -128 intermittently) must NOT strand
-    # the owned session — and thus its tokio runtime / SHM subsystem — for the
-    # process lifetime. Flipping `closed` first is safe precisely because the drop
-    # is guaranteed below, so the finalizer never double-drops.
-    s.closed[] = true
+    # Atomically claim the close: only the caller that flips `closed` false→true
+    # proceeds, so concurrent closes (or a close racing the finalizer) can't both
+    # drop the handle. The `finally` drop below runs unconditionally to close a
+    # leak: a throwing `z_close` must not strand the owned session — and thus its
+    # tokio runtime / SHM subsystem — for the process lifetime. The guaranteed
+    # drop is why claiming `closed` first never lets the finalizer double-drop.
+    Threads.atomic_xchg!(s.closed, true) && return nothing
     opts = Ref{LibZenohC.z_close_options_t}()
     LibZenohC.z_close_options_default(opts)
     try
@@ -170,14 +178,14 @@ end
 """
 Checks if zenoh session is open.
 """
-Base.isopen(s::Session) = !s.closed[] && !LibZenohC.z_session_is_closed(_loan(s.s))
+Base.isopen(s::Session) = !s.closed[] && !GC.@preserve s LibZenohC.z_session_is_closed(_loan(s.s))
 
 """
 Returns the session’s Zenoh ID.
 
 A valid session always yields a non-zero ID; an all-zero 16-byte array means the session was invalid.
 """
-zid(s::Session) = LibZenohC.z_info_zid(_loan(s))
+zid(s::Session) = GC.@preserve s LibZenohC.z_info_zid(_loan(s))
 
 function Base.show(io::IO, id::LibZenohC.z_id_t)
     r=Ref{LibZenohC.z_owned_string_t}()
@@ -209,7 +217,7 @@ function router_zids(s::Session)
     end
     callback = Ref{LibZenohC.z_owned_closure_zid_t}()
     LibZenohC.z_closure_zid(callback, recv_func, C_NULL, recv_ctx)
-    GC.@preserve recv_ctx recv_func _handle_result(LibZenohC.z_info_routers_zid(_loan(s), _move(callback)))
+    GC.@preserve s recv_ctx recv_func callback _handle_result(LibZenohC.z_info_routers_zid(_loan(s), _move(callback)))
     return routers
 end
 
@@ -224,7 +232,7 @@ function peer_zids(s::Session)
     end
     callback = Ref{LibZenohC.z_owned_closure_zid_t}()
     LibZenohC.z_closure_zid(callback, recv_func, C_NULL, recv_ctx)
-    GC.@preserve recv_ctx recv_func _handle_result(LibZenohC.z_info_peers_zid(_loan(s), _move(callback)))
+    GC.@preserve s recv_ctx recv_func callback _handle_result(LibZenohC.z_info_peers_zid(_loan(s), _move(callback)))
     return routers
 end
 

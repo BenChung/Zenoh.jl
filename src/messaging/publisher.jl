@@ -218,7 +218,7 @@ function put(p::Publisher, payload; shm=nothing, kwargs...)
             attach_ref === nothing || close(attach_ref)
             return nothing
         end
-        GC.@preserve enc_ref attach_ref ts begin
+        GC.@preserve enc_ref attach_ref ts bytes begin
             _handle_result(LibZenohC.z_publisher_put(_loan(p.pub), _move(bytes), opts))
         end
     end
@@ -263,7 +263,7 @@ function put(s::Session, k::AbstractKeyexpr, payload;
             attach_ref === nothing || close(attach_ref)
             rethrow()
         end
-        GC.@preserve enc_ref attach_ref ts begin
+        GC.@preserve enc_ref attach_ref ts bytes begin
             rtc = LibZenohC.z_put(sp, kp, _move(bytes), opts)
             _handle_result(rtc)
         end

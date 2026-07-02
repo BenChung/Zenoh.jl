@@ -122,11 +122,15 @@ put stamps it; samples that were never routed through a timestamping node arrive
 unstamped.
 """
 function timestamp(s::AbstractSample)
-    ts = LibZenohC.z_sample_timestamp(_loaned_sample(s))
-    if ts == C_NULL
-        return nothing
-    else
-        ZTimestamp(ts)
+    # `ts` borrows the sample-owned timestamp slot; keep `s` alive across the
+    # ZTimestamp copy-out.
+    GC.@preserve s begin
+        ts = LibZenohC.z_sample_timestamp(_loaned_sample(s))
+        if ts == C_NULL
+            return nothing
+        else
+            return ZTimestamp(ts)
+        end
     end
 end
 
@@ -243,7 +247,10 @@ reliability(s::AbstractSample) = _reliability_from_raw(LibZenohC.z_sample_reliab
 The `Encoding` describing the format of the sample's [`payload`](@ref).
 """
 function encoding(s::AbstractSample)
-    return _from_loaned_encoding(LibZenohC.z_sample_encoding(_loaned_sample(s)))
+    # The loaned encoding borrows from `s`; keep `s` alive across _from_loaned_encoding.
+    GC.@preserve s begin
+        return _from_loaned_encoding(LibZenohC.z_sample_encoding(_loaned_sample(s)))
+    end
 end
 
 export Sample, SampleHolder, payload, keyexpr, keyexpr_view, encoding, attachment, timestamp, kind,

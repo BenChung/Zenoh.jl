@@ -286,6 +286,22 @@ end
 # the ctx. Used by `_callback_get` (replies) and the callback form of
 # `scout` (hellos).
 #
+# After `wait(task)`, drain to `:closed` before teardown: `consume` can exit
+# early when the user callback throws under `should_close_on_error`, before
+# libzenohc has dropped the closure, so the foreign side may not yet be
+# quiescent. `_drain_to_closed!` keeps the ctx rooted and discards late items
+# until the drop trampoline fires — `destroy_ctx!`'s precondition. Normal
+# completion and `z_scout` (which blocks until its closure drops) both leave
+# `consume` already at `:closed`, so the drain returns at once.
+#
+# `close_async=false` defers closing the AsyncCondition to its own finalizer:
+# the drop trampoline's trailing `uv_async_send` (after it unlocks the mutex)
+# can fire after we observe `:closed`, and closing here would free the uv handle
+# under that in-flight send (libuv UB). A residual window remains — the
+# trampoline's paired `async_handle(ctx, …)` read sits outside the `GC.@preserve`
+# below — but it requires the IO thread to stall between two adjacent
+# instructions across a full teardown-plus-GC cycle.
+#
 # `call_fn` is first so `do` syntax composes: `_callback_one_shot(kind,
 # wrap, f; …) do closure … end` passes the lambda as `call_fn`.
 function _callback_one_shot(call_fn::F, kind::Val, wrap, f::Function;
@@ -297,7 +313,8 @@ function _callback_one_shot(call_fn::F, kind::Val, wrap, f::Function;
     rtc = GC.@preserve ctx call_fn(closure)
 
     wait(task)
-    _teardown_callback(kind, ctx, async_cond)
+    GC.@preserve ctx _drain_to_closed!(wrap, ctx, async_cond)
+    _teardown_callback(kind, ctx, async_cond; close_async=false)
     rtc == LibZenohC.Z_OK || _handle_result(rtc)
     return nothing
 end

@@ -45,13 +45,15 @@ function _to_owned_encoding(e::Encoding)
     mime = e.mime
     GC.@preserve mime _handle_result(LibZenohC.z_encoding_from_str(ref,
         pointer(Base.unsafe_convert(Cstring, mime))))
+    # Arm the drop finalizer before the fallible schema call so a throw there
+    # still frees the encoding.
+    finalizer(r -> LibZenohC.z_encoding_drop(_move(r)), ref)
     if !isnothing(e.schema)
         schema = e.schema
         GC.@preserve schema _handle_result(LibZenohC.z_encoding_set_schema_from_str(
             LibZenohC.z_encoding_loan_mut(ref),
             pointer(Base.unsafe_convert(Cstring, schema))))
     end
-    finalizer(r -> LibZenohC.z_encoding_drop(_move(r)), ref)
     return ref
 end
 

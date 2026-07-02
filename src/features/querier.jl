@@ -45,12 +45,25 @@ function _make_querier_get_opts(;
         cancellation::Union{Nothing, CancellationToken} = nothing)
     opts = Ref{LibZenohC.z_querier_get_options_t}()
     LibZenohC.z_querier_get_options_default(opts)
-    payload_bytes = isnothing(payload)    ? nothing : ZBytes(payload)
-    attach_bytes  = isnothing(attachment) ? nothing : ZBytes(attachment)
-    enc_ref       = isnothing(encoding)   ? nothing : _to_owned_encoding(_as_encoding(encoding))
-    # The get consumes (moves) the token; clone so the caller keeps theirs to
-    # cancel. The clone is returned for the caller to GC-preserve across the get.
-    cancel_clone  = isnothing(cancellation) ? nothing : _clone(cancellation)
+    # payload/attachment ZBytes carry no finalizer, so a throw mid-build would orphan any
+    # already built — release them on this task. enc_ref self-cleans via its finalizer, and
+    # the token clone is built last, so the catch covers only these two.
+    payload_bytes = nothing
+    attach_bytes  = nothing
+    enc_ref       = nothing
+    cancel_clone  = nothing
+    try
+        payload_bytes = isnothing(payload)    ? nothing : ZBytes(payload)
+        attach_bytes  = isnothing(attachment) ? nothing : ZBytes(attachment)
+        enc_ref       = isnothing(encoding)   ? nothing : _to_owned_encoding(_as_encoding(encoding))
+        # The get consumes (moves) the token; clone so the caller keeps theirs to
+        # cancel. The clone is returned for the caller to GC-preserve across the get.
+        cancel_clone  = isnothing(cancellation) ? nothing : _clone(cancellation)
+    catch
+        payload_bytes === nothing || close(payload_bytes)
+        attach_bytes  === nothing || close(attach_bytes)
+        rethrow()
+    end
     isnothing(payload_bytes) || _store_field!(opts, 1, _move(payload_bytes))
     isnothing(enc_ref)       || _store_field!(opts, 2, _move(enc_ref))
     # attachment sits after the `source_info` field (index 3); cancellation last.
@@ -78,6 +91,14 @@ mutable struct Querier
     querier::Base.RefValue{LibZenohC.z_owned_querier_t}
     keyexpr::AbstractKeyexpr   # GC pin
     closed::Bool
+    # Serializes `close` (which undeclares → gravestones `querier`) against every op that loans
+    # `querier` — `get`, `keyexpr`, `querier_id`, `matching_status`, `MatchingListener`,
+    # `ReusableGet.call!` — so a concurrent close can't gravestone the handle mid-loan (a UAF on
+    # a libzenoh thread). Any new op that loans `querier` must take this lock. `ReentrantLock` so
+    # a waiter yields while `z_querier_get` blocks; uncontended it is alloc-free.
+    lock::Base.ReentrantLock
+    Querier(querier::Base.RefValue{LibZenohC.z_owned_querier_t}, k::Keyexpr, closed::Bool) =
+        new(querier, k, closed, Base.ReentrantLock())
 end
 
 _loan(q::Querier) = _loan(q.querier)
@@ -113,18 +134,26 @@ function Querier(s::Session, k::Keyexpr; kwargs...)
 end
 
 function Base.close(q::Querier)
-    q.closed && return
-    q.closed = true
-    _handle_result(LibZenohC.z_undeclare_querier(_move(q.querier)))
+    @lock q.lock begin
+        q.closed && return nothing
+        q.closed = true
+        _handle_result(LibZenohC.z_undeclare_querier(_move(q.querier)))
+    end
     return nothing
 end
 
 function keyexpr(q::Querier)
-    ke = LibZenohC.z_querier_keyexpr(_loan(q))
-    view = Ref{LibZenohC.z_view_string_t}()
-    LibZenohC.z_keyexpr_as_view_string(ke, view)
-    loaned = LibZenohC.z_view_string_loan(view)
-    return unsafe_string(LibZenohC.z_string_data(loaned), LibZenohC.z_string_len(loaned))
+    @lock q.lock begin
+        q.closed && throw(ArgumentError("keyexpr on a closed Querier"))
+        # The view string borrows from q; keep q rooted until unsafe_string copies the bytes out.
+        GC.@preserve q begin
+            ke = LibZenohC.z_querier_keyexpr(_loan(q))
+            view = Ref{LibZenohC.z_view_string_t}()
+            LibZenohC.z_keyexpr_as_view_string(ke, view)
+            loaned = LibZenohC.z_view_string_loan(view)
+            return unsafe_string(LibZenohC.z_string_data(loaned), LibZenohC.z_string_len(loaned))
+        end
+    end
 end
 
 """
@@ -135,10 +164,15 @@ The querier's global entity id: the Zenoh id of its session (`zid`, a
 (`eid::UInt32`).
 """
 function querier_id(q::Querier)
-    gid = Ref{LibZenohC.z_entity_global_id_t}(LibZenohC.z_querier_id(_loan(q)))
-    GC.@preserve gid begin
-        return (zid = LibZenohC.z_entity_global_id_zid(gid),
-                eid = LibZenohC.z_entity_global_id_eid(gid))
+    @lock q.lock begin
+        q.closed && throw(ArgumentError("querier_id on a closed Querier"))
+        GC.@preserve q begin
+            gid = Ref{LibZenohC.z_entity_global_id_t}(LibZenohC.z_querier_id(_loan(q)))
+            GC.@preserve gid begin
+                return (zid = LibZenohC.z_entity_global_id_zid(gid),
+                        eid = LibZenohC.z_entity_global_id_eid(gid))
+            end
+        end
     end
 end
 
@@ -160,18 +194,25 @@ function Base.get(q::Querier, parameters::AbstractString="";
         encoding::Union{Nothing, Encoding, AbstractString, Base.MIME} = nothing,
         attachment = nothing,
         cancellation::Union{Nothing, CancellationToken} = nothing)
-    opts, payload_bytes, attach_bytes, enc_ref, cancel_clone =
-        _make_querier_get_opts(; payload, encoding, attachment, cancellation)
+    # Hold q.lock across opts-build + `_open_buffered_get` so a concurrent close can't
+    # gravestone the handle, and the closed-check throws before any finalizer-less owned ZBytes
+    # are built (no leak). `_open_buffered_get` never takes q.lock, so the hold can't deadlock;
+    # `get` allocates a handler/channel/task anyway, so the wider scope costs nothing.
+    @lock q.lock begin
+        q.closed && throw(ArgumentError("get on a closed Querier"))
+        opts, payload_bytes, attach_bytes, enc_ref, cancel_clone =
+            _make_querier_get_opts(; payload, encoding, attachment, cancellation)
 
-    # _substr takes (ptr, len) rather than a null-terminated string, so a
-    # `SubString` view threads through without an intermediate copy.
-    params = parameters isa Union{String, SubString{String}} ? parameters : String(parameters)
-    # The ring delivers :fifo and :ring identically; channel has no effect here.
-    _open_buffered_get(capacity) do closure
-        GC.@preserve payload_bytes attach_bytes enc_ref cancel_clone params opts begin
-            LibZenohC.z_querier_get_with_parameters_substr(_loan(q),
-                Ptr{Cchar}(pointer(params)), ncodeunits(params),
-                _move(closure), opts)
+        # _substr takes (ptr, len) rather than a null-terminated string, so a
+        # `SubString` view threads through without an intermediate copy.
+        params = parameters isa Union{String, SubString{String}} ? parameters : String(parameters)
+        # The ring delivers :fifo and :ring identically; channel has no effect here.
+        _open_buffered_get(capacity) do closure
+            GC.@preserve payload_bytes attach_bytes enc_ref cancel_clone params opts begin
+                LibZenohC.z_querier_get_with_parameters_substr(_loan(q),
+                    Ptr{Cchar}(pointer(params)), ncodeunits(params),
+                    _move(closure), opts)
+            end
         end
     end
 end
@@ -192,16 +233,34 @@ function Base.get(f::Function, q::Querier, parameters::AbstractString="";
         encoding::Union{Nothing, Encoding, AbstractString, Base.MIME} = nothing,
         attachment = nothing,
         cancellation::Union{Nothing, CancellationToken} = nothing)
-    opts, payload_bytes, attach_bytes, enc_ref, cancel_clone =
-        _make_querier_get_opts(; payload, encoding, attachment, cancellation)
+    # Hold q.lock from the closed-check through issuing the get so a concurrent close can't
+    # gravestone the querier between them. Release it inside the get-closure the moment
+    # z_querier_get returns, before `_callback_get`'s `wait(task)`: the reply handler `f` runs on
+    # that task, so holding across the wait would deadlock an `f` that re-enters close(q)/get(q)
+    # and would block a concurrent close for the whole query. The outer `finally` covers a throw
+    # before the get-closure runs.
+    lock(q.lock)
+    locked = true
+    try
+        q.closed && throw(ArgumentError("get on a closed Querier"))
+        opts, payload_bytes, attach_bytes, enc_ref, cancel_clone =
+            _make_querier_get_opts(; payload, encoding, attachment, cancellation)
 
-    params = parameters isa Union{String, SubString{String}} ? parameters : String(parameters)
-    _callback_get(f; should_close_on_error=should_close_on_error) do closure
-        GC.@preserve payload_bytes attach_bytes enc_ref cancel_clone params opts begin
-            LibZenohC.z_querier_get_with_parameters_substr(_loan(q),
-                Ptr{Cchar}(pointer(params)), ncodeunits(params),
-                _move(closure), opts)
+        params = parameters isa Union{String, SubString{String}} ? parameters : String(parameters)
+        _callback_get(f; should_close_on_error=should_close_on_error) do closure
+            try
+                GC.@preserve payload_bytes attach_bytes enc_ref cancel_clone params opts begin
+                    LibZenohC.z_querier_get_with_parameters_substr(_loan(q),
+                        Ptr{Cchar}(pointer(params)), ncodeunits(params),
+                        _move(closure), opts)
+                end
+            finally
+                locked = false
+                unlock(q.lock)
+            end
         end
+    finally
+        locked && unlock(q.lock)
     end
 end
 

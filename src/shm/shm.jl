@@ -225,6 +225,7 @@ provider settles, typically within a second or two of connecting). Always
 `false` for a session opened without `shm_clients`.
 """
 function shm_ready(s::Session)
+    s.closed[] && return false                   # closed: nothing to re-probe
     s.shm_state[] === :none && return false      # SHM never requested at open
     _bind_session_shm!(s)
     return s.shm_state[] === :ready
@@ -247,9 +248,25 @@ function _wait_for_shm_ready!(s::Session, timeout::Float64; poll::Float64=0.05)
     end
 end
 
-_loan_provider(p::ShmProvider) = _loan(p.p)
+# Single chokepoint every provider op (alloc/available/defragment/garbage_collect)
+# loans through: reject a closed provider here, before its nulled handle reaches zenoh-c.
+@inline function _assert_provider_open(p::ShmProvider)
+    GC.@preserve p (LibZenohC.z_internal_shm_provider_check(
+        Base.unsafe_convert(Ptr{LibZenohC.z_owned_shm_provider_t}, p.p)) ||
+        throw(ArgumentError("SHM provider is closed")))
+    return nothing
+end
+@inline function _assert_provider_open(p::SharedShmProvider)
+    GC.@preserve p (LibZenohC.z_internal_shared_shm_provider_check(
+        Base.unsafe_convert(Ptr{LibZenohC.z_owned_shared_shm_provider_t}, p.p)) ||
+        throw(ArgumentError("SHM provider is closed")))
+    return nothing
+end
+
+_loan_provider(p::ShmProvider) = (_assert_provider_open(p); _loan(p.p))
 _loan_provider(p::SharedShmProvider) =
-    LibZenohC.z_shared_shm_provider_loan_as(LibZenohC.z_shared_shm_provider_loan(p.p))
+    (_assert_provider_open(p);
+     LibZenohC.z_shared_shm_provider_loan_as(LibZenohC.z_shared_shm_provider_loan(p.p)))
 
 """
     available(p::AbstractShmProvider) -> Int
@@ -330,9 +347,26 @@ segment in place.
 """
 data(b::ShmBufMut) = b.mem
 data(b::ShmBuf)    = (_check_token(_token(b)); b.mem)
-Base.copyto!(b::ShmBufMut, src::AbstractVector{UInt8}) =
-    (length(src) <= length(b.mem) || throw(BoundsError(b.mem, length(src)));
-     unsafe_copyto!(pointer(b.mem), pointer(src), length(src)); b)
+# The SHM copy reads `length(src)` packed bytes through `pointer(src)`; a strided
+# source (stride ≠ 1) would copy the wrong bytes. Require unit stride.
+@inline function _require_contiguous(src::AbstractVector)
+    is_unit = try
+        stride(src, 1) == 1
+    catch
+        false     # no meaningful stride ⇒ treat as non-contiguous
+    end
+    is_unit || throw(ArgumentError(
+        "SHM copy-in requires a contiguous (unit-stride) source; got \
+         $(typeof(src)). Materialize it (e.g. `collect(src)`) first."))
+    return nothing
+end
+
+function Base.copyto!(b::ShmBufMut, src::AbstractVector{UInt8})
+    _require_contiguous(src)
+    length(src) <= length(b.mem) || throw(BoundsError(b.mem, length(src)))
+    GC.@preserve b src unsafe_copyto!(pointer(b.mem), pointer(src), length(src))
+    return b
+end
 
 """
     close(buf::ShmBufMut)
@@ -576,8 +610,7 @@ function ZBytes(buf::ShmBufMut, n::Integer)
         "ZBytes(buf, n) with n < granted ($n < $granted) is unsupported: the bound \
          libzenohc has no length-bounded SHM move. Allocate exactly n bytes instead."))
     out_ref = Ref{LibZenohC.z_owned_bytes_t}()
-    # See ShmBuf(buf): preserve buf across the move-consume so its finalizer
-    # can't read the gravestoned storage concurrently.
+    # See ShmBuf(buf): preserve buf across the move-consume so its finalizer can't race it.
     GC.@preserve buf _handle_result(LibZenohC.z_bytes_from_shm_mut(out_ref, _move(buf.b)))
     return ZBytes(out_ref, Val(:owned))
 end
@@ -607,7 +640,8 @@ end
 
 function ZBytes(buf::ShmBuf{Base.RefValue{LibZenohC.z_owned_shm_t}})
     out_ref = Ref{LibZenohC.z_owned_bytes_t}()
-    _handle_result(LibZenohC.z_bytes_from_shm(out_ref, _move(buf.b)))
+    # See ShmBuf(buf): preserve buf across the move-consume so its finalizer can't race it.
+    GC.@preserve buf _handle_result(LibZenohC.z_bytes_from_shm(out_ref, _move(buf.b)))
     return ZBytes(out_ref, Val(:owned))
 end
 
@@ -699,6 +733,7 @@ function _shm_zbytes(provider::AbstractShmProvider, r::Base.RefValue{T}) where T
     return ZBytes(buf)
 end
 function _shm_zbytes(provider::AbstractShmProvider, v::AbstractVector{T}) where T
+    _require_contiguous(v)
     nbytes = length(v) * sizeof(T)
     buf = alloc(provider, nbytes)
     try

@@ -207,6 +207,13 @@ end
 # drained but before it observed closing), then destroy the mutex; close the
 # async condition when `close_async` (the explicit-close path — in the
 # finalizer path the AsyncCondition's own finalizer handles it).
+#
+# PRECONDITION: the foreign side must be quiescent — no concurrent
+# `call_body!`/`drop_body!`. The slot drain and `uv_mutex_destroy` run without
+# the mutex, so a concurrent callback would re-lock a destroyed mutex (UB).
+# Callers establish this by first observing `:closed`: the subscriber via
+# `undeclare`, the one-shot get by draining to `:closed`, the channel get in
+# `_drain_replies`.
 function destroy_ctx!(ctx::CallbackCtx{Owned},
         async_cond::Base.AsyncCondition,
         drop_fp::Ptr{Cvoid}, ::Type{Moved};
@@ -274,6 +281,30 @@ function _ring_take(ctx::CallbackCtx{Item}, async_cond::Base.AsyncCondition) whe
             wait(async_cond)
         catch
             return nothing                  # async_cond closed
+        end
+    end
+end
+
+# Block until the drop trampoline fires (`_ring_pop!` returns `:closed`),
+# discarding any items that land meanwhile. Establishes the quiescence
+# `destroy_ctx!` requires. Returns at once on the normal-completion path, where
+# the first `_ring_pop!` already returns `:closed`.
+#
+# `wrap` (the kind's `Reply`/`Hello` constructor) drops the owned handle — the
+# popped raw `Ref` carries no finalizer — so each item is wrapped and the
+# wrapper discarded.
+function _drain_to_closed!(wrap, ctx::CallbackCtx, async_cond::Base.AsyncCondition)
+    while true
+        r = _ring_pop!(ctx)
+        r === :closed && return nothing
+        if r === :empty
+            try
+                wait(async_cond)
+            catch
+                return nothing              # async_cond closed
+            end
+        else
+            wrap(r)                         # drops the owned handle
         end
     end
 end

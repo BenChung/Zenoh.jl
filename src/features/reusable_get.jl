@@ -92,6 +92,7 @@ _noop_release(::Ptr{Cvoid}, ::Ptr{Cvoid}) = C_NULL
 # `@cfunction` of a top-level function is a constant pointer).
 function _arm_bytes!(box::Base.RefValue{LibZenohC.z_owned_bytes_t},
                      buf::Vector{UInt8}, len::Integer)
+    0 <= len <= length(buf) || throw(BoundsError(buf, len))   # caller-supplied len
     _handle_result(GC.@preserve buf LibZenohC.z_bytes_from_buf(box, buf, Csize_t(len),
         @cfunction(_noop_release, Ptr{Cvoid}, (Ptr{Cvoid}, Ptr{Cvoid})), C_NULL))
     return nothing
@@ -165,12 +166,26 @@ function call!(rg::ReusableGet, parameters::AbstractString="";
                 end
                 cancel_clone === nothing ||
                     _store_field!(rg.optsref, 5, _move(cancel_clone))       # field 5: cancellation_token
-                _install_closure!(Val(:reply), rg.closurebox, rg.ctx)       # fresh closure into reused box
-                rtc = LibZenohC.z_querier_get_with_parameters_substr(
-                    _loan(rg.querier), Ptr{Cchar}(pointer(params)), ncodeunits(params),
-                    _move(rg.closurebox), rg.optsref)
-                rtc == LibZenohC.Z_OK || _handle_result(rtc)
-                payload_armed = false; attach_armed = false                 # consumed (moved into the get)
+                # Hold the querier's lock across the loan + get so a concurrent close can't gravestone the
+                # handle; scoped to just the C call, not the wait/drain below — blocking under
+                # the lock would serialize calls and deadlock close. Uncontended @lock is
+                # alloc-free, so the hot path stays zero-alloc.
+                @lock rg.querier.lock begin
+                    if rg.querier.closed
+                        # Undeclared concurrently → the get is moot. Drain returns :closed below.
+                        payload_armed && LibZenohC.z_bytes_drop(_move(rg.payloadbox))
+                        attach_armed  && LibZenohC.z_bytes_drop(_move(rg.attachbox))
+                        payload_armed = false; attach_armed = false
+                        signal_closing!(rg.ctx, rg.async)                   # so _ring_take_into! / drain see :closed
+                    else
+                        _install_closure!(Val(:reply), rg.closurebox, rg.ctx)  # fresh closure into reused box
+                        rtc = LibZenohC.z_querier_get_with_parameters_substr(
+                            _loan(rg.querier), Ptr{Cchar}(pointer(params)), ncodeunits(params),
+                            _move(rg.closurebox), rg.optsref)
+                        rtc == LibZenohC.Z_OK || _handle_result(rtc)
+                        payload_armed = false; attach_armed = false         # consumed (moved into the get)
+                    end
+                end
             catch
                 # Reclaim any armed-but-unconsumed bytes. A drop of an already-consumed/null
                 # box is a no-op (gravestone), so this is safe whether or not the failed get
@@ -230,9 +245,11 @@ function Base.close(rg::ReusableGet)
     rg.closed && return nothing
     rg.closed = true
     _drop_current!(rg.holder)                           # drop the last settled reply (gravestones the box)
-    # The last call! drained to :closed, so the closure is gone and the ctx is quiescent
-    # — safe to destroy the mutex / close the async handle on the caller's task.
-    _teardown_callback(Val(:reply), rg.ctx, rg.async)
+    # The last call! drained to :closed, so the closure is gone and the ring is quiescent —
+    # safe to destroy the mutex on the caller's task. `close_async=false` because the drop
+    # trampoline's terminal `uv_async_send` may still be in flight on a foreign thread; closing
+    # the uv handle here would race it, so leave it to the AsyncCondition's own finalizer.
+    _teardown_callback(Val(:reply), rg.ctx, rg.async; close_async=false)
     return nothing
 end
 

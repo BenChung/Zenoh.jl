@@ -700,6 +700,7 @@ end
 
 """
     put(p::Publisher, r::ZRef; kwargs...)
+    put(ap::AdvancedPublisher, r::ZRef; kwargs...)
     put(s::Session, k::Keyexpr, r::ZRef; congestion_control, priority, express, allowed_destination, kwargs...)
 
 Publish the value held by [`ZRef`](@ref) `r`. A Julia-backed handle is borrowed
@@ -710,9 +711,9 @@ marked consumed — a second `put` (or any access) on it throws.
 `kwargs` set per-put options such as `encoding`, `attachment`, and `timestamp`.
 """
 function put(p::Publisher, r::ZRef; kwargs...)
-    # Build the (fallible) options BEFORE moving the backing: a bad `attachment`
-    # throws here, while `r` is still intact, instead of after the irreversible
-    # move had orphaned a finalizer-less owned SHM payload. If the move itself
+    # Build the (fallible) options and convert the ZRef BEFORE the C put, so a bad
+    # `attachment` throws while `r` is still intact — after the irreversible move,
+    # a throw would orphan a finalizer-less owned SHM payload. If the move itself
     # throws, release the already-built attachment on this task.
     opts, enc_ref, attach_ref, ts = _make_put_opts(LibZenohC.z_publisher_put_options_t; kwargs...)
     local bytes
@@ -722,9 +723,45 @@ function put(p::Publisher, r::ZRef; kwargs...)
         attach_ref === nothing || close(attach_ref)
         rethrow()
     end
-    GC.@preserve enc_ref attach_ref ts begin
-        _handle_result(LibZenohC.z_publisher_put(_loan(p.pub), _move(bytes), opts))
+    # Lock against close/undeclare across the C put so we never loan a gravestoned handle (see
+    # put(::Publisher, payload)). `r` is already consumed by `_zref_to_bytes`, so the post-close
+    # no-op leaves it consumed.
+    @lock p.lock begin
+        if p.closed
+            close(bytes)
+            attach_ref === nothing || close(attach_ref)
+            return nothing
+        end
+        GC.@preserve bytes enc_ref attach_ref ts begin
+            _handle_result(LibZenohC.z_publisher_put(_loan(p.pub), _move(bytes), opts))
+        end
     end
+    return nothing
+end
+
+function put(ap::AdvancedPublisher, r::ZRef; kwargs...)
+    inner, enc_ref, attach_ref, ts = _make_put_opts(LibZenohC.z_publisher_put_options_t; kwargs...)
+    opts = Ref{LibZenohC.ze_advanced_publisher_put_options_t}()
+    LibZenohC.ze_advanced_publisher_put_options_default(opts)
+    _store_field!(opts, 1, inner[])  # ze_advanced_publisher_put_options_t.put_options
+    local bytes
+    try
+        bytes = _zref_to_bytes(r)
+    catch
+        attach_ref === nothing || close(attach_ref)
+        rethrow()
+    end
+    @lock ap.lock begin
+        if ap.closed
+            close(bytes)
+            attach_ref === nothing || close(attach_ref)
+            return nothing
+        end
+        GC.@preserve bytes enc_ref attach_ref ts begin
+            _handle_result(LibZenohC.ze_advanced_publisher_put(_loan(ap.pub), _move(bytes), opts))
+        end
+    end
+    return nothing
 end
 
 function put(s::Session, k::Keyexpr, r::ZRef;
@@ -748,7 +785,7 @@ function put(s::Session, k::Keyexpr, r::ZRef;
             attach_ref === nothing || close(attach_ref)
             rethrow()
         end
-        GC.@preserve enc_ref attach_ref ts begin
+        GC.@preserve bytes enc_ref attach_ref ts begin
             _handle_result(LibZenohC.z_put(sp, kp, _move(bytes), opts))
         end
     end

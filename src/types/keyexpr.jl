@@ -39,16 +39,17 @@ not `==` (e.g. `a/**` and `a/**/**` denote the same key-set but differ as text).
 """
 struct Keyexpr <: AbstractKeyexpr
     k::Base.RefValue{LibZenohC.z_owned_keyexpr_t}
-    function Keyexpr(s::String; kwargs...)
-        return Keyexpr(Base.unsafe_convert(Cstring, s); kwargs...)
-    end
-    function Keyexpr(s::Cstring; autocanonize=false)
+    function Keyexpr(s::String; autocanonize=false)
         k = Ref{LibZenohC.z_owned_keyexpr_t}()
         res = new(k)
-        if autocanonize
-            rtc = LibZenohC.z_keyexpr_from_str_autocanonize(res.k, pointer(s)) # autocanonize copies the input into the owned keyexpr
-        else
-            rtc = LibZenohC.z_keyexpr_from_str(res.k, pointer(s))
+        # Root `s` across the ccall so a temporary argument survives the in-call copy.
+        GC.@preserve s begin
+            p = Base.unsafe_convert(Cstring, s)
+            rtc = if autocanonize
+                LibZenohC.z_keyexpr_from_str_autocanonize(res.k, pointer(p))
+            else
+                LibZenohC.z_keyexpr_from_str(res.k, pointer(p))
+            end
         end
         _handle_result(rtc)
         finalizer(k -> LibZenohC.z_keyexpr_drop(_move(k)), k)
@@ -68,13 +69,17 @@ export AbstractKeyexpr, Keyexpr, @kexpr_str
 export includes, intersects, concat, canonize, is_canon
 export relation_to, IntersectionLevel, IntersectionLevels
 
-# Works for any AbstractKeyexpr (plain or declared) — both expose `.k`.
+# Works for any AbstractKeyexpr, routed through `_loan(k)` so each kind's guard
+# fires: a closed DeclaredKeyexpr throws rather than loaning a gravestone.
 function _as_view_string(k::AbstractKeyexpr)
-    view = Ref{LibZenohC.z_view_string_t}()
-    LibZenohC.z_keyexpr_as_view_string(_loan(k.k), view)
-    loaned = LibZenohC.z_view_string_loan(view)
-    return unsafe_string(LibZenohC.z_string_data(loaned),
-                        LibZenohC.z_string_len(loaned))
+    # The view borrows `k`'s bytes; keep `k` alive until unsafe_string copies them out.
+    GC.@preserve k begin
+        view = Ref{LibZenohC.z_view_string_t}()
+        LibZenohC.z_keyexpr_as_view_string(_loan(k), view)
+        loaned = LibZenohC.z_view_string_loan(view)
+        return unsafe_string(LibZenohC.z_string_data(loaned),
+                            LibZenohC.z_string_len(loaned))
+    end
 end
 
 Base.String(k::AbstractKeyexpr) = _as_view_string(k)
@@ -217,7 +222,7 @@ with a separator.
 function concat(a::Keyexpr, suffix::AbstractString)
     bytes = Base.codeunits(String(suffix))
     out = Ref{LibZenohC.z_owned_keyexpr_t}()
-    rtc = LibZenohC.z_keyexpr_concat(out, _loan(a.k),
+    rtc = GC.@preserve a bytes LibZenohC.z_keyexpr_concat(out, _loan(a.k),
         pointer(bytes), Csize_t(sizeof(bytes)))
     _handle_result(rtc)
     return Keyexpr(out, Val(:owned))
@@ -246,9 +251,11 @@ such as the `//` in `a//b` is invalid and throws rather than collapsing.
 function canonize(s::AbstractString)
     buf = Vector{UInt8}(codeunits(String(s)))
     len = Ref{Csize_t}(length(buf))
-    rtc = LibZenohC.z_keyexpr_canonize(pointer(buf), len)
-    _handle_result(rtc)
-    return unsafe_string(pointer(buf), len[])
+    GC.@preserve buf begin
+        rtc = LibZenohC.z_keyexpr_canonize(pointer(buf), len)
+        _handle_result(rtc)
+        return unsafe_string(pointer(buf), len[])
+    end
 end
 
 """
@@ -258,7 +265,7 @@ end
 """
 function is_canon(s::AbstractString)
     bytes = codeunits(String(s))
-    rtc = LibZenohC.z_keyexpr_is_canon(pointer(bytes), Csize_t(sizeof(bytes)))
+    rtc = GC.@preserve bytes LibZenohC.z_keyexpr_is_canon(pointer(bytes), Csize_t(sizeof(bytes)))
     return rtc == LibZenohC.Z_OK
 end
 
@@ -311,10 +318,17 @@ function _parse_kexpr_template(s::AbstractString)
     while i <= n
         c = s[i]
         if c == '$'
-            lit = String(take!(buf))
-            isempty(lit) || push!(pieces, lit)
             j = nextind(s, i)
             j > n && throw(ArgumentError("trailing `\$` in kexpr template"))
+            if s[j] == '*'
+                # `$*` is the any-run-within-a-chunk wildcard: `$` before `*` never
+                # starts an interpolation. Emit both bytes into the current literal.
+                print(buf, '$', '*')
+                i = nextind(s, j)
+                continue
+            end
+            lit = String(take!(buf))
+            isempty(lit) || push!(pieces, lit)
             if s[j] == '('
                 depth = 1
                 k = nextind(s, j)
@@ -409,7 +423,9 @@ end
     kexpr"\$a/\$(b)"c
 
 String macro for [`Keyexpr`](@ref). Supports `\$name` and `\$(expr)`
-interpolation of `Keyexpr` or `AbstractString` values.
+interpolation of `Keyexpr` or `AbstractString` values. A literal `\$*`
+(the any-run-within-a-chunk wildcard, e.g. `kexpr"sensor/\$*"`) passes
+through verbatim — `\$` before `*` never starts an interpolation.
 
 The interpolating form assembles the result in a single byte buffer
 with one `z_keyexpr_from_substr` call — `Keyexpr` pieces are read via

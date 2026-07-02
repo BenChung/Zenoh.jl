@@ -36,21 +36,35 @@ mutable struct DeclaredKeyexpr <: AbstractKeyexpr
     closed::Bool
 end
 
-_loan(d::DeclaredKeyexpr) = _loan(d.k)
+function _loan(d::DeclaredKeyexpr)
+    d.closed && throw(ArgumentError("declared keyexpr is closed"))
+    return _loan(d.k)
+end
 
-# Single teardown path. `check` gates `_handle_result`: explicit `close`
-# surfaces an undeclare error; the finalizer must not throw, so it passes
-# `false`. Once the session is closed its network mappings are already gone —
-# just free the local owned handle.
-function _undeclare_keyexpr!(d::DeclaredKeyexpr, check::Bool)
+# Explicit `close` teardown, on the caller's task:
+# - session open: undeclare the session-side mapping, surfacing the result.
+# - session closed: free only the local owned handle; its mappings are already gone.
+function _undeclare_keyexpr!(d::DeclaredKeyexpr)
     d.closed && return nothing
     d.closed = true
     if d.session.closed[]
         LibZenohC.z_keyexpr_drop(_move(d.k))
     else
-        rtc = LibZenohC.z_undeclare_keyexpr(_loan(d.session), _move(d.k))
-        check && _handle_result(rtc)
+        _handle_result(LibZenohC.z_undeclare_keyexpr(_loan(d.session), _move(d.k)))
     end
+    return nothing
+end
+
+# GC safety net: free only the local owned keyexpr, never touch the session.
+# The session may be closing or mid-drop (cross-object finalizer order is
+# unspecified), and `z_undeclare_keyexpr` is a network op the repo keeps off the
+# finalizer thread (see the NOTE in types/bytes.jl). The session-side declaration
+# dies with the session, so this leaf drop suffices; use `close(d)` while the
+# session is open for a full undeclare.
+function _finalize_declared_keyexpr!(d::DeclaredKeyexpr)
+    d.closed && return nothing
+    d.closed = true
+    LibZenohC.z_keyexpr_drop(_move(d.k))
     return nothing
 end
 
@@ -59,7 +73,7 @@ end
 
 Undeclare the key expression, releasing its session id. Idempotent.
 """
-Base.close(d::DeclaredKeyexpr) = _undeclare_keyexpr!(d, true)
+Base.close(d::DeclaredKeyexpr) = _undeclare_keyexpr!(d)
 
 Base.show(io::IO, d::DeclaredKeyexpr) =
     print(io, "DeclaredKeyexpr(\"", _as_view_string(d), "\")")
@@ -82,7 +96,7 @@ function declare_keyexpr(s::Session, k::AbstractKeyexpr)
         LibZenohC.z_declare_keyexpr(_loan(s), declared, _loan(k)))
     src = k isa Keyexpr ? k : Keyexpr(String(k))
     d = DeclaredKeyexpr(declared, s, src, false)
-    finalizer(d -> _undeclare_keyexpr!(d, false), d)
+    finalizer(_finalize_declared_keyexpr!, d)
     return d
 end
 

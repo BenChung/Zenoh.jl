@@ -53,6 +53,7 @@ struct ZBytes{R <: Union{Base.RefValue{LibZenohC.z_owned_bytes_t}, Ptr{LibZenohC
         # carry their own lifetime via `b`.
         owner::Any
         function ZBytes(r::Ref{T}) where T
+            _check_isbits(T)   # a non-isbits T would serialize live Julia heap pointers
             out = new{Base.RefValue{LibZenohC.z_owned_bytes_t}}(Ref{LibZenohC.z_owned_bytes_t}(), nothing)
             Base.preserve_handle(r)
             rtc = LibZenohC.z_bytes_from_buf(out.b, Base.unsafe_convert(Ptr{UInt8}, Base.unsafe_convert(Ptr{T}, r)), sizeof(T),
@@ -111,12 +112,14 @@ struct ZBytes{R <: Union{Base.RefValue{LibZenohC.z_owned_bytes_t}, Ptr{LibZenohC
             GC.@preserve s _handle_result(LibZenohC.z_bytes_copy_from_buf(b, Base.unsafe_convert(Ptr{UInt8}, s), sizeof(s)))
             return new{Base.RefValue{LibZenohC.z_owned_bytes_t}}(b, nothing)
         end
+        # Convert before pinning: conversion throws on an embedded NUL, and a
+        # throw after pinning would leak the box.
+        cstr = Base.unsafe_convert(Cstring, s)
         # Box the String in a RefValue so we have a stable, mutable handle to
         # pass as ctx to the C deleter. preserve_handle/unpreserve_handle pin
         # the box (and transitively the String) until libzenoh releases it.
         box = Ref{String}(s)
         Base.preserve_handle(box)
-        cstr = Base.unsafe_convert(Cstring, s)
         b = Ref{LibZenohC.z_owned_bytes_t}()
         rtc = GC.@preserve s LibZenohC.z_bytes_from_str(b, pointer(cstr),
             @cfunction(_release, Ptr{Cvoid}, (Ptr{Cvoid}, Ptr{Cvoid})), Base.pointer_from_objref(box))
@@ -327,11 +330,36 @@ function Base.open(z::ZBytes{Ptr{LibZenohC.z_loaned_bytes_t}}, ::Val{:read})
 end
 function Base.read(zr::ZBytesReader, ::Type{UInt8})
     byte = Ref{UInt8}()
-    unsafe_read(zr, byte, 1)
+    GC.@preserve byte begin
+        got = LibZenohC.z_bytes_reader_read(zr.r, Base.unsafe_convert(Ptr{UInt8}, byte), Csize_t(1))
+        got == 1 || throw(EOFError())
+    end
     return byte[]
 end
-Base.readbytes!(zr::ZBytesReader, b::AbstractVector{UInt8}, nb::Csize_t) = LibZenohC.z_bytes_reader_read(zr.r, Base.unsafe_convert(Ptr{UInt8}, b), nb)
-Base.unsafe_read(zr::ZBytesReader, b::Ptr{UInt8}, nb::UInt) = LibZenohC.z_bytes_reader_read(zr.r, b, nb)
+# Base's readbytes! contract: read up to `nb` into `b`, growing `b` to fit and
+# returning the count; never shrink below the original length. Clamp the grow
+# target to what remains — `read(io)`/`read(io, String)` seed `nb = typemax(Int)`,
+# which resize! rejects.
+function Base.readbytes!(zr::ZBytesReader, b::Vector{UInt8}, nb::Integer=length(b))
+    olb = length(b)
+    toread = min(Int(nb), Int(bytesavailable(zr)))
+    toread > olb && resize!(b, toread)
+    got = GC.@preserve b LibZenohC.z_bytes_reader_read(zr.r, pointer(b), Csize_t(toread))
+    length(b) > olb && resize!(b, max(olb, Int(got)))
+    return Int(got)
+end
+# Non-resizable dense targets (Memory, …): one bulk read clamped to what fits,
+# sparing Base's byte-by-byte fallback.
+function Base.readbytes!(zr::ZBytesReader, b::DenseVector{UInt8}, nb::Integer=length(b))
+    toread = min(Int(nb), length(b), Int(bytesavailable(zr)))
+    return Int(GC.@preserve b LibZenohC.z_bytes_reader_read(zr.r, pointer(b), Csize_t(toread)))
+end
+# Fill exactly `nb` bytes or throw EOFError.
+function Base.unsafe_read(zr::ZBytesReader, b::Ptr{UInt8}, nb::UInt)
+    got = LibZenohC.z_bytes_reader_read(zr.r, b, Csize_t(nb))
+    got == nb || throw(EOFError())
+    return nothing
+end
 Base.seek(zr::ZBytesReader, pos) = _handle_result(LibZenohC.z_bytes_reader_seek(zr.r, pos, 0))
 Base.skip(zr::ZBytesReader, num) = _handle_result(LibZenohC.z_bytes_reader_seek(zr.r, num, 1)) # seek_cur
 Base.position(zr::ZBytesReader) = LibZenohC.z_bytes_reader_tell(zr.r)
@@ -399,66 +427,71 @@ function Base.open(z::ZBytes, ::Val{:readslice})
     bytes_remaining = length(z)
     return ZBytesSliceReader(z, Ref(LibZenohC.z_bytes_get_slice_iterator(_loan(z.b))), Ref{LibZenohC.z_view_slice_t}(), nothing, UInt64(0), bytes_remaining, UInt64(0))
 end
-Base.readbytes!(zr::ZBytesSliceReader, b::AbstractVector{UInt8}, nb) = unsafe_read(zr, Base.unsafe_convert(Ptr{UInt8}, b), nb)
+# Advance the cursor up to `nb` bytes across slices, pulling the next slice only
+# when the current one is exhausted. With `dst` a pointer, copy each consumed run
+# into it; with `nothing`, skip. Returns the count consumed (< `nb` only at end
+# of payload).
+function _advance!(zr::ZBytesSliceReader, dst::Union{Ptr{UInt8}, Nothing}, nb::UInt)
+    nb > zr.bytes_remaining && (nb = zr.bytes_remaining)
+    consumed = UInt64(0)
+    while consumed < nb
+        if zr.current_bytes_remaining == 0
+            LibZenohC.z_bytes_slice_iterator_next(zr.iterator, zr.current) || break
+            loaned_slice = LibZenohC.z_view_slice_loan(zr.current)
+            zr.current_ptr = LibZenohC.z_slice_data(loaned_slice)
+            zr.current_bytes_remaining = LibZenohC.z_slice_len(loaned_slice)
+            continue
+        end
+        take = min(nb - consumed, zr.current_bytes_remaining)
+        dst === nothing || unsafe_copyto!(dst + consumed, zr.current_ptr, take)
+        zr.current_ptr += take
+        zr.current_bytes_remaining -= take
+        zr.bytes_remaining -= take
+        zr.position += take
+        consumed += take
+    end
+    return consumed
+end
+# Single-byte read for Base's generic byte-loop `readbytes!` on non-`Vector`
+# targets (`Memory`, contiguous `SubArray`): fill one byte or throw EOFError.
+function Base.read(zr::ZBytesSliceReader, ::Type{UInt8})
+    byte = Ref{UInt8}()
+    GC.@preserve byte begin
+        _advance!(zr, Base.unsafe_convert(Ptr{UInt8}, byte), UInt(1)) == 1 || throw(EOFError())
+    end
+    return byte[]
+end
+# Base's readbytes! contract: read up to `nb` into `b`, growing `b` to fit and
+# returning the count; never shrink below the original length. Clamp the grow
+# target to what remains — `read(io)`/`read(io, String)` seed `nb = typemax(Int)`,
+# which resize! rejects.
+function Base.readbytes!(zr::ZBytesSliceReader, b::Vector{UInt8}, nb::Integer=length(b))
+    olb = length(b)
+    toread = min(Int(nb), Int(bytesavailable(zr)))
+    toread > olb && resize!(b, toread)
+    got = GC.@preserve b _advance!(zr, pointer(b), UInt(toread))
+    length(b) > olb && resize!(b, max(olb, Int(got)))
+    return Int(got)
+end
+# Non-resizable dense targets (Memory, …): one bulk read clamped to what fits,
+# sparing Base's byte-by-byte fallback.
+function Base.readbytes!(zr::ZBytesSliceReader, b::DenseVector{UInt8}, nb::Integer=length(b))
+    toread = min(Int(nb), length(b), Int(bytesavailable(zr)))
+    return Int(GC.@preserve b _advance!(zr, pointer(b), UInt(toread)))
+end
+# Fill exactly `nb` bytes or throw EOFError.
 function Base.unsafe_read(zr::ZBytesSliceReader, b::Ptr{UInt8}, nb::UInt)
-    if zr.bytes_remaining < nb
-        nb = zr.bytes_remaining
-    end
-    if zr.current_bytes_remaining >= nb
-        unsafe_copyto!(b, zr.current_ptr, nb)
-        zr.current_bytes_remaining -= nb
-        zr.bytes_remaining -= nb
-        zr.current_ptr += nb
-        zr.position += nb
-        return nb
-    else
-        if zr.current_bytes_remaining > 0
-            unsafe_copyto!(b, zr.current_ptr, zr.current_bytes_remaining)
-            zr.bytes_remaining -= zr.current_bytes_remaining
-            zr.position += nb
-        end
-        read_bytes = zr.current_bytes_remaining
-        next_b = b + read_bytes
-        residual = nb - read_bytes
-        has_next = LibZenohC.z_bytes_slice_iterator_next(zr.iterator, zr.current)
-        if !has_next
-            return read_bytes
-        end
-        loaned_slice = LibZenohC.z_view_slice_loan(zr.current)
-        zr.current_ptr = LibZenohC.z_slice_data(loaned_slice)
-        zr.current_bytes_remaining = LibZenohC.z_slice_len(loaned_slice)
-        return unsafe_read(zr, next_b, residual) + read_bytes
-    end
+    _advance!(zr, b, nb) == nb || throw(EOFError())
+    return nothing
 end
 Base.bytesavailable(zr::ZBytesSliceReader) = zr.bytes_remaining
 Base.eof(zr::ZBytesSliceReader) = bytesavailable(zr) == 0
 Base.position(zr::ZBytesSliceReader) = zr.position
-function Base.skip(zr::ZBytesSliceReader, nb)
-    if zr.bytes_remaining < nb
-        nb = zr.bytes_remaining
-    end
-    if zr.current_bytes_remaining >= nb
-        zr.current_bytes_remaining -= nb
-        zr.bytes_remaining -= nb
-        zr.current_ptr += nb
-        zr.position += nb
-        return nothing
-    else
-        if zr.current_bytes_remaining > 0
-            zr.bytes_remaining -= zr.current_bytes_remaining
-            zr.position += nb
-        end
-        read_bytes = zr.current_bytes_remaining
-        residual = nb - read_bytes
-        has_next = LibZenohC.z_bytes_slice_iterator_next(zr.iterator, zr.current)
-        if !has_next
-            return read_bytes
-        end
-        loaned_slice = LibZenohC.z_view_slice_loan(zr.current)
-        zr.current_ptr = LibZenohC.z_slice_data(loaned_slice)
-        zr.current_bytes_remaining = LibZenohC.z_slice_len(loaned_slice)
-        return skip(zr, residual)
-    end
+# Non-seekable skip: advance up to `nb` bytes (clamped to what remains) and
+# return the reader.
+function Base.skip(zr::ZBytesSliceReader, nb::Integer)
+    _advance!(zr, nothing, UInt(nb))
+    return zr
 end
 
 function Base.close(z::ZBytesSliceReader)

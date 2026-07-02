@@ -68,9 +68,17 @@ end
                 push!(dfns, quote _take(x::Ref{$typ}, y::Ref{$movedtype}) = ($loanfunc)(x, y) end)
             elseif !isnothing(dlsym(lzc, Symbol("$(z_prefix)_internal_$(z_typename)_null"); throw_error=false))
                 loanfunc = getfield(LibZenohC, Symbol("$(z_prefix)_internal_$(z_typename)_null"))
+                # Move-by-hand when `_take` is absent: `z_moved_X_t` and
+                # `z_owned_X_t` share a layout, so copy the owned bits from the
+                # moved source `y` into destination `x`, then null the source.
                 push!(dfns, quote function _take(x::Ref{$typ}, y::Ref{$movedtype})
-                    x[] = y[]
-                    ($loanfunc)(x)
+                    GC.@preserve x y begin
+                        yp = Base.unsafe_convert(Ptr{$typ},
+                            Base.unsafe_convert(Ptr{$movedtype}, y))
+                        Base.unsafe_store!(Base.unsafe_convert(Ptr{$typ}, x),
+                            Base.unsafe_load(yp))
+                        ($loanfunc)(yp)
+                    end
                 end end)
             else
                 # No _take: same regex truncation as above; `z_<name>_take` and

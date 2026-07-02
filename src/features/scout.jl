@@ -35,16 +35,20 @@ function Hello(r::Base.RefValue{LibZenohC.z_owned_hello_t})
 
     arr = Ref{LibZenohC.z_owned_string_array_t}()
     LibZenohC.z_hello_locators(loaned, arr)
-    arr_loaned = LibZenohC.z_string_array_loan(arr)
-    n = LibZenohC.z_string_array_len(arr_loaned)
-    locators = Vector{String}(undef, n)
-    for i in 0:(n - 1)
-        sp = LibZenohC.z_string_array_get(arr_loaned, Csize_t(i))
-        locators[i + 1] = unsafe_string(
-            LibZenohC.z_string_data(sp), LibZenohC.z_string_len(sp))
+    locators = try
+        arr_loaned = LibZenohC.z_string_array_loan(arr)
+        n = Int(LibZenohC.z_string_array_len(arr_loaned))
+        ls = Vector{String}(undef, n)
+        for i in 1:n
+            sp = LibZenohC.z_string_array_get(arr_loaned, Csize_t(i - 1))
+            ls[i] = unsafe_string(
+                LibZenohC.z_string_data(sp), LibZenohC.z_string_len(sp))
+        end
+        ls
+    finally
+        LibZenohC.z_string_array_drop(_move(arr))
+        LibZenohC.z_hello_drop(_move(r))
     end
-    LibZenohC.z_string_array_drop(_move(arr))
-    LibZenohC.z_hello_drop(_move(r))
 
     return Hello(zid_v, whatami_v, locators)
 end
@@ -141,8 +145,16 @@ function scout(f::Function, config::Config;
     cfg = _clone_config(config)
     _callback_one_shot(Val(:hello), Hello, f;
             should_close_on_error=should_close_on_error) do closure
-        GC.@preserve opts cfg LibZenohC.z_scout(
-            _move(cfg), _move(closure), opts)
+        # `gc_safe=true`: z_scout parks the calling thread in C for the whole scouting round
+        # (up to `timeout_ms`), so mark the ccall GC-safe to let a stop-the-world GC proceed
+        # meanwhile. Sound because the call touches no Julia heap — the user closure runs on
+        # zenoh's own threads via the trampoline.
+        GC.@preserve opts cfg closure begin
+            @ccall gc_safe=true LibZenohC.libzenohc.z_scout(
+                _move(cfg)::Ptr{LibZenohC.z_moved_config_t},
+                _move(closure)::Ptr{LibZenohC.z_moved_closure_hello_t},
+                opts::Ptr{LibZenohC.z_scout_options_t})::LibZenohC.z_result_t
+        end
     end
 end
 

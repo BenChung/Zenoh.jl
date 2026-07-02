@@ -74,8 +74,11 @@ function payload(q::Query)
 end
 
 function encoding(q::Query)
-    p = LibZenohC.z_query_encoding(_loaned_query(q))
-    return p == C_NULL ? nothing : _from_loaned_encoding(p)
+    # Loaned encoding pointer borrows from `q`; keep `q` rooted across the read.
+    GC.@preserve q begin
+        p = LibZenohC.z_query_encoding(_loaned_query(q))
+        return p == C_NULL ? nothing : _from_loaned_encoding(p)
+    end
 end
 
 function attachment(q::Query)
@@ -84,13 +87,21 @@ function attachment(q::Query)
 end
 
 """
-    accepts_replies(q::Query) -> Bool
+    accepts_replies(q::Query) -> ReplyKeyexpr
 
-Whether query `q` accepts replies. When `false`, the originating `get`
-wants no data, so [`reply`](@ref) / [`reply_err`](@ref) / [`reply_del`](@ref)
-calls are wasted.
+Which reply keyexprs query `q` accepts, as a [`ReplyKeyexpr`](@ref) singleton:
+
+  - `ReplyKeyexprs.MATCHING_QUERY` restricts [`reply`](@ref) / [`reply_del`](@ref)
+    to keyexprs matching the query's own.
+  - `ReplyKeyexprs.ANY` admits any key.
+
+[`reply_err`](@ref) carries no keyexpr and is unaffected. Compare with `===`.
 """
-accepts_replies(q::Query) = LibZenohC.z_query_accepts_replies(_loaned_query(q))
+function accepts_replies(q::Query)
+    GC.@preserve q begin
+        return _reply_keyexpr_from_raw(LibZenohC.z_query_accepts_replies(_loaned_query(q)))
+    end
+end
 
 # ── Reply option builders ──────────────────────────────────────────────
 
@@ -172,7 +183,7 @@ function reply(q::Query, payload, k::Union{Nothing, Keyexpr} = nothing; kwargs..
     # Default keyexpr: borrow the query's own loaned keyexpr directly rather
     # than round-tripping it through a Julia String and a fresh owned
     # Keyexpr. `q` is preserved so that borrowed pointer stays valid.
-    GC.@preserve q k enc_ref attach_ref ts begin
+    GC.@preserve q k enc_ref attach_ref ts bytes begin
         ke = isnothing(k) ? LibZenohC.z_query_keyexpr(_loaned_query(q)) : _loan(k)
         rtc = LibZenohC.z_query_reply(_loaned_query(q), ke, _move(bytes), opts)
         _handle_result(rtc)
@@ -190,7 +201,7 @@ function reply_err(q::Query, payload; kwargs...)
     # orphaned before the consuming C call.
     opts, enc_ref = _make_reply_err_opts(; kwargs...)
     bytes = ZBytes(payload)
-    GC.@preserve enc_ref begin
+    GC.@preserve q enc_ref bytes begin
         rtc = LibZenohC.z_query_reply_err(_loaned_query(q), _move(bytes), opts)
         _handle_result(rtc)
     end

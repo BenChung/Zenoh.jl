@@ -37,6 +37,8 @@ end
 Copies an existing timestamp by value out of a libzenoh-owned slot into a
 self-owned `Ref`, used internally by `timestamp(::Sample)` to lift a sample's
 timestamp into a [`ZTimestamp`](@ref) that outlives the borrowed sample.
+
+The owner of `ptr` must stay rooted across the call.
 """
 function ZTimestamp(ptr::Ptr{LibZenohC.z_timestamp_t})
     ts = Ref{LibZenohC.z_timestamp_t}()

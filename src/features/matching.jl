@@ -40,7 +40,7 @@ matching status this is rarely a concern (transitions are infrequent
 and idempotent), and the slow-consumer worst case is just seeing the
 final state rather than every intermediate flip.
 
-Call `close(ml)` to undeclare; the listener is also dropped on GC as a
+Call `close(ml)` to undeclare. A finalizer drops an abandoned listener as a
 safety net.
 """
 mutable struct MatchingListener
@@ -70,7 +70,26 @@ function _matching_listener_setup(declare_fn::F, f::Function, target,
 
     task = Threads.@spawn consume(f, _matching_unwrap, ctx, async_cond,
         should_close_on_error)
-    return MatchingListener(handle, ctx, async_cond, task, target, false)
+    ml = MatchingListener(handle, ctx, async_cond, task, target, false)
+    finalizer(_finalize_matching_listener, ml)
+    return ml
+end
+
+# GC safety net for an abandoned MatchingListener: its ctx cluster gets collected while the
+# still-installed C closure keeps firing match transitions into the freed ctx from a foreign
+# thread. Drop the listener handle first to stop that delivery, then tear down in close(ml)'s
+# order. Spawn on a normal task — finalizers can't `wait`/`close`.
+_finalize_matching_listener(ml::MatchingListener) =
+    ml.closed || Threads.@spawn _teardown_matching_listener!(ml)
+
+function _teardown_matching_listener!(ml::MatchingListener)
+    ml.closed && return nothing
+    ml.closed = true
+    signal_closing!(ml.ctx, ml.async_cond)
+    LibZenohC.z_matching_listener_drop(_move(ml.handle))   # stop foreign delivery (drop, not undeclare)
+    wait(ml.task)
+    _teardown_callback(Val(:matching_status), ml.ctx, ml.async_cond)
+    return nothing
 end
 
 """
@@ -82,9 +101,9 @@ subscriber departs). See [`MatchingListener`](@ref) for semantics.
 """
 function MatchingListener(f::Function, pub::Publisher;
         should_close_on_error::Bool=true)
-    # Hold the publisher's lock across the declare (which loans `pub.pub`) so a concurrent close
-    # can't undeclare the publisher mid-declare. Closed → bail before building the ctx. The lock
-    # spans the spawned consume task's creation, which never takes `pub.lock`, so no deadlock.
+    # Hold `pub.lock` across the declare so a concurrent close can't undeclare `pub.pub`
+    # mid-declare; bail if already closed. The consume task spawned under the lock never takes
+    # `pub.lock`, so the hold can't deadlock.
     @lock pub.lock begin
         pub.closed && throw(ArgumentError("MatchingListener on a closed Publisher"))
         _matching_listener_setup(f, pub, should_close_on_error) do handle, closure
@@ -103,9 +122,15 @@ last queryable departs). See [`MatchingListener`](@ref) for semantics.
 """
 function MatchingListener(f::Function, q::Querier;
         should_close_on_error::Bool=true)
-    _matching_listener_setup(f, q, should_close_on_error) do handle, closure
-        LibZenohC.z_querier_declare_matching_listener(
-            _loan(q), handle, _move(closure))
+    # Hold `q.lock` across the declare so a concurrent close can't undeclare `q.querier`
+    # mid-declare; bail if already closed. The consume task spawned under the lock never takes
+    # `q.lock`, so the hold can't deadlock.
+    @lock q.lock begin
+        q.closed && throw(ArgumentError("MatchingListener on a closed Querier"))
+        _matching_listener_setup(f, q, should_close_on_error) do handle, closure
+            LibZenohC.z_querier_declare_matching_listener(
+                _loan(q), handle, _move(closure))
+        end
     end
 end
 
@@ -154,8 +179,10 @@ use [`MatchingListener`](@ref).
 """
 function matching_status(q::Querier)
     status = Ref{LibZenohC.z_matching_status_t}()
-    rtc = LibZenohC.z_querier_get_matching_status(_loan(q), status)
-    _handle_result(rtc)
+    @lock q.lock begin
+        q.closed && return false         # a closed querier has no matching peers
+        _handle_result(LibZenohC.z_querier_get_matching_status(_loan(q), status))
+    end
     return status[].matching
 end
 

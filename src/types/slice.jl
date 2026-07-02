@@ -13,9 +13,9 @@ Construct one of three ways:
 
 - `ZSlice()` — an empty owned slice.
 - `ZSlice(buf::Vector{UInt8}; copy=false)` — wraps a Julia byte vector. The
-  default takes ownership zero-copy: `buf` is pinned and freed only once libzenoh
-  releases it, so it must stay reachable. Pass `copy=true` to have libzenoh take
-  its own copy immediately, freeing `buf` from that obligation.
+  default borrows `buf` zero-copy; `buf` must stay reachable and unmodified
+  (no `resize!`) until libzenoh releases it. Pass `copy=true` to have libzenoh
+  take its own copy immediately, freeing `buf` from that obligation.
 - `ZSlice(ref::Ptr{z_loaned_slice_t})` — a loaned slice borrowing C-owned memory.
 
 Owned slices carry a GC drop finalizer; loaned slices own nothing and need no

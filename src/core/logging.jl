@@ -171,7 +171,13 @@ function _log_call_tramp(severity::LibZenohC.zc_log_severity_t,
     # Copy the message bytes into a libc buffer (the consumer frees it).
     n  = LibZenohC.z_string_len(msg)
     dp = LibZenohC.z_string_data(msg)
-    p  = Ptr{UInt8}(ccall(:malloc, Ptr{Cvoid}, (Csize_t,), n))
+    p  = Ptr{UInt8}(n == 0 ? C_NULL : ccall(:malloc, Ptr{Cvoid}, (Csize_t,), n))
+    if n != 0 && p == C_NULL
+        # malloc failed: drop this record. Head stays put, so the slot is free
+        # for the next push.
+        ccall(:uv_mutex_unlock, Cvoid, (Ptr{Cvoid},), ctx)
+        return nothing
+    end
     n == 0 || ccall(:memcpy, Ptr{Cvoid}, (Ptr{UInt8}, Ptr{UInt8}, Csize_t), p, dp, n)
     unsafe_store!(eptr, _LogEntry(UInt32(severity), p, n), (head % cap) + 1)
     unsafe_store!(_head_p(ctx), head + 1)
@@ -203,11 +209,15 @@ end
 # ── Global one-shot init guard ───────────────────────────────────────────
 
 # Zenoh's log init is process-global and irreversible. Track whether *any*
-# init has happened so the stderr and capture paths can't collide.
+# init has happened so the stderr and capture paths can't collide. `_LOG_LOCK`
+# makes check-and-init atomic, so racing initializers can't both pass the guard
+# and double-init the global logger.
+const _LOG_LOCK = ReentrantLock()
 const _LOG_INITED = Ref{Bool}(false)
 const _LOG_BRIDGE = Ref{Union{Nothing, _LogBridge}}(nothing)
 
-_log_already_inited() = _LOG_INITED[] &&
+# Call while holding `_LOG_LOCK`. Throws if any init already ran.
+_check_not_inited() = _LOG_INITED[] &&
     error("Zenoh logging is already initialized (it is global and one-shot); " *
           "`setup_logging` and `open_log_stream` are mutually exclusive and may only be called once")
 
@@ -223,11 +233,13 @@ may be a level string (`"info"`, `"debug"`, …) or a [`LogSeverity`](@ref).
 Global and one-shot — mutually exclusive with [`open_log_stream`](@ref).
 """
 function setup_logging(filter::Union{AbstractString, LogSeverity} = "info")
-    _log_already_inited()
     f = filter isa LogSeverity ? _filter_string(filter) : String(filter)
-    GC.@preserve f _handle_result(LibZenohC.zc_init_log_from_env_or(
-        Base.unsafe_convert(Cstring, f)))
-    _LOG_INITED[] = true
+    @lock _LOG_LOCK begin
+        _check_not_inited()
+        GC.@preserve f _handle_result(LibZenohC.zc_init_log_from_env_or(
+            pointer(Base.unsafe_convert(Cstring, f))))
+        _LOG_INITED[] = true
+    end
     return nothing
 end
 
@@ -238,9 +250,11 @@ Initialize Zenoh's stderr logger from the `RUST_LOG`/`ZENOH_LOG` env vars only
 (no fallback); a no-op if they're unset. Global and one-shot.
 """
 function try_init_logging_from_env()
-    _log_already_inited()
-    LibZenohC.zc_try_init_log_from_env()
-    _LOG_INITED[] = true
+    @lock _LOG_LOCK begin
+        _check_not_inited()
+        LibZenohC.zc_try_init_log_from_env()
+        _LOG_INITED[] = true
+    end
     return nothing
 end
 
@@ -260,7 +274,7 @@ stops delivery and frees buffered records, but cannot uninstall the global logge
 """
 mutable struct LogStream
     bridge::_LogBridge
-    closed::Bool
+    @atomic closed::Bool
 end
 
 """
@@ -279,7 +293,6 @@ exclusive with [`setup_logging`](@ref).
 function open_log_stream(; min_severity::LogSeverity = LogSeverities.WARN,
                            capacity::Integer = 256)
     capacity >= 1 || throw(ArgumentError("capacity must be ≥ 1"))
-    _log_already_inited()
 
     b = _LogBridge()
     b.head = 0; b.tail = 0; b.dropped = UInt64(0)
@@ -294,13 +307,15 @@ function open_log_stream(; min_severity::LogSeverity = LogSeverities.WARN,
     rc == 0 || error("uv_mutex_init failed: $rc")
     b.closure = Ref{LibZenohC.zc_owned_closure_log_t}()
 
-    # Install the closure, then hand it to Zenoh's global logger init.
-    LibZenohC.zc_closure_log(b.closure, _LOG_CALL_CFN[], _LOG_DROP_CFN[], _bridge_ctx(b))
-    GC.@preserve b LibZenohC.zc_init_log_with_callback(
-        _raw(min_severity), _move(b.closure))
-
-    _LOG_BRIDGE[] = b       # root for process life — Zenoh holds the ctx pointer
-    _LOG_INITED[] = true
+    @lock _LOG_LOCK begin
+        _check_not_inited()
+        # Install the closure, then hand it to Zenoh's global logger init.
+        LibZenohC.zc_closure_log(b.closure, _LOG_CALL_CFN[], _LOG_DROP_CFN[], _bridge_ctx(b))
+        GC.@preserve b LibZenohC.zc_init_log_with_callback(
+            _raw(min_severity), _move(b.closure))
+        _LOG_BRIDGE[] = b   # root for process life — Zenoh holds the ctx pointer
+        _LOG_INITED[] = true
+    end
     return LogStream(b, false)
 end
 
@@ -330,7 +345,7 @@ end
 Pop the next buffered `LogRecord`, or `nothing` if none is waiting. Never blocks.
 """
 function tryrecv!(s::LogStream)
-    s.closed && return nothing
+    (@atomic s.closed) && return nothing
     return _log_pop(s.bridge)
 end
 
@@ -344,21 +359,24 @@ function Base.take!(s::LogStream)
     while true
         r = tryrecv!(s)
         r === nothing || return r
-        s.closed && throw(InvalidStateException("LogStream is closed", :closed))
+        (@atomic s.closed) && throw(InvalidStateException("LogStream is closed", :closed))
         try
             wait(s.bridge.async_cond)
-        catch
+        catch e
+            e isa EOFError || rethrow()   # only a closed AsyncCondition means "closed"
             throw(InvalidStateException("LogStream is closed", :closed))
         end
     end
 end
 
-# Iteration: yields records until the stream is closed.
+# Iteration yields records until the stream closes. Only the stream-closed
+# signal ends it; anything else (notably InterruptException) propagates.
 function Base.iterate(s::LogStream, ::Nothing=nothing)
     try
         return (take!(s), nothing)
-    catch
-        return nothing
+    catch e
+        e isa InvalidStateException && e.state === :closed && return nothing
+        rethrow()
     end
 end
 Base.IteratorSize(::Type{LogStream}) = Base.SizeUnknown()
@@ -385,8 +403,7 @@ cannot be uninstalled, so logging stays "initialized" for the process — a new
 [`open_log_stream`](@ref) will error.
 """
 function Base.close(s::LogStream)
-    s.closed && return nothing
-    s.closed = true
+    (@atomicswap s.closed = true) && return nothing
     b = s.bridge
     ctx = _bridge_ctx(b)
     ccall(:uv_mutex_lock, Cvoid, (Ptr{Cvoid},), ctx)
@@ -400,8 +417,15 @@ function Base.close(s::LogStream)
         tail += 1
     end
     unsafe_store!(_tail_p(ctx), head)
+    async = unsafe_load(_async_p(ctx))
     ccall(:uv_mutex_unlock, Cvoid, (Ptr{Cvoid},), ctx)
-    close(b.async_cond)
+    # Do NOT close(b.async_cond): the global Zenoh logger is never uninstalled,
+    # so a foreign trampoline can be mid-`uv_async_send`; closing would free the
+    # uv handle under that in-flight sender (libuv UB). The handle lives for
+    # process life (`b` is rooted in `_LOG_BRIDGE`). This send wakes any parked
+    # `take!` to observe the close and exit; records committed after `closing`
+    # is set bail before touching the ring, so nothing leaks.
+    ccall(:uv_async_send, Cint, (Ptr{Cvoid},), async)
     return nothing
 end
 

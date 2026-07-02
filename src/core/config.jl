@@ -29,7 +29,7 @@ Gets a JSON-serialized value at the key position of the configuration.
 """
 function Base.getindex(c::Config, key::String)
     r=Ref{LibZenohC.z_owned_string_t}()
-    GC.@preserve key _handle_result(LibZenohC.zc_config_get_from_str(_loan(c.c), pointer(Base.unsafe_convert(Cstring, key)), r))
+    GC.@preserve c key _handle_result(LibZenohC.zc_config_get_from_str(_loan(c.c), pointer(Base.unsafe_convert(Cstring, key)), r))
     res = _string(r)
     _drop(_move(r))
     return res
@@ -45,14 +45,34 @@ JSON5 (see below).
 """
 _to_json5(x::Bool) = x ? "true" : "false"
 _to_json5(x::Integer) = string(x)
+function _to_json5(x::AbstractFloat)
+    isnan(x) && return "NaN"
+    isinf(x) && return x < 0 ? "-Infinity" : "Infinity"
+    return string(x)
+end
 _to_json5(x::Real) = string(x)
 _to_json5(x::Symbol) = _to_json5(String(x))
 function _to_json5(s::AbstractString)
     io = IOBuffer()
     write(io, '"')
     for ch in s
-        (ch == '"' || ch == '\\') && write(io, '\\')
-        write(io, ch)
+        if ch == '"' || ch == '\\'
+            write(io, '\\', ch)
+        elseif ch == '\n'
+            write(io, "\\n")
+        elseif ch == '\r'
+            write(io, "\\r")
+        elseif ch == '\t'
+            write(io, "\\t")
+        elseif ch == '\b'
+            write(io, "\\b")
+        elseif ch == '\f'
+            write(io, "\\f")
+        elseif ch < '\x20'
+            write(io, "\\u", string(UInt16(ch); base=16, pad=4))
+        else
+            write(io, ch)
+        end
     end
     write(io, '"')
     return String(take!(io))
@@ -71,7 +91,7 @@ configuration, verbatim. (The value must already be valid JSON5, e.g.
 function Base.setindex!(c::Config, value::AbstractString, key::AbstractString)
     skey = String(key)
     sval = String(value)
-    GC.@preserve skey sval _handle_result(LibZenohC.zc_config_insert_json5(_loan(c.c), pointer(Base.unsafe_convert(Cstring, skey)), pointer(Base.unsafe_convert(Cstring, sval))))
+    GC.@preserve c skey sval _handle_result(LibZenohC.zc_config_insert_json5(_loan(c.c), pointer(Base.unsafe_convert(Cstring, skey)), pointer(Base.unsafe_convert(Cstring, sval))))
     return value
 end
 
@@ -87,7 +107,7 @@ Convert a config into an equivalent JSON string.
 """
 function toJson(c::Config)
     r=Ref{LibZenohC.z_owned_string_t}()
-    _handle_result(LibZenohC.zc_config_to_string(_loan(c.c), r))
+    GC.@preserve c _handle_result(LibZenohC.zc_config_to_string(_loan(c.c), r))
     res = _string(r)
     _drop(_move(r))
     return res
