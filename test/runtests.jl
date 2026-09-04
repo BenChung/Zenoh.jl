@@ -33,19 +33,37 @@ router = run(pipeline(`$(Zenohd_jll.zenohd()) -l $EP --cfg scouting/multicast/en
 # Testsets that need distinct peers for their semantics (locality /
 # allowed_origin), SHM (`shm_clients=`), liveliness propagation, or that close
 # the session under test, keep opening their own — they do NOT use S1/S2.
-# Test sessions must talk ONLY to this run's isolated router on $EP. Left at
-# zenoh's default, *multicast* scouting also discovers any other zenohd on the
-# machine — e.g. a dev router on the default :7447 — and that stray
-# cross-connection wedges session `close` (it parks the full 10s open_timeout,
-# then throws ZenohError(-128)). So every test config disables multicast
-# scouting. Gossip stays ON: it only propagates over already-established links
-# (here just the test router), so it can't reach an external zenohd, and the
-# matching_status / MatchingListener tests rely on it to learn a peer's
-# subscriptions through the router. `epcfg` additionally points `connect` at the
-# test router; pass extra JSON5 sections (shm, timestamping, …) via `extra`.
+# Test sessions must talk ONLY to this run's isolated router on $EP, and only
+# *through* it. Two config choices enforce that:
+#
+# - `mode: "client"`. In zenoh's default peer mode, sibling sessions in this
+#   process learn of each other via gossip and autoconnect directly. Besides
+#   bypassing the router, that traffic races a closing session's teardown so it
+#   reconnects ~200ms after `close`; from then on every `close` in the process
+#   parks the full 10s z_close timeout and reports Z_EGENERIC (-128) — issue #8.
+#   As clients, sessions hold exactly one link, to the router, and close
+#   instantly. Everything router-mediated (matching_status / MatchingListener,
+#   liveliness, get/reply, ...) works the same in client mode.
+# - Multicast scouting off. Left at the default it also discovers any other
+#   zenohd on the machine (e.g. a dev router on :7447), and that stray
+#   cross-connection wedges `close` the same way.
+#
+# Gossip stays at its default: for a client it only propagates over the router
+# link, and the matching_status tests were observed to depend on it.
+#
+# The two SHM pub/sub testsets are the exception: a shared-memory buffer moves
+# zero-copy between two sessions only over a *direct* link, so they open
+# peer-mode sessions via `peercfg` — the only peers in the process, discovered
+# through the router. Their closes can still hit the 10s stall above (`close`
+# warns rather than throws), which those testsets' watchdog budgets allow for.
+#
+# Both helpers also point `connect` at the test router; pass extra JSON5
+# sections (shm, timestamping, …) via `extra`.
 const _NO_SCOUT = "scouting:{multicast:{enabled:false}}"
-epcfg(extra::AbstractString="") = Zenoh.Config(; str =
-    "{connect:{endpoints:[\"$EP\"]}, $_NO_SCOUT$(isempty(extra) ? "" : ", $extra")}")
+_cfg(mode::AbstractString, extra::AbstractString) = Zenoh.Config(; str =
+    "{mode:\"$mode\", connect:{endpoints:[\"$EP\"]}, $_NO_SCOUT$(isempty(extra) ? "" : ", $extra")}")
+epcfg(extra::AbstractString="")   = _cfg("client", extra)
+peercfg(extra::AbstractString="") = _cfg("peer", extra)
 rcfg() = epcfg()
 sleep(0.3)            # let the router bind
 S1 = open(rcfg())
@@ -2084,8 +2102,8 @@ try
     end
 
     @timed_testset "SHM round-trip publish/subscribe" timeout=20 begin
-        c1 = epcfg()
-        c2 = epcfg()
+        c1 = peercfg()      # peer mode: SHM travels zero-copy only over a direct link
+        c2 = peercfg()
         s_pub = open(c1; shm_clients = Zenoh.default_shm_clients())
         s_sub = open(c2; shm_clients = Zenoh.default_shm_clients())
         sleep(0.5)
@@ -2146,8 +2164,8 @@ try
     end
 
     @timed_testset "ZRef typed round-trip (transport-agnostic)" timeout=30 begin
-        c1 = epcfg()
-        c2 = epcfg()
+        c1 = peercfg()      # peer mode: SHM travels zero-copy only over a direct link
+        c2 = peercfg()
         s_pub = open(c1; shm_clients = Zenoh.default_shm_clients())
         s_sub = open(c2; shm_clients = Zenoh.default_shm_clients())
         sleep(0.5)
