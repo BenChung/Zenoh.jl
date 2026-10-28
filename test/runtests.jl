@@ -60,8 +60,20 @@ _cfg(mode::AbstractString, extra::AbstractString) = Zenoh.Config(; str =
 epcfg(extra::AbstractString="")   = _cfg("client", extra)
 peercfg(extra::AbstractString="") = _cfg("peer", extra)
 rcfg() = epcfg()
-sleep(0.3)            # let the router bind
-S1 = open(rcfg())
+# A client-mode `open` fails with Z_ENETWORK until the router is listening.
+function _open_once_router_listens(timeout::Real = 10.0)
+    deadline = time() + timeout
+    while true
+        try
+            return open(rcfg())
+        catch e
+            e isa Zenoh.ZenohError && e.code == Zenoh.LibZenohC.Z_ENETWORK &&
+                time() < deadline || rethrow()
+            sleep(0.05)
+        end
+    end
+end
+S1 = _open_once_router_listens()
 S2 = open(rcfg())
 sleep(0.5)            # let S1/S2 connect before the first round-trip
 
