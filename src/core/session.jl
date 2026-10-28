@@ -136,12 +136,29 @@ function Base.open(c::Config; shm_clients=nothing, on_shm_alloc_error=nothing,
 end
 
 """
+    close(s::Session; timeout=nothing)
+
 Closes a Zenoh session: gracefully shuts it down (`z_close`) and frees the
-handle (`z_session_drop`), deterministically on the calling task. The handle is
-freed even if the graceful `z_close` reports an error, so a transient
-shutdown/runtime error can't leak the session. Idempotent — a second `close` is
-a no-op, and the GC finalizer skips an already-closed session. After `close` the
-session is unusable; operations on it throw.
+handle (`z_session_drop`), deterministically on the calling task. Idempotent — a
+second `close` is a no-op, and the GC finalizer skips an already-closed session.
+After `close` the session is unusable; operations on it throw.
+
+`z_close` waits up to `timeout` seconds (Zenoh's default is 10 s) for the
+session's transports to shut down. Then `close`:
+
+- frees the handle, whatever `z_close` returned;
+- logs a warning with the Zenoh result code when the graceful shutdown fails or
+  times out;
+- returns `nothing`, so a `close` in a `finally` block leaves an in-flight
+  exception intact.
+
+Sessions that share a process and a router close promptly in client mode
+(`ZenohConfig(mode = :client)`), where each holds a single link, to the router.
+Peer-mode siblings gossip-connect to one another, and that link can race a
+closing session's teardown and stall every later `close` in the process for the
+full timeout. `Gossip(enabled = false)` in [`Scouting`](@ref) also keeps those
+sibling links from forming. A smaller `timeout` bounds how long such a stall
+blocks the calling task.
 
 !!! warning
     `close` must not run concurrently with in-flight operations on the *same*
@@ -151,18 +168,35 @@ session is unusable; operations on it throw.
     Quiesce a shared session — join its publisher/subscriber tasks — before
     closing it.
 """
-function Base.close(s::Session)
+function Base.close(s::Session; timeout::Union{Nothing,Real}=nothing)
     # Atomically claim the close: only the caller that flips `closed` false→true
     # proceeds, so concurrent closes (or a close racing the finalizer) can't both
     # drop the handle. The `finally` drop below runs unconditionally to close a
-    # leak: a throwing `z_close` must not strand the owned session — and thus its
-    # tokio runtime / SHM subsystem — for the process lifetime. The guaranteed
+    # leak: an interrupted `z_close` must not strand the owned session — and thus
+    # its tokio runtime / SHM subsystem — for the process lifetime. The guaranteed
     # drop is why claiming `closed` first never lets the finalizer double-drop.
     Threads.atomic_xchg!(s.closed, true) && return nothing
     opts = Ref{LibZenohC.z_close_options_t}()
     LibZenohC.z_close_options_default(opts)
+    if timeout !== nothing
+        timeout >= 0 || throw(ArgumentError("close timeout must be non-negative, got $timeout"))
+        Base.unsafe_convert(Ptr{LibZenohC.z_close_options_t}, opts).internal_timeout_ms =
+            UInt32(round(timeout * 1000))
+    end
     try
-        GC.@preserve s _handle_result(LibZenohC.z_close(_loan(s.s), opts))
+        # GC-safe so a stop-the-world GC on another thread can proceed while z_close
+        # blocks (up to the timeout); sound because the call reads only pointers
+        # pinned by the `@preserve`.
+        sp = _loan(s.s)
+        rc = GC.@preserve s opts begin
+            @ccall gc_safe=true LibZenohC.libzenohc.z_close(
+                sp::Ptr{LibZenohC.z_loaned_session_t},
+                opts::Ptr{LibZenohC.z_close_options_t})::LibZenohC.z_result_t
+        end
+        # A warning suffices: the handle is freed below regardless, and throwing
+        # would mask an in-flight exception when `close` runs in a `finally`.
+        rc == LibZenohC.Z_OK ||
+            @warn "Graceful session close did not complete; the handle was freed anyway" zenoh_result=rc
     finally
         _drop(_move(s.s))   # free now, on this task — even if z_close errored
         # Release the cached SHM provider with the session; `zref(::Session,T)` and
