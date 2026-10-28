@@ -85,7 +85,9 @@ end
 
 Call `close` explicitly: the graceful shutdown drains Zenoh's async runtime, work that should run on your task where ordering is predictable. A GC finalizer frees an unclosed session as a safety net, and skips a session you closed yourself.
 
-The graceful shutdown waits up to `timeout` seconds (Zenoh's default of 10 s when unset) for the session's transports to close cleanly. If it does not complete, `close` logs a warning carrying the Zenoh result code and frees the handle anyway — it does not throw, because the session is unusable either way and there is nothing for the caller to act on. One known way to hit that timeout is several peer-mode sessions in one process connected to the same router: their gossip autoconnect can race a closing session's teardown so that it reconnects, after which every later `close` in the process stalls. Open such sessions in `mode: "client"` (or disable `scouting.gossip`) to avoid it, and pass `close(s; timeout=1.0)` to bound how long a stalled close may block your task.
+`close(s; timeout)` bounds the graceful shutdown to `timeout` seconds (Zenoh's default is 10 s) and frees the handle whatever the outcome. An incomplete shutdown logs a warning, so `close` stays safe in a `finally`; see [`close`](@ref close(::Zenoh.Session)) for the full contract.
+
+Open sessions that share a process and a router in client mode, [`ZenohConfig`](@ref)`(mode = :client)`. Each client holds a single link, to the router, and closes promptly. Peer-mode siblings gossip-connect to one another, and that link can race a closing session's teardown and stall every later `close` in the process for the full timeout.
 
 ## Session identity and connectivity
 

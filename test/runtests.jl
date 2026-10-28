@@ -33,32 +33,27 @@ router = run(pipeline(`$(Zenohd_jll.zenohd()) -l $EP --cfg scouting/multicast/en
 # Testsets that need distinct peers for their semantics (locality /
 # allowed_origin), SHM (`shm_clients=`), liveliness propagation, or that close
 # the session under test, keep opening their own — they do NOT use S1/S2.
-# Test sessions must talk ONLY to this run's isolated router on $EP, and only
-# *through* it. Two config choices enforce that:
+# Two config choices keep test sessions talking only to this run's isolated
+# router on $EP:
 #
-# - `mode: "client"`. In zenoh's default peer mode, sibling sessions in this
-#   process learn of each other via gossip and autoconnect directly. Besides
-#   bypassing the router, that traffic races a closing session's teardown so it
-#   reconnects ~200ms after `close`; from then on every `close` in the process
-#   parks the full 10s z_close timeout and reports Z_EGENERIC (-128) — issue #8.
-#   As clients, sessions hold exactly one link, to the router, and close
-#   instantly. Everything router-mediated (matching_status / MatchingListener,
-#   liveliness, get/reply, ...) works the same in client mode.
-# - Multicast scouting off. Left at the default it also discovers any other
-#   zenohd on the machine (e.g. a dev router on :7447), and that stray
-#   cross-connection wedges `close` the same way.
+# - `mode: "client"`: each session holds one link, to the router, and closes
+#   promptly. Peer-mode siblings gossip-connect to one another, and that link
+#   can race a closing session's teardown and stall every later `close` in the
+#   process for the full 10s z_close timeout. Router-mediated features
+#   (matching, liveliness, get/reply) behave the same for clients.
+# - Multicast scouting off: the default discovers any other zenohd on the
+#   machine (e.g. a dev router on :7447), and that cross-connection stalls
+#   `close` the same way.
 #
-# Gossip stays at its default: for a client it only propagates over the router
-# link, and the matching_status tests were observed to depend on it.
+# Gossip stays on: for a client it propagates only over the router link, and
+# the matching_status tests depend on it.
 #
-# The two SHM pub/sub testsets are the exception: a shared-memory buffer moves
-# zero-copy between two sessions only over a *direct* link, so they open
-# peer-mode sessions via `peercfg` — the only peers in the process, discovered
-# through the router. Their closes can still hit the 10s stall above (`close`
-# warns rather than throws), which those testsets' watchdog budgets allow for.
+# `peercfg` opens peer-mode sessions for the two SHM pub/sub testsets, since
+# shared memory travels zero-copy only over a direct link. Their closes can
+# stall as above, and those testsets' timeouts allow for it.
 #
-# Both helpers also point `connect` at the test router; pass extra JSON5
-# sections (shm, timestamping, …) via `extra`.
+# Both helpers point `connect` at the test router; pass extra JSON5 sections
+# (shm, timestamping, …) via `extra`.
 const _NO_SCOUT = "scouting:{multicast:{enabled:false}}"
 _cfg(mode::AbstractString, extra::AbstractString) = Zenoh.Config(; str =
     "{mode:\"$mode\", connect:{endpoints:[\"$EP\"]}, $_NO_SCOUT$(isempty(extra) ? "" : ", $extra")}")
@@ -2102,7 +2097,7 @@ try
     end
 
     @timed_testset "SHM round-trip publish/subscribe" timeout=20 begin
-        c1 = peercfg()      # peer mode: SHM travels zero-copy only over a direct link
+        c1 = peercfg()
         c2 = peercfg()
         s_pub = open(c1; shm_clients = Zenoh.default_shm_clients())
         s_sub = open(c2; shm_clients = Zenoh.default_shm_clients())
@@ -2164,7 +2159,7 @@ try
     end
 
     @timed_testset "ZRef typed round-trip (transport-agnostic)" timeout=30 begin
-        c1 = peercfg()      # peer mode: SHM travels zero-copy only over a direct link
+        c1 = peercfg()
         c2 = peercfg()
         s_pub = open(c1; shm_clients = Zenoh.default_shm_clients())
         s_sub = open(c2; shm_clients = Zenoh.default_shm_clients())

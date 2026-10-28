@@ -143,17 +143,22 @@ handle (`z_session_drop`), deterministically on the calling task. Idempotent —
 second `close` is a no-op, and the GC finalizer skips an already-closed session.
 After `close` the session is unusable; operations on it throw.
 
-The handle is always freed, even when the graceful shutdown does not complete.
-`z_close` waits up to `timeout` seconds (zenoh's default, 10 s, when unset) for
-the transports to close cleanly; if that wait times out or otherwise fails, a
-warning is logged with the zenoh result code and the handle is freed anyway —
-`close` does not throw for it, since the outcome for the caller is the same and
-there is nothing to act on. A stalled graceful close is a known zenoh-c
-behavior when several peer-mode sessions in one process are connected to the
-same router (their gossip autoconnect races the closing session's teardown, and
-it reconnects); running such sessions in `mode: "client"` or with
-`scouting.gossip.enabled: false` avoids it. Pass a smaller `timeout` to bound
-how long a stalled close can block the calling task.
+`z_close` waits up to `timeout` seconds (Zenoh's default is 10 s) for the
+session's transports to shut down. Then `close`:
+
+- frees the handle, whatever `z_close` returned;
+- logs a warning with the Zenoh result code when the graceful shutdown fails or
+  times out;
+- returns `nothing`, so a `close` in a `finally` block leaves an in-flight
+  exception intact.
+
+Sessions that share a process and a router close promptly in client mode
+(`ZenohConfig(mode = :client)`), where each holds a single link, to the router.
+Peer-mode siblings gossip-connect to one another, and that link can race a
+closing session's teardown and stall every later `close` in the process for the
+full timeout. `Gossip(enabled = false)` in [`Scouting`](@ref) also keeps those
+sibling links from forming. A smaller `timeout` bounds how long such a stall
+blocks the calling task.
 
 !!! warning
     `close` must not run concurrently with in-flight operations on the *same*
@@ -179,23 +184,17 @@ function Base.close(s::Session; timeout::Union{Nothing,Real}=nothing)
             UInt32(round(timeout * 1000))
     end
     try
-        # `gc_safe=true`: z_close parks the calling thread in C until the graceful
-        # shutdown completes or `internal_timeout_ms` elapses (10 s by default, and
-        # it does hit that ceiling — see the docstring). Marking the ccall GC-safe
-        # lets a stop-the-world GC on another thread proceed meanwhile instead of
-        # freezing every other Julia thread for the whole wait. Sound because the
-        # call touches no Julia heap: `s` and `opts` are only read through
-        # pointers pinned by the `@preserve`.
+        # GC-safe so a stop-the-world GC on another thread can proceed while z_close
+        # blocks (up to the timeout); sound because the call reads only pointers
+        # pinned by the `@preserve`.
         sp = _loan(s.s)
         rc = GC.@preserve s opts begin
             @ccall gc_safe=true LibZenohC.libzenohc.z_close(
                 sp::Ptr{LibZenohC.z_loaned_session_t},
                 opts::Ptr{LibZenohC.z_close_options_t})::LibZenohC.z_result_t
         end
-        # A failed graceful close is not actionable by the caller — the handle is
-        # freed below regardless, and the session is unusable either way — so
-        # report it rather than throw (which would also mask any in-flight
-        # exception when `close` runs in a `finally`).
+        # A warning suffices: the handle is freed below regardless, and throwing
+        # would mask an in-flight exception when `close` runs in a `finally`.
         rc == LibZenohC.Z_OK ||
             @warn "Graceful session close did not complete; the handle was freed anyway" zenoh_result=rc
     finally
