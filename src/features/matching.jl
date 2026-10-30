@@ -138,6 +138,12 @@ end
 # live in features/advanced_pubsub.jl — that type is declared there, after
 # this file, so its method signatures can't be written here.
 
+"""
+    close(ml::MatchingListener)
+
+Undeclare the listener on the calling task. It waits for any in-flight callback and
+stops the consumer task. Idempotent.
+"""
 function Base.close(ml::MatchingListener)
     ml.closed && return
     ml.closed = true

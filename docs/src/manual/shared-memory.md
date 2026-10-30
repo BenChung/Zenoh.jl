@@ -118,7 +118,7 @@ Zenoh locks shared memory in RAM, and the process's `RLIMIT_MEMLOCK` limit (`uli
 | holder | locked memory | released by |
 |---|---|---|
 | [`ShmProvider`](@ref)`(size)` | its `size`-byte segment | [`close`](@ref close(::Zenoh.AbstractShmProvider))`(p)`, once every buffer allocated from it is released too |
-| a session opened with `shm_clients` | its pool, `transport/shared_memory/transport_optimization/pool_size` (16 MiB by default) | [`close`](@ref)`(::Session)` |
+| a session opened with `shm_clients` | its pool, `transport/shared_memory/transport_optimization/pool_size` (16 MiB by default) | [`close`](@ref close(::Zenoh.Session))`(::Session)` |
 | the process, from its first allocation | about 1.25 MiB | process exit |
 
 A finalizer releases a provider that is never closed. The GC runs on Julia heap pressure and knows nothing about locked memory, so close providers explicitly. The do-block form closes the provider when the block exits, including on an exception:
@@ -171,6 +171,7 @@ garbage_collect
 
 ```@docs
 ShmBufMut
+Base.close(::ShmBufMut)
 ShmBuf
 data
 as_shm

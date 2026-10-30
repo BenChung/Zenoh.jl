@@ -414,6 +414,17 @@ function Base.close(q::Queryable{RingBacking})
     return nothing
 end
 
+"""
+    close(q::Queryable)
+
+Undeclare the queryable on the calling task. Idempotent.
+
+  - Callback form: waits for any in-flight callback and stops the consumer task. It
+    has no GC finalizer, so close it explicitly.
+  - Channel form: iteration drains the queries already buffered, then ends.
+"""
+Base.close(::Queryable)
+
 # Finalizer: runs only when nothing references `q`, so no iterate is in flight.
 # Spawns teardown on a normal task (see _finalize_buffered_sub for the why).
 _finalize_buffered_queryable(q::Queryable{RingBacking}) =

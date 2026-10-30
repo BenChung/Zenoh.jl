@@ -8,9 +8,9 @@ the Zenoh network. Wraps an owned `z_owned_session_t` and is the object every
 `_loan` chokepoint that throws once the session is closed, so a use-after-free
 can never reach the dropped handle.
 
-Open one with [`open`](@ref)`(::Config)` and release it with [`close`](@ref),
-which runs the graceful shutdown and frees the handle deterministically on the
-calling task. A GC finalizer drops the handle as a safety net for sessions that
+Open one with [`open`](@ref)`(::Config)` and release it with
+[`close`](@ref close(::Zenoh.Session)), which runs the graceful shutdown and frees the
+handle deterministically on the calling task. A GC finalizer drops the handle as a safety net for sessions that
 were never explicitly closed.
 
 The struct stays immutable; close state and discovered shared-memory capability

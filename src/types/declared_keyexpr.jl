@@ -19,8 +19,8 @@
 
 A key expression registered with the session via `z_declare_keyexpr`. Construct
 with [`declare_keyexpr`](@ref); use it like any [`Keyexpr`](@ref) (it loans the
-same way). Call [`close`](@ref) (or use the scoped `declare_keyexpr(f, s, k)`
-form) to undeclare it; a finalizer is the GC safety net.
+same way). Call [`close`](@ref close(::Zenoh.DeclaredKeyexpr)) (or use the scoped
+`declare_keyexpr(f, s, k)` form) to undeclare it; a finalizer is the GC safety net.
 
 !!! warning "No performance benefit in this libzenohc"
     Session-level `put`/`get` do **not** use a declared keyexpr's numeric id on
@@ -83,7 +83,7 @@ Base.show(io::IO, d::DeclaredKeyexpr) =
     declare_keyexpr(s::Session, k::AbstractString; autocanonize=false) -> DeclaredKeyexpr
 
 Register `k` with the session (`z_declare_keyexpr`) and return a
-[`DeclaredKeyexpr`](@ref). Release with [`close`](@ref).
+[`DeclaredKeyexpr`](@ref). Release with [`close`](@ref close(::Zenoh.DeclaredKeyexpr)).
 
 !!! warning "No performance benefit in this libzenohc"
     Session-level `put`/`get` do not use the declared id on the wire (see

@@ -507,8 +507,8 @@ end
     close(b::ShmBuf)
 
 Release an owned (frozen) [`ShmBuf`](@ref) on the calling task — the on-task twin
-of [`close`](@ref)`(::ShmBufMut)` for a buffer frozen via `ShmBuf(buf)` but not
-sent. The off-thread finalizer drop is itself safe; this just frees the segment
+of [`close`](@ref close(::Zenoh.ShmBufMut))`(::ShmBufMut)` for a buffer frozen via
+`ShmBuf(buf)` but not sent. The off-thread finalizer drop is itself safe; this just frees the segment
 deterministically. Idempotent; a no-op for a borrowed view (from [`as_shm`](@ref),
 which owns nothing) and once the buffer was moved into a [`ZBytes`](@ref).
 """
@@ -537,7 +537,7 @@ What closing frees depends on the provider:
   buffer allocated from it is released too.
 - [`SharedShmProvider`](@ref): one reference to the session's pool, which lasts
   until the session closes. Don't close the one cached in its session —
-  [`close`](@ref)`(::Session)` releases that one.
+  [`close`](@ref close(::Zenoh.Session))`(::Session)` releases that one.
 
 Segments left by a process that exited without releasing them need
 [`cleanup_orphaned_shm_segments`](@ref).
