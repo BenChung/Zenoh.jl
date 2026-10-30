@@ -38,7 +38,8 @@ jobs:
         shell: bash
         run: |
           echo "locked-memory limit: $(ulimit -l)"
-          # GitHub's Linux runners cap locked memory far below what the SHM tests lock.
+          # GitHub's Linux runners default to an 8 MiB memlock limit, close to what the
+          # SHM tests lock at their peak.
           if [ "$RUNNER_OS" = Linux ]; then
             sudo prlimit --pid $$ --memlock=unlimited:unlimited
             echo "raised to: $(ulimit -l)"
