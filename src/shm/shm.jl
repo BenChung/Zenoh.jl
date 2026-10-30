@@ -57,10 +57,26 @@ abstract type AbstractShmProvider end
 """
     ShmProvider <: AbstractShmProvider
     ShmProvider(size::Integer)
+    ShmProvider(f, size::Integer)
 
 A standalone POSIX shared-memory provider of fixed byte capacity, backed by a
-`/dev/shm` segment created directly via `z_posix_shm_provider_new`. The owned
-provider handle is released by a finalizer.
+`/dev/shm` segment created directly via `z_posix_shm_provider_new`.
+
+Zenoh locks the segment in RAM until the provider and every buffer allocated from
+it are released, and the process's `RLIMIT_MEMLOCK` limit (`ulimit -l`) caps the
+total locked across all of them. Release a provider with [`close`](@ref)`(p)`
+when done, or use the do-block form, which runs `f(p)` and closes the provider on
+exit:
+
+```julia
+ShmProvider(1 << 20) do p
+    buf = alloc(p, 256)
+    # fill and send buf
+end
+```
+
+A finalizer releases a provider that is never closed, whenever the GC next
+collects it.
 
 Use this to allocate SHM buffers without a session; for the provider tied to an
 open session (and the transparent [`zref`](@ref)`(s::Session, T)` fast path),
@@ -74,6 +90,14 @@ function ShmProvider(size::Integer)
     _handle_result(LibZenohC.z_posix_shm_provider_new(ref, Csize_t(size)))
     finalizer(r -> _drop(_move(r)), ref)
     return ShmProvider(ref)
+end
+function ShmProvider(f::Function, size::Integer)
+    p = ShmProvider(size)
+    try
+        return f(p)
+    finally
+        close(p)
+    end
 end
 
 """

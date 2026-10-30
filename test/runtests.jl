@@ -1979,121 +1979,152 @@ try
     end
 
     @timed_testset "SHM provider basics" timeout=20 begin
-        p = Zenoh.ShmProvider(1 << 20)
-        @test p isa Zenoh.ShmProvider
-        @test p isa Zenoh.AbstractShmProvider
-        # available/defragment/garbage_collect should return non-negative Ints.
-        @test Zenoh.available(p) >= 0
-        @test Zenoh.defragment(p) >= 0
-        @test Zenoh.garbage_collect(p) >= 0
+        Zenoh.ShmProvider(1 << 20) do p
+            @test p isa Zenoh.ShmProvider
+            @test p isa Zenoh.AbstractShmProvider
+            # available/defragment/garbage_collect should return non-negative Ints.
+            @test Zenoh.available(p) >= 0
+            @test Zenoh.defragment(p) >= 0
+            @test Zenoh.garbage_collect(p) >= 0
+        end
+
+        # The do-block form returns f's result and closes the provider on exit,
+        # including when f throws.
+        kept = Zenoh.ShmProvider(identity, 1 << 16)
+        @test_throws ArgumentError Zenoh.available(kept)
+        seen = Ref{Any}(nothing)
+        @test_throws ErrorException Zenoh.ShmProvider(1 << 16) do q
+            seen[] = q
+            error("boom")
+        end
+        @test_throws ArgumentError Zenoh.available(seen[])
+
+        # Each provider holds its segment locked until closed, so creating them
+        # one at a time stays within RLIMIT_MEMLOCK however many there are.
+        for _ in 1:16
+            Zenoh.ShmProvider(p -> nothing, 1 << 20)
+        end
+        @test true
     end
 
     @timed_testset "SHM allocation" timeout=20 begin
-        p = Zenoh.ShmProvider(1 << 20)
-        buf = Zenoh.alloc(p, 256)
-        @test buf isa Zenoh.ShmBufMut
-        @test length(buf) == 256
-        @test Zenoh.data(buf) isa Memory{UInt8}
-        # Write through the Memory view; round-trip the bytes.
-        for i in 1:256
-            Zenoh.data(buf)[i] = UInt8((i - 1) % 256)
+        Zenoh.ShmProvider(1 << 20) do p
+            buf = Zenoh.alloc(p, 256)
+            @test buf isa Zenoh.ShmBufMut
+            @test length(buf) == 256
+            @test Zenoh.data(buf) isa Memory{UInt8}
+            # Write through the Memory view; round-trip the bytes.
+            for i in 1:256
+                Zenoh.data(buf)[i] = UInt8((i - 1) % 256)
+            end
+            @test Zenoh.data(buf)[1] == 0x00
+            @test Zenoh.data(buf)[16] == 0x0f
+
+            # Aligned alloc. The built-in POSIX provider only supports align=1
+            # (its layout has fixed alignment); larger alignments surface as a
+            # ShmLayoutError(:provider_incompatible). align=1 is a no-op and
+            # always succeeds.
+            buf2 = Zenoh.alloc(p, 128; align=1)
+            @test length(buf2) == 128
+            @test buf2 isa Zenoh.ShmBufMut
+            @test_throws Zenoh.ShmLayoutError Zenoh.alloc(p, 128; align=64)
+
+            # Blocking alloc (GC + defragment + blocking policy; its own entrypoint).
+            buf3 = Zenoh.alloc_blocking(p, 64)
+            @test length(buf3) == 64
+
+            # copyto! convenience.
+            src = collect(UInt8(1):UInt8(32))
+            buf4 = Zenoh.alloc(p, 32)
+            copyto!(buf4, src)
+            @test Vector{UInt8}(Zenoh.data(buf4)[1:32]) == src
+
+            # Alignment validation.
+            @test_throws ArgumentError Zenoh.alloc(p, 16; align=3)  # not power of 2
+
+            # Each live buffer keeps the segment locked, so release the unsent ones here.
+            foreach(Zenoh.close, (buf, buf2, buf3, buf4))
         end
-        @test Zenoh.data(buf)[1] == 0x00
-        @test Zenoh.data(buf)[16] == 0x0f
-
-        # Aligned alloc. The built-in POSIX provider only supports align=1
-        # (its layout has fixed alignment); larger alignments surface as a
-        # ShmLayoutError(:provider_incompatible). align=1 is a no-op and
-        # always succeeds.
-        buf2 = Zenoh.alloc(p, 128; align=1)
-        @test length(buf2) == 128
-        @test buf2 isa Zenoh.ShmBufMut
-        @test_throws Zenoh.ShmLayoutError Zenoh.alloc(p, 128; align=64)
-
-        # Blocking alloc (GC + defragment + blocking policy; its own entrypoint).
-        buf3 = Zenoh.alloc_blocking(p, 64)
-        @test length(buf3) == 64
-
-        # copyto! convenience.
-        src = collect(UInt8(1):UInt8(32))
-        buf4 = Zenoh.alloc(p, 32)
-        copyto!(buf4, src)
-        @test Vector{UInt8}(Zenoh.data(buf4)[1:32]) == src
-
-        # Alignment validation.
-        @test_throws ArgumentError Zenoh.alloc(p, 16; align=3)  # not power of 2
     end
 
     @timed_testset "try_alloc + shm_serialize + ZBytes(buf,n)" timeout=20 begin
-        p = Zenoh.ShmProvider(1 << 20)
+        Zenoh.ShmProvider(1 << 20) do p
 
-        # try_alloc: success returns a writable ShmBufMut of the requested size.
-        b = Zenoh.try_alloc(p, 128)
-        @test b isa Zenoh.ShmBufMut
-        @test length(b) == 128
-        Zenoh.close(b)                                   # release the unsent buffer on this task
+            # try_alloc: success returns a writable ShmBufMut of the requested size.
+            b = Zenoh.try_alloc(p, 128)
+            @test b isa Zenoh.ShmBufMut
+            @test length(b) == 128
+            Zenoh.close(b)                                   # release the unsent buffer on this task
 
-        # try_alloc validates layout up front, like alloc: a non-power-of-two
-        # align is a hard ArgumentError, and an unsupported (non-1) alignment is
-        # a genuine ShmLayoutError — neither degrades to `nothing`.
-        @test_throws ArgumentError Zenoh.try_alloc(p, 64; align=3)
-        @test_throws Zenoh.ShmLayoutError Zenoh.try_alloc(p, 64; align=64)
+            # try_alloc validates layout up front, like alloc: a non-power-of-two
+            # align is a hard ArgumentError, and an unsupported (non-1) alignment is
+            # a genuine ShmLayoutError — neither degrades to `nothing`.
+            @test_throws ArgumentError Zenoh.try_alloc(p, 64; align=3)
+            @test_throws Zenoh.ShmLayoutError Zenoh.try_alloc(p, 64; align=64)
 
-        # try_alloc's reason for being: a full/fragmented segment is a non-error
-        # outcome, returned as `nothing` rather than thrown. Exhaust a small
-        # provider, then the next request degrades cleanly.
-        small = Zenoh.ShmProvider(1 << 14)
-        held = Zenoh.ShmBufMut[]
-        while (bb = Zenoh.try_alloc(small, 4096)) !== nothing
-            push!(held, bb)
+            # try_alloc's reason for being: a full/fragmented segment is a non-error
+            # outcome, returned as `nothing` rather than thrown. Exhaust a small
+            # provider, then the next request degrades cleanly.
+            Zenoh.ShmProvider(1 << 14) do small
+                held = Zenoh.ShmBufMut[]
+                while (bb = Zenoh.try_alloc(small, 4096)) !== nothing
+                    push!(held, bb)
+                end
+                @test !isempty(held)                             # it satisfied at least one before filling
+                @test Zenoh.try_alloc(small, 4096) === nothing   # ALLOC_ERROR → nothing, no throw
+                foreach(Zenoh.close, held)
+            end
+
+            # shm_serialize: fill! writes straight into the segment; the result is a
+            # sendable owned, SHM-backed ZBytes.
+            payload = collect(UInt8, 1:64)
+            z = Zenoh.shm_serialize(p, 64) do mem
+                @test mem isa Memory{UInt8}
+                @test length(mem) == 64
+                copyto!(mem, payload)
+            end
+            @test z isa Zenoh.ZBytes
+            @test Vector{UInt8}(z) == payload                # bytes survived the alloc→fill→move
+            @test Zenoh.is_shm(z)                            # and it stayed in shared memory
+            shmview = Zenoh.as_shm(z)
+            @test shmview !== nothing
+            @test Vector{UInt8}(Zenoh.data(shmview)) == payload
+            Zenoh.close(z)                                   # shmview borrows z; unused past here
+
+            # shm_serialize: a throwing fill! releases the half-filled buffer and
+            # rethrows — no leak, and the provider still satisfies a later alloc.
+            @test_throws ErrorException Zenoh.shm_serialize(p, 32) do mem
+                error("boom")
+            end
+            later = Zenoh.alloc(p, 32)
+            @test later isa Zenoh.ShmBufMut
+            Zenoh.close(later)
+
+            # ZBytes(buf, n): the full-length move is the supported case; it consumes
+            # buf, after which close is a no-op (the handle was moved/gravestoned).
+            buf = Zenoh.alloc(p, 48)
+            copyto!(buf, collect(UInt8, 1:48))
+            zf = Zenoh.ZBytes(buf, 48)
+            @test Vector{UInt8}(zf) == collect(UInt8, 1:48)
+            Zenoh.close(buf)                                 # no-op after the move
+            Zenoh.close(zf)
+
+            # ZBytes(buf): the convenience defaults n to the full granted length.
+            buf2 = Zenoh.alloc(p, 16)
+            z2 = Zenoh.ZBytes(buf2)
+            @test length(Vector{UInt8}(z2)) == 16
+            Zenoh.close(z2)
+
+            # n past the granted length is a BoundsError.
+            buf3 = Zenoh.alloc(p, 16)
+            @test_throws BoundsError Zenoh.ZBytes(buf3, 32)
+            Zenoh.close(buf3)
+            # A shorter n is unsupported (no length-bounded SHM move) → ArgumentError,
+            # not a silent over-send.
+            buf4 = Zenoh.alloc(p, 16)
+            @test_throws ArgumentError Zenoh.ZBytes(buf4, 8)
+            Zenoh.close(buf4)
         end
-        @test !isempty(held)                             # it satisfied at least one before filling
-        @test Zenoh.try_alloc(small, 4096) === nothing   # ALLOC_ERROR → nothing, no throw
-        foreach(Zenoh.close, held)
-
-        # shm_serialize: fill! writes straight into the segment; the result is a
-        # sendable owned, SHM-backed ZBytes.
-        payload = collect(UInt8, 1:64)
-        z = Zenoh.shm_serialize(p, 64) do mem
-            @test mem isa Memory{UInt8}
-            @test length(mem) == 64
-            copyto!(mem, payload)
-        end
-        @test z isa Zenoh.ZBytes
-        @test Vector{UInt8}(z) == payload                # bytes survived the alloc→fill→move
-        @test Zenoh.is_shm(z)                            # and it stayed in shared memory
-        shmview = Zenoh.as_shm(z)
-        @test shmview !== nothing
-        @test Vector{UInt8}(Zenoh.data(shmview)) == payload
-
-        # shm_serialize: a throwing fill! releases the half-filled buffer and
-        # rethrows — no leak, and the provider still satisfies a later alloc.
-        @test_throws ErrorException Zenoh.shm_serialize(p, 32) do mem
-            error("boom")
-        end
-        @test Zenoh.alloc(p, 32) isa Zenoh.ShmBufMut
-
-        # ZBytes(buf, n): the full-length move is the supported case; it consumes
-        # buf, after which close is a no-op (the handle was moved/gravestoned).
-        buf = Zenoh.alloc(p, 48)
-        copyto!(buf, collect(UInt8, 1:48))
-        zf = Zenoh.ZBytes(buf, 48)
-        @test Vector{UInt8}(zf) == collect(UInt8, 1:48)
-        Zenoh.close(buf)                                 # no-op after the move
-
-        # ZBytes(buf): the convenience defaults n to the full granted length.
-        buf2 = Zenoh.alloc(p, 16)
-        @test length(Vector{UInt8}(Zenoh.ZBytes(buf2))) == 16
-
-        # n past the granted length is a BoundsError.
-        buf3 = Zenoh.alloc(p, 16)
-        @test_throws BoundsError Zenoh.ZBytes(buf3, 32)
-        Zenoh.close(buf3)
-        # A shorter n is unsupported (no length-bounded SHM move) → ArgumentError,
-        # not a silent over-send.
-        buf4 = Zenoh.alloc(p, 16)
-        @test_throws ArgumentError Zenoh.ZBytes(buf4, 8)
-        Zenoh.close(buf4)
     end
 
     @timed_testset "SHM client storage + open kwarg" timeout=20 begin
@@ -2135,34 +2166,35 @@ try
         end
         sleep(0.5)
         try
-            provider = Zenoh.ShmProvider(1 << 20)
+            Zenoh.ShmProvider(1 << 20) do provider
 
-            # (a) Manual: alloc, fill, publish a ShmBufMut directly.
-            msg_a = UInt8[10, 20, 30, 40, 50, 60, 70]
-            buf = Zenoh.alloc(provider, length(msg_a))
-            copyto!(buf, msg_a)
-            Zenoh.put(s_pub, test_key, buf)
-            @test take!(received) == msg_a
-            @test take!(was_shm)  # round-trip went through SHM
+                # (a) Manual: alloc, fill, publish a ShmBufMut directly.
+                msg_a = UInt8[10, 20, 30, 40, 50, 60, 70]
+                buf = Zenoh.alloc(provider, length(msg_a))
+                copyto!(buf, msg_a)
+                Zenoh.put(s_pub, test_key, buf)
+                @test take!(received) == msg_a
+                @test take!(was_shm)  # round-trip went through SHM
 
-            # (b) High-level: put with shm= kwarg, AbstractVector{UInt8} data.
-            msg_b = collect(UInt8(100):UInt8(200))
-            Zenoh.put(s_pub, test_key, msg_b; shm = provider)
-            @test take!(received) == msg_b
-            @test take!(was_shm)
+                # (b) High-level: put with shm= kwarg, AbstractVector{UInt8} data.
+                msg_b = collect(UInt8(100):UInt8(200))
+                Zenoh.put(s_pub, test_key, msg_b; shm = provider)
+                @test take!(received) == msg_b
+                @test take!(was_shm)
 
-            # (c) High-level with a String.
-            msg_c = "hello-shm-world"
-            Zenoh.put(s_pub, test_key, msg_c; shm = provider)
-            @test String(take!(received)) == msg_c
-            @test take!(was_shm)
+                # (c) High-level with a String.
+                msg_c = "hello-shm-world"
+                Zenoh.put(s_pub, test_key, msg_c; shm = provider)
+                @test String(take!(received)) == msg_c
+                @test take!(was_shm)
 
-            # (d) is_shm predicate on a Vector-backed (non-SHM) payload.
-            # Non-shm round-trip — make sure as_shm correctly says "no" and
-            # is_shm returns false.
-            Zenoh.put(s_pub, test_key, UInt8[1, 2, 3])
-            @test take!(received) == UInt8[1, 2, 3]
-            @test !take!(was_shm)
+                # (d) is_shm predicate on a Vector-backed (non-SHM) payload.
+                # Non-shm round-trip — make sure as_shm correctly says "no" and
+                # is_shm returns false.
+                Zenoh.put(s_pub, test_key, UInt8[1, 2, 3])
+                @test take!(received) == UInt8[1, 2, 3]
+                @test !take!(was_shm)
+            end
         finally
             close(sub)
             close(s_pub)
@@ -2198,42 +2230,43 @@ try
         end
         sleep(0.5)
         try
-            provider = Zenoh.ShmProvider(1 << 20)
+            Zenoh.ShmProvider(1 << 20) do provider
 
-            # (a) SHM-backed Pixel: author in the segment, publish, view in place.
-            zp = zref(provider, Pixel)
-            zp[] = Pixel(0x11, 0x22, 0x33, 0x44)
-            Zenoh.put(s_pub, test_key, zp)
-            @test take!(pixels) == Pixel(0x11, 0x22, 0x33, 0x44)
-            @test take!(was_shm)               # arrived via SHM
-            @test take!(borrowed)              # received zero-copy (Pixel is align-1)
+                # (a) SHM-backed Pixel: author in the segment, publish, view in place.
+                zp = zref(provider, Pixel)
+                zp[] = Pixel(0x11, 0x22, 0x33, 0x44)
+                Zenoh.put(s_pub, test_key, zp)
+                @test take!(pixels) == Pixel(0x11, 0x22, 0x33, 0x44)
+                @test take!(was_shm)               # arrived via SHM
+                @test take!(borrowed)              # received zero-copy (Pixel is align-1)
 
-            # (b) Pixel via the transparent session fast path. Transport is
-            # deliberately opaque here: depending on whether the session-derived
-            # SHM provider has warmed up, zref(session,T) may allocate from SHM
-            # or fall back to Julia memory. The invariant is value-correctness
-            # either way — so we drain (don't assert) the transport channels.
-            zj = zref(s_pub, Pixel)
-            @test !Zenoh.isborrowed(zj)        # a send handle is never a borrow
-            zj[] = Pixel(0xaa, 0xbb, 0xcc, 0xdd)
-            Zenoh.put(s_pub, test_key, zj)
-            @test take!(pixels) == Pixel(0xaa, 0xbb, 0xcc, 0xdd)
-            take!(was_shm); take!(borrowed)    # transport-agnostic: value is what matters
+                # (b) Pixel via the transparent session fast path. Transport is
+                # deliberately opaque here: depending on whether the session-derived
+                # SHM provider has warmed up, zref(session,T) may allocate from SHM
+                # or fall back to Julia memory. The invariant is value-correctness
+                # either way — so we drain (don't assert) the transport channels.
+                zj = zref(s_pub, Pixel)
+                @test !Zenoh.isborrowed(zj)        # a send handle is never a borrow
+                zj[] = Pixel(0xaa, 0xbb, 0xcc, 0xdd)
+                Zenoh.put(s_pub, test_key, zj)
+                @test take!(pixels) == Pixel(0xaa, 0xbb, 0xcc, 0xdd)
+                take!(was_shm); take!(borrowed)    # transport-agnostic: value is what matters
 
-            # (c) ZBig (alignment 8) over an explicit standalone SHM provider:
-            # align fallback may force a receive copy, but the value must match.
-            zb = zref(provider, ZBig)
-            zb[] = ZBig(123456789, 3.5, -42)
-            Zenoh.put(s_pub, test_key, zb)
-            @test take!(bigs) == ZBig(123456789, 3.5, -42)
-            @test take!(was_shm)               # explicit provider ⇒ definitely SHM
+                # (c) ZBig (alignment 8) over an explicit standalone SHM provider:
+                # align fallback may force a receive copy, but the value must match.
+                zb = zref(provider, ZBig)
+                zb[] = ZBig(123456789, 3.5, -42)
+                Zenoh.put(s_pub, test_key, zb)
+                @test take!(bigs) == ZBig(123456789, 3.5, -42)
+                @test take!(was_shm)               # explicit provider ⇒ definitely SHM
 
-            # (d) ZBig via the transparent session path (transport opaque).
-            zbj = zref(s_pub, ZBig)
-            zbj[] = ZBig(-1, -2.5, 7)
-            Zenoh.put(s_pub, test_key, zbj)
-            @test take!(bigs) == ZBig(-1, -2.5, 7)
-            take!(was_shm)
+                # (d) ZBig via the transparent session path (transport opaque).
+                zbj = zref(s_pub, ZBig)
+                zbj[] = ZBig(-1, -2.5, 7)
+                Zenoh.put(s_pub, test_key, zbj)
+                @test take!(bigs) == ZBig(-1, -2.5, 7)
+                take!(was_shm)
+            end
         finally
             close(sub)
             close(s_pub)
@@ -2482,11 +2515,13 @@ try
         try
             # The test config doesn't enable the session-derived provider, so
             # inject a deliberately tiny one to force the alloc to fail.
-            s.shm[] = Zenoh.ShmProvider(1 << 16)   # 64 KiB < sizeof(Huge)
-            r = zref(s, Huge)                       # ShmAllocError → handler → fallback
-            @test seen[] isa Zenoh.ShmAllocError
-            @test !Zenoh.isborrowed(r)              # degraded to Julia memory
-            @test r isa ZRef{Huge}
+            Zenoh.ShmProvider(1 << 16) do tiny   # 64 KiB < sizeof(Huge)
+                s.shm[] = tiny
+                r = zref(s, Huge)                       # ShmAllocError → handler → fallback
+                @test seen[] isa Zenoh.ShmAllocError
+                @test !Zenoh.isborrowed(r)              # degraded to Julia memory
+                @test r isa ZRef{Huge}
+            end
         finally
             close(s)
         end
@@ -2494,8 +2529,10 @@ try
         # (b) A throwing handler escalates the failure out of zref.
         s2 = open(c; shm_clients = cs, on_shm_alloc_error = e -> throw(e))
         try
-            s2.shm[] = Zenoh.ShmProvider(1 << 16)
-            @test_throws Zenoh.ShmAllocError zref(s2, Huge)
+            Zenoh.ShmProvider(1 << 16) do tiny
+                s2.shm[] = tiny
+                @test_throws Zenoh.ShmAllocError zref(s2, Huge)
+            end
         finally
             close(s2)
         end
@@ -2503,9 +2540,11 @@ try
         # (c) No handler: silent fallback (no throw), still returns a usable ZRef.
         s3 = open(c; shm_clients = cs)
         try
-            s3.shm[] = Zenoh.ShmProvider(1 << 16)
-            r = zref(s3, Huge)
-            @test !Zenoh.isborrowed(r)
+            Zenoh.ShmProvider(1 << 16) do tiny
+                s3.shm[] = tiny
+                r = zref(s3, Huge)
+                @test !Zenoh.isborrowed(r)
+            end
         finally
             close(s3)
         end
