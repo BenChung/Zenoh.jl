@@ -131,6 +131,7 @@ isdisjoint(::Keyexpr, ::Keyexpr)
 canonize
 is_canon
 DeclaredKeyexpr
+Base.close(::DeclaredKeyexpr)
 declare_keyexpr
 ```
 

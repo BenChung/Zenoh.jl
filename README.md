@@ -1,5 +1,8 @@
 # Zenoh.jl
 
+[![CI](https://github.com/BenChung/Zenoh.jl/actions/workflows/CI.yml/badge.svg?branch=master)](https://github.com/BenChung/Zenoh.jl/actions/workflows/CI.yml?query=branch%3Amaster)
+[![Docs](https://img.shields.io/badge/docs-dev-blue.svg)](https://BenChung.github.io/Zenoh.jl/dev/)
+
 Wraps the Zenoh C bindings for Julia.
 
 Currently supports publication & subscription.

@@ -8,9 +8,9 @@ the Zenoh network. Wraps an owned `z_owned_session_t` and is the object every
 `_loan` chokepoint that throws once the session is closed, so a use-after-free
 can never reach the dropped handle.
 
-Open one with [`open`](@ref)`(::Config)` and release it with [`close`](@ref),
-which runs the graceful shutdown and frees the handle deterministically on the
-calling task. A GC finalizer drops the handle as a safety net for sessions that
+Open one with [`open`](@ref)`(::Config)` and release it with
+[`close`](@ref close(::Zenoh.Session)), which runs the graceful shutdown and frees the
+handle deterministically on the calling task. A GC finalizer drops the handle as a safety net for sessions that
 were never explicitly closed.
 
 The struct stays immutable; close state and discovered shared-memory capability
@@ -199,12 +199,14 @@ function Base.close(s::Session; timeout::Union{Nothing,Real}=nothing)
             @warn "Graceful session close did not complete; the handle was freed anyway" zenoh_result=rc
     finally
         _drop(_move(s.s))   # free now, on this task — even if z_close errored
-        # Release the cached SHM provider with the session; `zref(::Session,T)` and
-        # `session_shm_provider` gate on `closed`, so this also prevents allocating
-        # from a provider whose session is gone.
-        lock(s.shm_lock) do
+        # Close the cached SHM provider with the session, which unlocks its pool now
+        # instead of at the next GC.
+        prov = lock(s.shm_lock) do
+            p = s.shm[]
             s.shm[] = nothing
+            p
         end
+        prov === nothing || close(prov::AbstractShmProvider)
     end
     return nothing
 end

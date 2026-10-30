@@ -63,7 +63,7 @@ Delivery is single-slot, latest-wins: each new status overwrites any undelivered
 
 ### Lifecycle
 
-For deterministic teardown, call [`close`](@ref) on the listener: it tears the listener down promptly, drains any in-flight callback, and stops the consumer task. `close` is idempotent. GC finalization tears the listener down as a safety net, on no fixed schedule.
+For deterministic teardown, call [`close`](@ref close(::Zenoh.MatchingListener)) on the listener: it tears the listener down promptly, drains any in-flight callback, and stops the consumer task. `close` is idempotent. GC finalization tears the listener down as a safety net, on no fixed schedule.
 
 By default a callback that throws tears its own listener task down; pass `should_close_on_error=false` to keep the task alive and log each error instead.
 
@@ -85,6 +85,7 @@ See [Advanced Pub/Sub](@ref) for the publisher itself.
 ```@docs
 matching_status
 MatchingListener
+Base.close(::MatchingListener)
 ```
 
 ## Mapping to Zenoh, Rust, and C
@@ -100,7 +101,7 @@ C symbols printed as plain code spans (`z_undeclare_matching_listener`, `ze_adva
 | [`MatchingListener`](@ref)`(f, ::Querier)` | `MatchingListener` | [`Querier::matching_listener`](https://docs.rs/zenoh/1.9.0/zenoh/query/struct.Querier.html) | [`z_querier_declare_matching_listener`](https://zenoh-c.readthedocs.io/en/1.9.0/api.html#_CPPv435z_querier_declare_matching_listenerPK18z_loaned_querier_tP27z_owned_matching_listener_tP33z_moved_closure_matching_status_t) |
 | [`MatchingListener`](@ref)`(f, ::AdvancedPublisher)` | `MatchingListener` | (zenoh-ext) | `ze_advanced_publisher_declare_matching_listener` |
 | `f(::Bool)` argument | [`MatchingStatus`](https://docs.rs/zenoh/1.9.0/zenoh/matching/struct.MatchingStatus.html) | `MatchingStatus::matching() -> bool` | [`z_matching_status_t`](https://zenoh-c.readthedocs.io/en/1.9.0/api.html#_CPPv419z_matching_status_t) |
-| [`close`](@ref)`(::MatchingListener)` | listener undeclaration | `MatchingListener::undeclare` / RAII drop | `z_undeclare_matching_listener` |
+| [`close`](@ref close(::Zenoh.MatchingListener))`(::MatchingListener)` | listener undeclaration | `MatchingListener::undeclare` / RAII drop | `z_undeclare_matching_listener` |
 
 [`matching_status`](@ref) returns the same boolean as Rust's [`MatchingStatus::matching()`](https://docs.rs/zenoh/1.9.0/zenoh/matching/struct.MatchingStatus.html): `true` when matching subscribers (publisher) or queryables (querier) exist. The notification semantics of [`MatchingListener`](@ref) match the [`zenoh::matching`](https://docs.rs/zenoh/1.9.0/zenoh/matching/index.html) module exactly — a notification fires "when the first matching subscriber or queryable appears, or when the last one disappears." The points below describe Zenoh.jl's design choices at this boundary; the behavior matches Rust.
 
@@ -114,10 +115,10 @@ C symbols printed as plain code spans (`z_undeclare_matching_listener`, `ze_adva
     The matching API provides callback-form listeners with single-slot latest-wins delivery; unlike [`Subscriber`](@ref) and [`Querier`](@ref) replies, it has no handler-buffered (FIFO/ring) variant.
 
 !!! warning "Foreground listeners only"
-    The background C entrypoints `z_publisher_declare_background_matching_listener`, `z_querier_declare_background_matching_listener`, and `ze_advanced_publisher_declare_background_matching_listener` exist in the bindings but are deliberately left unwrapped: they return no handle, so the closure lifetime would have to be pinned to the target or session. Only foreground listeners — those returning a [`MatchingListener`](@ref) you [`close`](@ref) explicitly — are available, across publisher, querier, and advanced publisher.
+    The background C entrypoints `z_publisher_declare_background_matching_listener`, `z_querier_declare_background_matching_listener`, and `ze_advanced_publisher_declare_background_matching_listener` exist in the bindings but are deliberately left unwrapped: they return no handle, so the closure lifetime would have to be pinned to the target or session. Only foreground listeners — those returning a [`MatchingListener`](@ref) you [`close`](@ref close(::Zenoh.MatchingListener)) explicitly — are available, across publisher, querier, and advanced publisher.
 
 !!! note "Unified z_/ze_ surface"
     C splits matching across the core `z_` prefix and the zenoh-ext `ze_` prefix: the advanced-publisher path calls `ze_advanced_publisher_declare_matching_listener` / `ze_advanced_publisher_get_matching_status`. Zenoh.jl exposes all three targets through the same [`MatchingListener`](@ref) type and [`matching_status`](@ref) generic, reusing the `z_`-prefixed `z_owned_matching_listener_t` and `z_undeclare_matching_listener` for teardown.
 
 !!! note "Explicit lifecycle"
-    Rust relies on RAII drop (or an explicit `undeclare()`). Zenoh.jl uses an explicit, foreground-task lifecycle: call [`close`](@ref) for prompt teardown, with GC finalization as a safety net. The Julia-only `should_close_on_error` keyword (default `true`) governs whether a throwing callback tears down its consumer task.
+    Rust relies on RAII drop (or an explicit `undeclare()`). Zenoh.jl uses an explicit, foreground-task lifecycle: call [`close`](@ref close(::Zenoh.MatchingListener)) for prompt teardown, with GC finalization as a safety net. The Julia-only `should_close_on_error` keyword (default `true`) governs whether a throwing callback tears down its consumer task.

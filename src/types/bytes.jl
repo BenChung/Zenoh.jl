@@ -38,7 +38,7 @@ Constructors:
 - `ZBytes(s::Symbol)` — a static-lifetime string payload, no pinning.
 
 Owned `ZBytes` deliberately carry no GC finalizer: reclaim one by moving it into
-[`put`](@ref)/`reply`/`get`, which hands ownership to zenoh, or by [`close`](@ref)ing
+[`put`](@ref)/`reply`/`get`, which hands ownership to zenoh, or by [`close`](@ref close(::Zenoh.ZBytes))ing
 it on your own task. A moved `ZBytes` is consumed and must not be reused. This keeps
 cleanup on the caller's task, never a finalizer thread, which avoids an SHM bookkeeping
 deadlock.
@@ -181,15 +181,21 @@ _loaned_bytes(b::ZBytes{Ptr{LibZenohC.z_loaned_bytes_t}}) = b.b
 
 Base.isempty(z::ZBytes) = LibZenohC.z_bytes_is_empty(_loaned_bytes(z))
 
-# Explicitly reclaim an owned ZBytes you built but won't send — drops the C
-# handle on the caller's task (never a finalizer/GC thread, so no hang risk).
-# A no-op for loaned ZBytes, which borrow their buffer. Don't use the ZBytes
-# after closing it.
+# Runs on the caller's task, never a finalizer/GC thread, so it can't hang.
 function Base.close(z::ZBytes{Base.RefValue{LibZenohC.z_owned_bytes_t}})
     LibZenohC.z_bytes_drop(_move(z.b))
     return nothing
 end
 Base.close(::ZBytes{Ptr{LibZenohC.z_loaned_bytes_t}}) = nothing
+
+"""
+    close(z::ZBytes)
+
+Reclaim an owned `ZBytes` you built but won't send, dropping its C handle on the
+calling task. A no-op for a loaned `ZBytes`, which borrows its buffer. Don't use `z`
+after closing it.
+"""
+Base.close(::ZBytes)
 
 """
     lent_bytes(buf::DenseVector{UInt8}, len::Integer, on_release::Ptr{Cvoid}, ctx::Ptr{Cvoid}) -> ZBytes
@@ -246,7 +252,7 @@ needs (zenoh takes its own synchronous copy, so the source buffer is free the in
 `copy_bytes!` returns).
 
 The box is seeded in the gravestone (null) state, so the first `copy_bytes!`'s drop-first is a safe
-no-op. Like every owned `ZBytes` it carries **no GC finalizer** — reclaim it with [`close`](@ref)
+no-op. Like every owned `ZBytes` it carries **no GC finalizer** — reclaim it with [`close`](@ref close(::Zenoh.ZBytes))
 (gravestone-idempotent) on the holder's teardown; do not just drop the reference.
 """
 function reusable_copy_bytes()
@@ -313,7 +319,8 @@ An `IO`-conforming, seekable reader over a [`ZBytes`](@ref) payload. Obtain one 
 `open(z, Val(:read))`; it borrows the payload's buffer (so the source `ZBytes` must
 outlive it) and reads the bytes back via the usual `IO` interface — `read`,
 `readbytes!`, `unsafe_read`, `readavailable`, plus `seek`/`skip`/`position`,
-`bytesavailable`, and `eof`. Borrowing nothing of its own, [`close`](@ref) is a no-op.
+`bytesavailable`, and `eof`. Borrowing nothing of its own,
+[`close`](@ref close(::Zenoh.ZBytesReader)) is a no-op.
 
 For walking the payload one network fragment at a time without copying, see
 [`ZBytesSliceReader`](@ref).
@@ -371,8 +378,12 @@ function Base.readavailable(zr::ZBytesReader)
     return arr
 end
 Base.eof(zr::ZBytesReader) = bytesavailable(zr) == 0
+"""
+    close(zr::ZBytesReader)
+
+A no-op: the reader borrows its `ZBytes` buffer and owns nothing to free.
+"""
 function Base.close(zr::ZBytesReader)
-    # the reader borrows the ZBytes buffer; nothing owned to free
 end
 
 struct ZBytesSliceIterator
@@ -409,7 +420,8 @@ the whole payload. Obtain one with `open(z, Val(:readslice))`; it borrows the pa
 buffer (so the source `ZBytes` must outlive it). Reads — `read`, `readbytes!`,
 `unsafe_read` — transparently advance to the next slice when the current one is
 exhausted; `skip`, `position`, `bytesavailable`, and `eof` track progress over the whole
-payload. Borrowing nothing of its own, [`close`](@ref) is a no-op.
+payload. Borrowing nothing of its own, [`close`](@ref close(::Zenoh.ZBytesSliceReader)) is
+a no-op.
 
 For a seekable reader over the payload as a single stream, see [`ZBytesReader`](@ref).
 """
@@ -494,6 +506,11 @@ function Base.skip(zr::ZBytesSliceReader, nb::Integer)
     return zr
 end
 
+"""
+    close(zr::ZBytesSliceReader)
+
+A no-op: the reader borrows its `ZBytes` buffer and owns nothing to free.
+"""
 function Base.close(z::ZBytesSliceReader)
 end
 
@@ -518,7 +535,8 @@ onto the tail (moving it, zero-copy when possible). [`finish`](@ref)`(w)` consum
 writer and returns the assembled payload.
 
 The writer owns a C resource and carries no GC finalizer, so reclaim it explicitly on
-your own task: [`finish`](@ref) consumes it, or [`close`](@ref) drops an unfinished one.
+your own task: [`finish`](@ref) consumes it, or
+[`close`](@ref close(::Zenoh.ZBytesWriter)) drops an unfinished one.
 The do-block form `open(ZBytes, Val(:write)) do w … end` guarantees one of these always
 fires and returns the finished payload:
 
@@ -572,10 +590,15 @@ function finish(w::ZBytesWriter)
     return ZBytes(b, Val(:owned))
 end
 
-# Drop an unfinished writer's C resource explicitly (no-op once finished).
-# Runs on the caller's task, so unlike a finalizer it can't deadlock with
-# zenoh internals. Call it to discard a writer you won't `finish`.
+"""
+    close(w::ZBytesWriter)
+
+Drop an unfinished writer's C resource on the calling task, discarding a writer you
+won't [`finish`](@ref). A no-op once finished.
+"""
 function Base.close(w::ZBytesWriter)
+    # Runs on the caller's task, where it can't deadlock with zenoh internals the
+    # way a finalizer can.
     w.done && return nothing
     w.done = true
     LibZenohC.z_bytes_writer_drop(_move(w.w))

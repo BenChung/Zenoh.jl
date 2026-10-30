@@ -49,7 +49,7 @@ payload). A queryable may emit any number of replies per query, including none.
 
 `Queryable(s, k; channel=:fifo)` returns a buffered queryable — also typed
 [`QueryableHandler`](@ref) — that you iterate to receive each [`Query`](@ref).
-Reply inline and the loop continues; iteration ends after [`close`](@ref) once
+Reply inline and the loop continues; iteration ends after [`close`](@ref close(::Zenoh.Queryable)) once
 buffered queries drain.
 
 ```julia
@@ -101,7 +101,7 @@ afterward. Deferring reply work past the callback sees the query revoked.
 
 ### Lifetime and options
 
-Both forms undeclare on [`close`](@ref), which is idempotent. The channel form
+Both forms undeclare on [`close`](@ref close(::Zenoh.Queryable)), which is idempotent. The channel form
 also carries a GC finalizer safety net; the callback form relies on explicit
 `close` (its consume task and context form a reference cycle that a finalizer
 cannot tear down safely). Two declare-time options apply to either form:
@@ -255,6 +255,7 @@ the full keyword set.
 
 ```@docs
 Queryable
+Base.close(::Queryable)
 QueryableHandler
 Query
 reply
