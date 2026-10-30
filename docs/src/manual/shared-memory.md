@@ -131,7 +131,7 @@ ShmProvider(1 << 20) do p
 end
 ```
 
-At the limit, creating a provider fails with `ZenohError(-1)`, and a session whose pool doesn't fit stays at [`shm_state`](@ref) `:unavailable`. Lower `pool_size` to fit a session under a small limit.
+At the limit, creating a provider throws [`ShmProviderError`](@ref), which reports the limit and how much the process already has locked. A session whose pool doesn't fit stays at [`shm_state`](@ref) `:unavailable`; lower `pool_size` to fit it under a small limit.
 
 !!! warning "Orphaned segments are not freed on close"
     POSIX `/dev/shm` segments left by a process that exited without releasing them are reclaimed only by [`cleanup_orphaned_shm_segments`](@ref) (Linux) or process-level cleanup — never when the provider is released or the session closes. The session obtains its provider at most once per lifetime, so it materializes only one set of segments.
@@ -190,6 +190,7 @@ cleanup_orphaned_shm_segments
 ```@docs
 ShmAllocError
 ShmLayoutError
+ShmProviderError
 ```
 
 ### Typed handles and views

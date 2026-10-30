@@ -2017,6 +2017,25 @@ try
             @test live(q)
         end
         @test !live(q)
+
+        # A failed create throws ShmProviderError. Size 0 fails without creating
+        # a segment, so nothing is left in /dev/shm.
+        err = try
+            Zenoh.ShmProvider(0)
+        catch e
+            e
+        end
+        @test err isa Zenoh.ShmProviderError
+        @test err.size == 0
+        @test err.locked isa (Sys.islinux() ? Int : Nothing)
+        @test err.memlock_limit isa Union{Int,Nothing}
+
+        # The message names the limit as the likely cause only when the numbers say so.
+        full = sprint(showerror, Zenoh.ShmProviderError(-1, 4 << 20, 8 << 20, 6 << 20))
+        @test occursin("too little room", full) && occursin("ulimit -l", full)
+        roomy = sprint(showerror, Zenoh.ShmProviderError(-1, 1 << 20, 8 << 20, 0))
+        @test occursin("RLIMIT_MEMLOCK is 8388608 bytes", roomy)
+        @test !occursin("too little room", roomy)
     end
 
     @timed_testset "SHM provider close racing calls" timeout=30 begin

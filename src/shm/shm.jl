@@ -33,6 +33,66 @@ end
 Base.showerror(io::IO, e::ShmAllocError) = print(io, "ShmAllocError(:", e.kind, ")")
 Base.showerror(io::IO, e::ShmLayoutError) = print(io, "ShmLayoutError(:", e.kind, ")")
 
+"""
+    ShmProviderError <: Exception
+
+Signals that creating a [`ShmProvider`](@ref) failed. Its fields:
+
+  - `code`          — the `z_result_t` from `z_posix_shm_provider_new`.
+  - `size`          — the requested capacity in bytes.
+  - `memlock_limit` — the process's `RLIMIT_MEMLOCK` soft limit in bytes, or
+    `nothing` when unlimited or unavailable.
+  - `locked`        — bytes the process already has locked (Linux `VmLck`), or
+    `nothing` on other platforms.
+
+The usual cause is the memlock limit: zenoh locks the whole segment in RAM, so the
+create fails once `locked + size` exceeds `memlock_limit`; see
+[Releasing providers](@ref). A create that fails this way can leave its segment in
+`/dev/shm`, which [`cleanup_orphaned_shm_segments`](@ref) run from a later process
+reclaims.
+"""
+struct ShmProviderError <: Exception
+    code::LibZenohC.z_result_t
+    size::Int
+    memlock_limit::Union{Int,Nothing}
+    locked::Union{Int,Nothing}
+end
+function Base.showerror(io::IO, e::ShmProviderError)
+    print(io, "ShmProviderError: creating a ", e.size, "-byte SHM provider failed (zenoh result ",
+          e.code, ")")
+    e.memlock_limit === nothing && return
+    print(io, "; RLIMIT_MEMLOCK is ", e.memlock_limit, " bytes")
+    e.locked === nothing && return
+    print(io, " and ", e.locked, " are already locked")
+    e.locked + e.size > e.memlock_limit &&
+        print(io, ", which leaves too little room for the segment. ",
+              "Close unused providers or raise `ulimit -l`.")
+    return
+end
+
+const _RlimT = Sys.islinux() ? Culong : UInt64          # rlim_t
+const _RLIMIT_MEMLOCK = Cint(Sys.islinux() ? 8 : 6)    # 6 on macOS and the BSDs
+
+# The process's soft RLIMIT_MEMLOCK in bytes, or `nothing` when unlimited or
+# unavailable.
+function _memlock_limit()
+    Sys.isunix() || return nothing
+    rlim = Ref{NTuple{2,_RlimT}}()
+    ccall(:getrlimit, Cint, (Cint, Ptr{NTuple{2,_RlimT}}), _RLIMIT_MEMLOCK, rlim) == 0 ||
+        return nothing
+    cur = rlim[][1]
+    (cur == typemax(_RlimT) || cur >= typemax(Int)) && return nothing   # RLIM_INFINITY
+    return Int(cur)
+end
+
+# Bytes this process has locked, from `VmLck` in /proc/self/status (Linux only).
+function _locked_bytes()
+    Sys.islinux() || return nothing
+    status = try read("/proc/self/status", String) catch; return nothing end
+    m = match(r"^VmLck:\s+(\d+) kB"m, status)
+    return m === nothing ? nothing : 1024 * parse(Int, m[1])
+end
+
 function _alloc_error_sym(e::LibZenohC.z_alloc_error_t)
     e == LibZenohC.Z_ALLOC_ERROR_NEED_DEFRAGMENT && return :need_defragment
     e == LibZenohC.Z_ALLOC_ERROR_OUT_OF_MEMORY   && return :out_of_memory
@@ -60,7 +120,8 @@ abstract type AbstractShmProvider end
     ShmProvider(f, size::Integer)
 
 A standalone POSIX shared-memory provider of fixed byte capacity, backed by a
-`/dev/shm` segment created directly via `z_posix_shm_provider_new`.
+`/dev/shm` segment created directly via `z_posix_shm_provider_new`. Throws
+[`ShmProviderError`](@ref) when the create fails.
 
 Zenoh locks the segment in RAM until the provider and every buffer allocated from
 it are released, and the process's `RLIMIT_MEMLOCK` limit (`ulimit -l`) caps the
@@ -89,7 +150,9 @@ mutable struct ShmProvider <: AbstractShmProvider
 end
 function ShmProvider(size::Integer)
     ref = Ref{LibZenohC.z_owned_shm_provider_t}()
-    _handle_result(LibZenohC.z_posix_shm_provider_new(ref, Csize_t(size)))
+    rc = LibZenohC.z_posix_shm_provider_new(ref, Csize_t(size))
+    rc == LibZenohC.Z_OK ||
+        throw(ShmProviderError(rc, Int(size), _memlock_limit(), _locked_bytes()))
     finalizer(r -> _drop(_move(r)), ref)
     return ShmProvider(ref, 1, false)
 end
@@ -784,7 +847,7 @@ end
 
 export AbstractShmProvider, ShmProvider, SharedShmProvider
 export ShmBuf, ShmBufMut
-export ShmAllocError, ShmLayoutError
+export ShmAllocError, ShmLayoutError, ShmProviderError
 export obtain_shm_provider, alloc, alloc_blocking, try_alloc, shm_serialize
 export available, defragment, garbage_collect
 export shm_state, shm_capable, shm_ready, session_shm_provider
