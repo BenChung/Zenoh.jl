@@ -199,12 +199,14 @@ function Base.close(s::Session; timeout::Union{Nothing,Real}=nothing)
             @warn "Graceful session close did not complete; the handle was freed anyway" zenoh_result=rc
     finally
         _drop(_move(s.s))   # free now, on this task — even if z_close errored
-        # Release the cached SHM provider with the session; `zref(::Session,T)` and
-        # `session_shm_provider` gate on `closed`, so this also prevents allocating
-        # from a provider whose session is gone.
-        lock(s.shm_lock) do
+        # Close the cached SHM provider with the session, which unlocks its pool now
+        # instead of at the next GC.
+        prov = lock(s.shm_lock) do
+            p = s.shm[]
             s.shm[] = nothing
+            p
         end
+        prov === nothing || close(prov::AbstractShmProvider)
     end
     return nothing
 end

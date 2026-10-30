@@ -2005,6 +2005,41 @@ try
             Zenoh.ShmProvider(p -> nothing, 1 << 20)
         end
         @test true
+
+        # A close while a call holds the loan leaves the drop to that call: new
+        # calls throw at once, and the handle lives until the call returns.
+        live(q) = GC.@preserve q Zenoh.LibZenohC.z_internal_shm_provider_check(
+            Base.unsafe_convert(Ptr{Zenoh.LibZenohC.z_owned_shm_provider_t}, q.p))
+        q = Zenoh.ShmProvider(1 << 16)
+        Zenoh._with_loan(q) do _
+            close(q)
+            @test_throws ArgumentError Zenoh.available(q)
+            @test live(q)
+        end
+        @test !live(q)
+    end
+
+    @timed_testset "SHM provider close racing calls" timeout=30 begin
+        # Each call either completes or throws ArgumentError, and the use count
+        # ends at zero, so the handle dropped exactly once. The calls interleave
+        # only when Julia runs with several threads (`julia -t 4`).
+        for trial in 1:50
+            p = Zenoh.ShmProvider(1 << 16)
+            ws = [Threads.@spawn begin
+                for _ in 1:200
+                    try
+                        b = Zenoh.try_alloc(p, 64)
+                        b === nothing ? Zenoh.garbage_collect(p) : Zenoh.close(b)
+                        Zenoh.available(p)
+                    catch e
+                        e isa ArgumentError || rethrow()
+                    end
+                end
+            end for _ in 1:3]
+            c = Threads.@spawn (yield(); close(p))
+            foreach(wait, ws); wait(c)
+            @test (@atomic p.users) == 0
+        end
     end
 
     @timed_testset "SHM allocation" timeout=20 begin
@@ -2569,6 +2604,27 @@ try
             end
         finally
             close(s)
+        end
+
+        # Closing a session closes its cached provider.
+        s = open(c; shm_clients = Zenoh.default_shm_clients())
+        cached = Zenoh.ShmProvider(1 << 16)
+        s.shm[] = cached
+        close(s)
+        @test_throws ArgumentError Zenoh.available(cached)
+
+        # The same for a real session-derived provider. A 1 MiB pool fits under a
+        # small RLIMIT_MEMLOCK, which zenoh's 16 MiB default can exceed.
+        pooled = epcfg("transport:{shared_memory:{enabled:true, " *
+                       "transport_optimization:{enabled:true, pool_size:1048576}}}")
+        s = open(pooled; shm_clients = Zenoh.default_shm_clients(),
+                 wait_for_shm = true, shm_wait_timeout = 10.0)
+        prov = Zenoh.session_shm_provider(s)
+        close(s)
+        if prov === nothing
+            @info "session-derived SHM provider not ready in-suite; skipping its close check" state=Zenoh.shm_state(s)
+        else
+            @test_throws ArgumentError Zenoh.available(prov)
         end
     end
 
