@@ -2518,7 +2518,11 @@ try
         # capability consistent with state, SHM backing whenever capable) rather
         # than hard-requiring :ready. The happy path (sub-second warm-up to
         # :ready with a ShmBufMut backing) is verified standalone.
-        shm_cfg = epcfg("transport:{shared_memory:{enabled:true}}")
+        #
+        # A 1 MiB pool fits under a small RLIMIT_MEMLOCK, which zenoh's 16 MiB
+        # default can exceed, leaving the session :unavailable.
+        shm_cfg = epcfg("transport:{shared_memory:{enabled:true, " *
+                        "transport_optimization:{enabled:true, pool_size:1048576}}}")
         s = open(shm_cfg;
                  shm_clients = cs, wait_for_shm = true, shm_wait_timeout = 10.0)
         try
