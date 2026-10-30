@@ -111,6 +111,28 @@ put(pub, Keyexpr("demo/raw"), ZBytes(buf))            # hands the buffer off as 
 
 [`available`](@ref), [`defragment`](@ref), and [`garbage_collect`](@ref) inspect and maintain a provider's free space, each returning a size in bytes. On the receive side, [`as_shm`](@ref) views a received `ZBytes` as a [`ShmBuf`](@ref) for a zero-copy read, and [`is_shm`](@ref) tests SHM backing without obtaining the buffer; [`data`](@ref) exposes a buffer's bytes as a `Memory{UInt8}`.
 
+### Releasing providers
+
+Zenoh locks shared memory in RAM, and the process's `RLIMIT_MEMLOCK` limit (`ulimit -l`) caps the total across everything below:
+
+| holder | locked memory | released by |
+|---|---|---|
+| [`ShmProvider`](@ref)`(size)` | its `size`-byte segment | [`close`](@ref close(::Zenoh.AbstractShmProvider))`(p)`, once every buffer allocated from it is released too |
+| a session opened with `shm_clients` | its pool, `transport/shared_memory/transport_optimization/pool_size` (16 MiB by default) | [`close`](@ref)`(::Session)` |
+| the process, from its first allocation | about 1.25 MiB | process exit |
+
+A finalizer releases a provider that is never closed. The GC runs on Julia heap pressure and knows nothing about locked memory, so close providers explicitly. The do-block form closes the provider when the block exits, including on an exception:
+
+```julia
+ShmProvider(1 << 20) do p
+    buf = alloc(p, 256)
+    copyto!(buf, rand(UInt8, 256))
+    put(pub, Keyexpr("demo/raw"), ZBytes(buf))
+end
+```
+
+At the limit, creating a provider fails with `ZenohError(-1)`, and a session whose pool doesn't fit stays at [`shm_state`](@ref) `:unavailable`. Lower `pool_size` to fit a session under a small limit.
+
 !!! warning "Orphaned segments are not freed on close"
     POSIX `/dev/shm` segments left by a process that exited without releasing them are reclaimed only by [`cleanup_orphaned_shm_segments`](@ref) (Linux) or process-level cleanup — never when the provider is released or the session closes. The session obtains its provider at most once per lifetime, so it materializes only one set of segments.
 
@@ -134,6 +156,7 @@ shm_ready
 AbstractShmProvider
 ShmProvider
 SharedShmProvider
+Base.close(::AbstractShmProvider)
 session_shm_provider
 obtain_shm_provider
 alloc

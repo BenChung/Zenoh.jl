@@ -64,9 +64,9 @@ A standalone POSIX shared-memory provider of fixed byte capacity, backed by a
 
 Zenoh locks the segment in RAM until the provider and every buffer allocated from
 it are released, and the process's `RLIMIT_MEMLOCK` limit (`ulimit -l`) caps the
-total locked across all of them. Release a provider with [`close`](@ref)`(p)`
-when done, or use the do-block form, which runs `f(p)` and closes the provider on
-exit:
+total locked across all of them. Release a provider with
+[`close`](@ref close(::Zenoh.AbstractShmProvider))`(p)` when done, or use the
+do-block form, which runs `f(p)` and closes the provider on exit:
 
 ```julia
 ShmProvider(1 << 20) do p
@@ -466,12 +466,18 @@ Base.close(::ShmBuf{Ptr{LibZenohC.z_loaned_shm_t}}) = nothing
 
 Release a provider's handle on the calling task instead of waiting for the GC
 finalizer. Idempotent. Later calls on `p` throw `ArgumentError`; a call already
-running on another task keeps the handle until it returns. This frees the
-Julia-side handle, not the provider's `/dev/shm` segments (those are
-reference-counted across the domain; a crashed process's leftovers need
-[`cleanup_orphaned_shm_segments`](@ref)). Don't close a
-[`SharedShmProvider`](@ref) still cached in its session — [`close`](@ref)`(::Session)`
-releases that one.
+running on another task keeps the handle until it returns.
+
+What closing frees depends on the provider:
+
+- [`ShmProvider`](@ref): its segment and the memory locked for it, once every
+  buffer allocated from it is released too.
+- [`SharedShmProvider`](@ref): one reference to the session's pool, which lasts
+  until the session closes. Don't close the one cached in its session —
+  [`close`](@ref)`(::Session)` releases that one.
+
+Segments left by a process that exited without releasing them need
+[`cleanup_orphaned_shm_segments`](@ref).
 """
 function Base.close(p::AbstractShmProvider)
     (@atomicswap p.closed = true) || _release!(p)
