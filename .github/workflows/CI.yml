@@ -1,0 +1,46 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+    tags: ['*']
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Julia ${{ matrix.version }} - ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    permissions:
+      actions: write   # julia-actions/cache prunes old caches
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        version: ['1.12']
+        os: [ubuntu-latest, macos-latest]
+    env:
+      # Several threads let the SHM race tests interleave their calls.
+      JULIA_NUM_THREADS: 4
+    steps:
+      - uses: actions/checkout@v4
+      - uses: julia-actions/setup-julia@v2
+        with:
+          version: ${{ matrix.version }}
+      - uses: julia-actions/cache@v2
+      # The limit is raised and the tests run in one step because each step
+      # starts a new shell, which would reset it.
+      - name: Run tests
+        shell: bash
+        run: |
+          echo "locked-memory limit: $(ulimit -l)"
+          # GitHub's Linux runners cap locked memory far below what the SHM tests lock.
+          if [ "$RUNNER_OS" = Linux ]; then
+            sudo prlimit --pid $$ --memlock=unlimited:unlimited
+            echo "raised to: $(ulimit -l)"
+          fi
+          julia --color=yes --project -e 'using Pkg; Pkg.test()'
