@@ -408,9 +408,7 @@ function Base.close(q::Queryable{RingBacking})
     b = q.backing
     signal_closing!(b.ctx, b.async_cond)            # closing=1 + wake any parked pull
     _handle_result(LibZenohC.z_undeclare_queryable(_move(q.qable)))
-    # ctx teardown deferred to the finalizer: a concurrent iterate on another
-    # task may still be inside _ring_take. After close, closing=1 means it
-    # drains buffered queries then returns nothing (it never parks again).
+    _release!(b.ctx) && _teardown_callback(Val(:query), b.ctx, b.async_cond)
     return nothing
 end
 
@@ -421,7 +419,9 @@ Undeclare the queryable on the calling task. Idempotent.
 
   - Callback form: waits for any in-flight callback and stops the consumer task. It
     has no GC finalizer, so close it explicitly.
-  - Channel form: iteration drains the queries already buffered, then ends.
+  - Channel form: iteration drains the queries already buffered, then ends. The
+    buffer is released as soon as it is empty and no pull is in flight: at `close`,
+    or when the last buffered query is taken.
 """
 Base.close(::Queryable)
 
@@ -447,7 +447,12 @@ function Base.iterate(q::Queryable{RingBacking},
     # ack until the query times out. Mirrors the callback-form `wrapped` shim.
     prev === nothing || finalize(prev.q)
     b = q.backing
-    r = _ring_take(b.ctx, b.async_cond)
+    _pull_begin!(b.ctx) || return nothing
+    r = try
+        _ring_take(b.ctx, b.async_cond)
+    finally
+        _pull_end!(b.ctx) && _teardown_callback(Val(:query), b.ctx, b.async_cond)
+    end
     r === nothing && return nothing
     qy = Query(r)
     return (qy, qy)
@@ -460,13 +465,24 @@ end
 # its full timeout window.
 function Base.take!(q::Queryable{RingBacking})
     b = q.backing
-    r = _ring_take(b.ctx, b.async_cond)
+    _pull_begin!(b.ctx) || throw(ZenohError(LibZenohC.Z_CHANNEL_DISCONNECTED))
+    r = try
+        _ring_take(b.ctx, b.async_cond)
+    finally
+        _pull_end!(b.ctx) && _teardown_callback(Val(:query), b.ctx, b.async_cond)
+    end
     r === nothing && throw(ZenohError(LibZenohC.Z_CHANNEL_DISCONNECTED))
     return Query(r)
 end
 
 function tryrecv!(q::Queryable{RingBacking})
-    r = _ring_pop!(q.backing.ctx)
+    b = q.backing
+    _pull_begin!(b.ctx) || return nothing
+    r = try
+        _ring_pop!(b.ctx)
+    finally
+        _pull_end!(b.ctx) && _teardown_callback(Val(:query), b.ctx, b.async_cond)
+    end
     r isa Base.RefValue && return Query(r)
     return nothing
 end

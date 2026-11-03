@@ -44,19 +44,14 @@ using PrecompileTools
             # must match ROSNode's (channel + capacity + allowed_origin; ROSNode entity.jl) — the
             # kwsorter body is specialized per kwarg-NamedTuple shape. `_open_buffered_sub` also
             # infers its `_open_keepall_sub` branch, so this one declare covers both sub flavours.
-            # No declare-time task; close() defers ctx teardown to a finalizer, so drive that
-            # synchronously here (idempotent destroy_ctx! makes the later finalizer a no-op) to leave
-            # no AsyncCondition open.
+            # No declare-time task; close() releases the empty buffer, leaving no AsyncCondition open.
             sf = open(s, ke; channel = :fifo, capacity = 16, allowed_origin = Localities.ANY)
             close(sf)
-            _teardown_buffered_sub!(sf)
 
             # Buffered (ring) queryable — matches ROSNode's service queryable shape
-            # `Queryable(s,k; channel=:fifo, complete=true)` (service.jl). Same synchronous-teardown
-            # treatment as the fifo subscriber.
+            # `Queryable(s,k; channel=:fifo, complete=true)` (service.jl).
             qy = Queryable(s, ke; channel = :fifo, complete = true)
             close(qy)
-            _teardown_buffered_queryable!(qy)
 
             close(p1)
             close(s)
