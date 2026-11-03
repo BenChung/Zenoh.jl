@@ -234,6 +234,7 @@ function destroy_ctx!(ctx::CallbackCtx{Owned},
     # so a plain flag suffices.
     ctx.destroyed && return
     ctx.destroyed = true
+    _mark_torn!(ctx)
     GC.@preserve ctx begin
         while ctx.count > 0
             ccall(drop_fp, Cvoid, (Ptr{Moved},),
@@ -252,6 +253,7 @@ function destroy_ctx_pod!(ctx::CallbackCtx{Item},
         close_async::Bool=true) where {Item}
     ctx.destroyed && return                  # idempotent (see destroy_ctx!)
     ctx.destroyed = true
+    _mark_torn!(ctx)
     ccall(:uv_mutex_destroy, Cvoid, (Ptr{Cvoid},), ctx_p(ctx))
     close_async && close(async_cond)
 end
@@ -287,6 +289,14 @@ function _release!(ctx::CallbackCtx)
     claim = _claim_teardown!(ctx)
     unlock(ctx.pull_lock)
     return claim
+end
+
+# A teardown by any path stops later pulls from reaching the destroyed mutex.
+@inline function _mark_torn!(ctx::CallbackCtx)
+    lock(ctx.pull_lock)
+    ctx.torn = true
+    unlock(ctx.pull_lock)
+    return nothing
 end
 
 # Caller holds `pull_lock`. `count` is stable here: `released` is set only once

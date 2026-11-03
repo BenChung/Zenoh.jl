@@ -428,7 +428,15 @@ Base.close(::Queryable)
 # Finalizer: runs only when nothing references `q`, so no iterate is in flight.
 # Spawns teardown on a normal task (see _finalize_buffered_sub for the why).
 _finalize_buffered_queryable(q::Queryable{RingBacking}) =
-    Threads.@spawn _teardown_buffered_queryable!(q)
+    q.backing.ctx.destroyed || Threads.@spawn _teardown_buffered_queryable!(q)
+
+# Ends a pull (see `_pull_begin!`). Naming `q` here also keeps it, and so its
+# finalizer, at bay while the pull is parked.
+@inline function _queryable_pull_end!(q::Queryable{RingBacking})
+    b = q.backing
+    _pull_end!(b.ctx) && _teardown_callback(Val(:query), b.ctx, b.async_cond)
+    return nothing
+end
 
 function _teardown_buffered_queryable!(q::Queryable{RingBacking})
     b = q.backing
@@ -451,7 +459,7 @@ function Base.iterate(q::Queryable{RingBacking},
     r = try
         _ring_take(b.ctx, b.async_cond)
     finally
-        _pull_end!(b.ctx) && _teardown_callback(Val(:query), b.ctx, b.async_cond)
+        _queryable_pull_end!(q)
     end
     r === nothing && return nothing
     qy = Query(r)
@@ -469,7 +477,7 @@ function Base.take!(q::Queryable{RingBacking})
     r = try
         _ring_take(b.ctx, b.async_cond)
     finally
-        _pull_end!(b.ctx) && _teardown_callback(Val(:query), b.ctx, b.async_cond)
+        _queryable_pull_end!(q)
     end
     r === nothing && throw(ZenohError(LibZenohC.Z_CHANNEL_DISCONNECTED))
     return Query(r)
@@ -481,7 +489,7 @@ function tryrecv!(q::Queryable{RingBacking})
     r = try
         _ring_pop!(b.ctx)
     finally
-        _pull_end!(b.ctx) && _teardown_callback(Val(:query), b.ctx, b.async_cond)
+        _queryable_pull_end!(q)
     end
     r isa Base.RefValue && return Query(r)
     return nothing

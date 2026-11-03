@@ -250,6 +250,24 @@ end
     end
 end
 
+@timed_testset "Ring: pulls after an explicit teardown report disconnected" begin
+    k = Zenoh.Keyexpr("test/ring/release/explicit")
+    sub = open(S1, k; channel=:fifo, capacity=8)
+    pub = Zenoh.Publisher(S1, k)
+    sleep(0.3)
+    try
+        Zenoh.put(pub, "left")
+        sleep(0.4)
+        close(sub)                                   # one sample still buffered
+        Zenoh._teardown_buffered_sub!(sub)           # drops it with the ring
+        @test sub.ctx.destroyed
+        @test Zenoh.tryrecv!(sub) === nothing
+        @test_throws Zenoh.ZenohError take!(sub)
+    finally
+        close(pub)
+    end
+end
+
 # Use-after-recycle guard: a tier-1/2 zero-copy view held over an in-place-reused
 # source (SampleHolder / iterate box) must raise BorrowError once the source
 # recycles, instead of silently reading freed memory. UInt8 views are always a

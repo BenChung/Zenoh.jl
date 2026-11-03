@@ -144,8 +144,8 @@ end
 # Two consumption shapes:
 #   • Buffered subscriber/queryable (infinite stream, keep-last-N): the caller
 #     pulls the ring directly via `_ring_take` / `_ring_pop!` — one bounded
-#     buffer, clean drop-oldest. Teardown is deferred to a finalizer (a
-#     concurrent iterate may still touch the ctx; reachability is the interlock).
+#     buffer, clean drop-oldest. The ctx is torn down at close or by the last
+#     draining pull (see `_pull_begin!`), or by the finalizer if left undrained.
 #   • Channel `get` (finite reply set): a consume task drains the ring into a
 #     `Base.Channel{Reply}`; the task owns the ctx lifetime until the get
 #     completes (drop trampoline fires), which makes abandonment safe (no
@@ -384,7 +384,7 @@ end
 # `close(async_cond)` is legal (vs. finalizer task-switch limits) and so the
 # AsyncCondition stays alive across the safety-net undeclare's drop trampoline.
 _finalize_buffered_sub(sh::AbstractSubscriberHandler) =
-    Threads.@spawn _teardown_buffered_sub!(sh)
+    sh.ctx.destroyed || Threads.@spawn _teardown_buffered_sub!(sh)
 
 function _teardown_buffered_sub!(sh::AbstractSubscriberHandler)
     if !sh.closed
