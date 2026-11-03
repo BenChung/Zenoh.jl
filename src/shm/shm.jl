@@ -33,6 +33,66 @@ end
 Base.showerror(io::IO, e::ShmAllocError) = print(io, "ShmAllocError(:", e.kind, ")")
 Base.showerror(io::IO, e::ShmLayoutError) = print(io, "ShmLayoutError(:", e.kind, ")")
 
+"""
+    ShmProviderError <: Exception
+
+Signals that creating a [`ShmProvider`](@ref) failed. Its fields:
+
+  - `code`          — the `z_result_t` from `z_posix_shm_provider_new`.
+  - `size`          — the requested capacity in bytes.
+  - `memlock_limit` — the process's `RLIMIT_MEMLOCK` soft limit in bytes, or
+    `nothing` when unlimited or unavailable.
+  - `locked`        — bytes the process already has locked (Linux `VmLck`), or
+    `nothing` on other platforms.
+
+The usual cause is the memlock limit: zenoh locks the whole segment in RAM, so the
+create fails once `locked + size` exceeds `memlock_limit`; see
+[Releasing providers](@ref). A create that fails this way can leave its segment in
+`/dev/shm`, which [`cleanup_orphaned_shm_segments`](@ref) run from a later process
+reclaims.
+"""
+struct ShmProviderError <: Exception
+    code::LibZenohC.z_result_t
+    size::Int
+    memlock_limit::Union{Int,Nothing}
+    locked::Union{Int,Nothing}
+end
+function Base.showerror(io::IO, e::ShmProviderError)
+    print(io, "ShmProviderError: creating a ", e.size, "-byte SHM provider failed (zenoh result ",
+          e.code, ")")
+    e.memlock_limit === nothing && return
+    print(io, "; RLIMIT_MEMLOCK is ", e.memlock_limit, " bytes")
+    e.locked === nothing && return
+    print(io, " and ", e.locked, " are already locked")
+    e.locked + e.size > e.memlock_limit &&
+        print(io, ", which leaves too little room for the segment. ",
+              "Close unused providers or raise `ulimit -l`.")
+    return
+end
+
+const _RlimT = Sys.islinux() ? Culong : UInt64          # rlim_t
+const _RLIMIT_MEMLOCK = Cint(Sys.islinux() ? 8 : 6)    # 6 on macOS and the BSDs
+
+# The process's soft RLIMIT_MEMLOCK in bytes, or `nothing` when unlimited or
+# unavailable.
+function _memlock_limit()
+    Sys.isunix() || return nothing
+    rlim = Ref{NTuple{2,_RlimT}}()
+    ccall(:getrlimit, Cint, (Cint, Ptr{NTuple{2,_RlimT}}), _RLIMIT_MEMLOCK, rlim) == 0 ||
+        return nothing
+    cur = rlim[][1]
+    (cur == typemax(_RlimT) || cur >= typemax(Int)) && return nothing   # RLIM_INFINITY
+    return Int(cur)
+end
+
+# Bytes this process has locked, from `VmLck` in /proc/self/status (Linux only).
+function _locked_bytes()
+    Sys.islinux() || return nothing
+    status = try read("/proc/self/status", String) catch; return nothing end
+    m = match(r"^VmLck:\s+(\d+) kB"m, status)
+    return m === nothing ? nothing : 1024 * parse(Int, m[1])
+end
+
 function _alloc_error_sym(e::LibZenohC.z_alloc_error_t)
     e == LibZenohC.Z_ALLOC_ERROR_NEED_DEFRAGMENT && return :need_defragment
     e == LibZenohC.Z_ALLOC_ERROR_OUT_OF_MEMORY   && return :out_of_memory
@@ -57,10 +117,27 @@ abstract type AbstractShmProvider end
 """
     ShmProvider <: AbstractShmProvider
     ShmProvider(size::Integer)
+    ShmProvider(f, size::Integer)
 
 A standalone POSIX shared-memory provider of fixed byte capacity, backed by a
-`/dev/shm` segment created directly via `z_posix_shm_provider_new`. The owned
-provider handle is released by a finalizer.
+`/dev/shm` segment created directly via `z_posix_shm_provider_new`. Throws
+[`ShmProviderError`](@ref) when the create fails.
+
+Zenoh locks the segment in RAM until the provider and every buffer allocated from
+it are released, and the process's `RLIMIT_MEMLOCK` limit (`ulimit -l`) caps the
+total locked across all of them. Release a provider with
+[`close`](@ref close(::Zenoh.AbstractShmProvider))`(p)` when done, or use the
+do-block form, which runs `f(p)` and closes the provider on exit:
+
+```julia
+ShmProvider(1 << 20) do p
+    buf = alloc(p, 256)
+    # fill and send buf
+end
+```
+
+A finalizer releases a provider that is never closed, whenever the GC next
+collects it.
 
 Use this to allocate SHM buffers without a session; for the provider tied to an
 open session (and the transparent [`zref`](@ref)`(s::Session, T)` fast path),
@@ -68,12 +145,24 @@ see [`SharedShmProvider`](@ref) and [`obtain_shm_provider`](@ref).
 """
 mutable struct ShmProvider <: AbstractShmProvider
     p::Base.RefValue{LibZenohC.z_owned_shm_provider_t}
+    @atomic users::Int    # see `_with_loan`
+    @atomic closed::Bool
 end
 function ShmProvider(size::Integer)
     ref = Ref{LibZenohC.z_owned_shm_provider_t}()
-    _handle_result(LibZenohC.z_posix_shm_provider_new(ref, Csize_t(size)))
+    rc = LibZenohC.z_posix_shm_provider_new(ref, Csize_t(size))
+    rc == LibZenohC.Z_OK ||
+        throw(ShmProviderError(rc, Int(size), _memlock_limit(), _locked_bytes()))
     finalizer(r -> _drop(_move(r)), ref)
-    return ShmProvider(ref)
+    return ShmProvider(ref, 1, false)
+end
+function ShmProvider(f::Function, size::Integer)
+    p = ShmProvider(size)
+    try
+        return f(p)
+    finally
+        close(p)
+    end
 end
 
 """
@@ -96,6 +185,8 @@ mutable struct SharedShmProvider <: AbstractShmProvider
     # (the `Session.shm` cache) — there the session already outlives the
     # provider, so back-referencing it would only create a finalizer cycle.
     session::Union{Session,Nothing}
+    @atomic users::Int    # see `_with_loan`
+    @atomic closed::Bool
 end
 
 # Obtain the session-derived provider. `keep_session` controls whether the
@@ -106,7 +197,7 @@ function _obtain_shared_provider(s::Session, keep_session::Bool)
     state = Ref{LibZenohC.z_shm_provider_state}(LibZenohC.Z_SHM_PROVIDER_STATE_DISABLED)
     _handle_result(LibZenohC.z_obtain_shm_provider(_loan(s), ref, state))
     finalizer(r -> _drop(_move(r)), ref)
-    return SharedShmProvider(ref, keep_session ? s : nothing)
+    return SharedShmProvider(ref, keep_session ? s : nothing, 1, false)
 end
 
 """
@@ -160,7 +251,7 @@ function _bind_session_shm!(s::Session)
         s.shm_state[] = _shm_state_sym(st)
         if st == LibZenohC.Z_SHM_PROVIDER_STATE_READY ||
            st == LibZenohC.Z_SHM_PROVIDER_STATE_INITIALIZING
-            s.shm[] = SharedShmProvider(ref, nothing)   # no back-ref → no finalizer cycle
+            s.shm[] = SharedShmProvider(ref, nothing, 1, false)   # no back-ref → no finalizer cycle
         end
     end
     return s
@@ -248,25 +339,46 @@ function _wait_for_shm_ready!(s::Session, timeout::Float64; poll::Float64=0.05)
     end
 end
 
-# Single chokepoint every provider op (alloc/available/defragment/garbage_collect)
-# loans through: reject a closed provider here, before its nulled handle reaches zenoh-c.
-@inline function _assert_provider_open(p::ShmProvider)
-    GC.@preserve p (LibZenohC.z_internal_shm_provider_check(
-        Base.unsafe_convert(Ptr{LibZenohC.z_owned_shm_provider_t}, p.p)) ||
-        throw(ArgumentError("SHM provider is closed")))
-    return nothing
-end
-@inline function _assert_provider_open(p::SharedShmProvider)
-    GC.@preserve p (LibZenohC.z_internal_shared_shm_provider_check(
-        Base.unsafe_convert(Ptr{LibZenohC.z_owned_shared_shm_provider_t}, p.p)) ||
-        throw(ArgumentError("SHM provider is closed")))
-    return nothing
-end
-
-_loan_provider(p::ShmProvider) = (_assert_provider_open(p); _loan(p.p))
+_loan_provider(p::ShmProvider) = _loan(p.p)
 _loan_provider(p::SharedShmProvider) =
-    (_assert_provider_open(p);
-     LibZenohC.z_shared_shm_provider_loan_as(LibZenohC.z_shared_shm_provider_loan(p.p)))
+    LibZenohC.z_shared_shm_provider_loan_as(LibZenohC.z_shared_shm_provider_loan(p.p))
+
+# Every provider op loans the handle through here. `users` counts the open provider
+# plus each call in flight, and whoever takes it to zero drops the handle, so a
+# `close` racing a call on another task leaves the drop to that call. Counting lets
+# other tasks keep allocating while one waits in `alloc_blocking`, which a lock held
+# across the call would stall.
+function _with_loan(f, p::AbstractShmProvider)
+    n = @atomic p.users
+    while true
+        ((@atomic p.closed) || n == 0) && throw(ArgumentError("SHM provider is closed"))
+        n, ok = @atomicreplace p.users n => n + 1
+        ok && break
+    end
+    try
+        return GC.@preserve p f(_loan_provider(p))
+    finally
+        _release!(p)
+    end
+end
+_release!(p::AbstractShmProvider) = (@atomic p.users -= 1) == 0 && _drop_handle!(p)
+
+function _drop_handle!(p::ShmProvider)
+    GC.@preserve p begin
+        LibZenohC.z_shm_provider_drop(_move(p.p))
+        LibZenohC.z_internal_shm_provider_null(
+            Base.unsafe_convert(Ptr{LibZenohC.z_owned_shm_provider_t}, p.p))
+    end
+    return nothing
+end
+function _drop_handle!(p::SharedShmProvider)
+    GC.@preserve p begin
+        LibZenohC.z_shared_shm_provider_drop(_move(p.p))
+        LibZenohC.z_internal_shared_shm_provider_null(
+            Base.unsafe_convert(Ptr{LibZenohC.z_owned_shared_shm_provider_t}, p.p))
+    end
+    return nothing
+end
 
 """
     available(p::AbstractShmProvider) -> Int
@@ -274,7 +386,7 @@ _loan_provider(p::SharedShmProvider) =
 Bytes currently free for allocation from the provider. Wraps
 `z_shm_provider_available`.
 """
-available(p::AbstractShmProvider)       = GC.@preserve p Int(LibZenohC.z_shm_provider_available(_loan_provider(p)))
+available(p::AbstractShmProvider)       = _with_loan(lp -> Int(LibZenohC.z_shm_provider_available(lp)), p)
 """
     defragment(p::AbstractShmProvider) -> Int
 
@@ -282,14 +394,14 @@ Coalesce the provider's free space into larger contiguous runs and return the
 resulting size. Useful to recover from a [`ShmAllocError`](@ref)`(:need_defragment)`
 before retrying [`alloc`](@ref). Wraps `z_shm_provider_defragment`.
 """
-defragment(p::AbstractShmProvider)      = GC.@preserve p Int(LibZenohC.z_shm_provider_defragment(_loan_provider(p)))
+defragment(p::AbstractShmProvider)      = _with_loan(lp -> Int(LibZenohC.z_shm_provider_defragment(lp)), p)
 """
     garbage_collect(p::AbstractShmProvider) -> Int
 
 Reclaim free chunks no longer referenced anywhere in the SHM domain and return
 the collected size. Wraps `z_shm_provider_garbage_collect`.
 """
-garbage_collect(p::AbstractShmProvider) = GC.@preserve p Int(LibZenohC.z_shm_provider_garbage_collect(_loan_provider(p)))
+garbage_collect(p::AbstractShmProvider) = _with_loan(lp -> Int(LibZenohC.z_shm_provider_garbage_collect(lp)), p)
 
 """
     ShmBufMut
@@ -395,8 +507,8 @@ end
     close(b::ShmBuf)
 
 Release an owned (frozen) [`ShmBuf`](@ref) on the calling task — the on-task twin
-of [`close`](@ref)`(::ShmBufMut)` for a buffer frozen via `ShmBuf(buf)` but not
-sent. The off-thread finalizer drop is itself safe; this just frees the segment
+of [`close`](@ref close(::Zenoh.ShmBufMut))`(::ShmBufMut)` for a buffer frozen via
+`ShmBuf(buf)` but not sent. The off-thread finalizer drop is itself safe; this just frees the segment
 deterministically. Idempotent; a no-op for a borrowed view (from [`as_shm`](@ref),
 which owns nothing) and once the buffer was moved into a [`ZBytes`](@ref).
 """
@@ -413,34 +525,25 @@ end
 Base.close(::ShmBuf{Ptr{LibZenohC.z_loaned_shm_t}}) = nothing
 
 """
-    close(p::ShmProvider)
-    close(p::SharedShmProvider)
+    close(p::AbstractShmProvider)
 
 Release a provider's handle on the calling task instead of waiting for the GC
-finalizer. Idempotent. This frees the Julia-side handle, not the provider's
-`/dev/shm` segments (those are reference-counted across the domain; a crashed
-process's leftovers need [`cleanup_orphaned_shm_segments`](@ref)). Don't close a
-[`SharedShmProvider`](@ref) still cached in its session — [`close`](@ref)`(::Session)`
-releases that one.
+finalizer. Idempotent. Later calls on `p` throw `ArgumentError`; a call already
+running on another task keeps the handle until it returns.
+
+What closing frees depends on the provider:
+
+- [`ShmProvider`](@ref): its segment and the memory locked for it, once every
+  buffer allocated from it is released too.
+- [`SharedShmProvider`](@ref): one reference to the session's pool, which lasts
+  until the session closes. Don't close the one cached in its session —
+  [`close`](@ref close(::Zenoh.Session))`(::Session)` releases that one.
+
+Segments left by a process that exited without releasing them need
+[`cleanup_orphaned_shm_segments`](@ref).
 """
-function Base.close(p::ShmProvider)
-    GC.@preserve p begin
-        pp = Base.unsafe_convert(Ptr{LibZenohC.z_owned_shm_provider_t}, p.p)
-        if LibZenohC.z_internal_shm_provider_check(pp)
-            LibZenohC.z_shm_provider_drop(_move(p.p))
-            LibZenohC.z_internal_shm_provider_null(pp)
-        end
-    end
-    return nothing
-end
-function Base.close(p::SharedShmProvider)
-    GC.@preserve p begin
-        pp = Base.unsafe_convert(Ptr{LibZenohC.z_owned_shared_shm_provider_t}, p.p)
-        if LibZenohC.z_internal_shared_shm_provider_check(pp)
-            LibZenohC.z_shared_shm_provider_drop(_move(p.p))
-            LibZenohC.z_internal_shared_shm_provider_null(pp)
-        end
-    end
+function Base.close(p::AbstractShmProvider)
+    (@atomicswap p.closed = true) || _release!(p)
     return nothing
 end
 
@@ -510,8 +613,7 @@ end
 
 function _alloc(p::AbstractShmProvider, n::Integer, align::Union{Nothing,Integer}, blocking::Bool)
     result = Ref{LibZenohC.z_buf_layout_alloc_result_t}()
-    lp = _loan_provider(p)
-    GC.@preserve p _native_alloc!(result, lp, n, align, blocking)
+    _with_loan(lp -> _native_alloc!(result, lp, n, align, blocking), p)
     status = result[].status
     if status == LibZenohC.ZC_BUF_LAYOUT_ALLOC_STATUS_OK
         return _take_shmbufmut(result)
@@ -569,8 +671,7 @@ non-exceptional outcome.
 """
 function try_alloc(p::AbstractShmProvider, n::Integer; align::Union{Nothing,Integer}=nothing)
     result = Ref{LibZenohC.z_buf_layout_alloc_result_t}()
-    lp = _loan_provider(p)
-    GC.@preserve p _native_alloc!(result, lp, n, align, false)   # try-once, non-blocking
+    _with_loan(lp -> _native_alloc!(result, lp, n, align, false), p)   # try-once, non-blocking
     status = result[].status
     status == LibZenohC.ZC_BUF_LAYOUT_ALLOC_STATUS_OK && return _take_shmbufmut(result)
     status == LibZenohC.ZC_BUF_LAYOUT_ALLOC_STATUS_ALLOC_ERROR && return nothing  # full/fragmented → transient
@@ -746,7 +847,7 @@ end
 
 export AbstractShmProvider, ShmProvider, SharedShmProvider
 export ShmBuf, ShmBufMut
-export ShmAllocError, ShmLayoutError
+export ShmAllocError, ShmLayoutError, ShmProviderError
 export obtain_shm_provider, alloc, alloc_blocking, try_alloc, shm_serialize
 export available, defragment, garbage_collect
 export shm_state, shm_capable, shm_ready, session_shm_provider

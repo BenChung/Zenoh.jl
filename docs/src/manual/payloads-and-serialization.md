@@ -166,9 +166,13 @@ The codec wraps these value types today:
 
 ```@docs
 ZBytes
+Base.close(::ZBytes)
 ZBytesReader
+Base.close(::ZBytesReader)
 ZBytesSliceReader
+Base.close(::ZBytesSliceReader)
 ZBytesWriter
+Base.close(::ZBytesWriter)
 ZSlice
 finish
 ```

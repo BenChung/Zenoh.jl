@@ -57,10 +57,10 @@ Every Zenoh entity is garbage-collected. An unreferenced [`Session`](@ref), [`Pu
 
 ### Deterministic close alongside GC
 
-For resources whose teardown order matters, [`close`](@ref) (or `undeclare` for declared entities) tears the resource down immediately on the calling task. A [`Session`](@ref) shuts down gracefully and drains its background runtime on that task, where teardown order is predictable, rather than leaving it to the garbage collector. Closing the same entity again is a no-op, and GC remains a safety net for entities never closed explicitly.
+For resources whose teardown order matters, [`close`](@ref close(::Zenoh.Session)) (or `undeclare` for declared entities) tears the resource down immediately on the calling task. A [`Session`](@ref) shuts down gracefully and drains its background runtime on that task, where teardown order is predictable, rather than leaving it to the garbage collector. Closing the same entity again is a no-op, and GC remains a safety net for entities never closed explicitly.
 
 !!! warning "A closed session throws on use"
-    Any operation on a closed [`Session`](@ref) raises an `ArgumentError`. [`close`](@ref) is idempotent, but operations are not retryable after it.
+    Any operation on a closed [`Session`](@ref) raises an `ArgumentError`. [`close`](@ref close(::Zenoh.Session)) is idempotent, but operations are not retryable after it.
 
 ### Errors as exceptions
 
@@ -104,7 +104,7 @@ The conventions above are the user-facing contract; this section records how the
 | [`Session`](@ref) | [`zenoh::Session`](https://docs.rs/zenoh/1.9.0/zenoh/session/struct.Session.html) | `z_owned_session_t`, `z_open` |
 | [`Config`](@ref) | [`zenoh::config`](https://docs.rs/zenoh/1.9.0/zenoh/config/index.html) | `z_owned_config_t`, `zc_config_from_*` |
 | [`open`](@ref)`(::Config)` | [`Session::open`](https://docs.rs/zenoh/1.9.0/zenoh/session/struct.Session.html) (a `Resolvable`) | `z_open` |
-| [`close`](@ref)`(::Session)` | `Session::close` (a builder) | `z_close` + `z_session_drop` |
+| [`close`](@ref close(::Zenoh.Session))`(::Session)` | `Session::close` (a builder) | `z_close` + `z_session_drop` |
 | [`ZenohError`](@ref) | [`zenoh::Error` / `Result`](https://docs.rs/zenoh/1.9.0/zenoh/) | `z_result_t` + `Z_OK` |
 
 ### Ownership categories
@@ -113,7 +113,7 @@ zenoh-c splits its types into four [categories](https://zenoh-c.readthedocs.io/e
 
 ### Close and error mechanics
 
-A [`Session`](@ref) carries a `closed` flag and cached SHM state in mutable `Ref` cells beyond the bare `z_owned_session_t`, and every declare/put/get checks that flag before calling into C. [`close`](@ref) calls `z_close` then drops the handle (`z_session_drop`) — both on the caller's task, so Zenoh's runtime drains where ordering is predictable rather than on the finalizer thread. Fallible C calls return a `z_result_t` code; the wrapper throws [`ZenohError`](@ref) on any non-`Z_OK` result. The Rust API defers operations through a [`Resolvable`](https://docs.rs/zenoh/1.9.0/zenoh/trait.Resolvable.html) builder finished with `.wait()`/`.await`; the pre-resolved C API (`z_open`, `z_put`, `z_declare_publisher`) and Zenoh.jl run on the spot.
+A [`Session`](@ref) carries a `closed` flag and cached SHM state in mutable `Ref` cells beyond the bare `z_owned_session_t`, and every declare/put/get checks that flag before calling into C. [`close`](@ref close(::Zenoh.Session)) calls `z_close` then drops the handle (`z_session_drop`) — both on the caller's task, so Zenoh's runtime drains where ordering is predictable rather than on the finalizer thread. Fallible C calls return a `z_result_t` code; the wrapper throws [`ZenohError`](@ref) on any non-`Z_OK` result. The Rust API defers operations through a [`Resolvable`](https://docs.rs/zenoh/1.9.0/zenoh/trait.Resolvable.html) builder finished with `.wait()`/`.await`; the pre-resolved C API (`z_open`, `z_put`, `z_declare_publisher`) and Zenoh.jl run on the spot.
 
 ### Prefix taxonomy
 
