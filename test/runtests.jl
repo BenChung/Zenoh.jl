@@ -1697,9 +1697,9 @@ try
     end
 
     @timed_testset "idempotent ctx teardown" begin
-        # The precompile workload (and any synchronous teardown) calls _teardown_buffered_*!
-        # directly while the deferred finalizer may also fire later; the destroy_ctx! `destroyed`
-        # guard must make the second teardown a no-op (no double uv_mutex_destroy / async close).
+        # close() tears an empty buffer down and the finalizer may tear it down again later; the
+        # destroy_ctx! `destroyed` guard must make the repeat a no-op (no double uv_mutex_destroy /
+        # async close).
         sub = Base.open(S1, Zenoh.Keyexpr("test/idempotent/sub"); channel=:fifo, capacity=8,
                         allowed_origin=Zenoh.Localities.ANY)
         close(sub)

@@ -48,6 +48,11 @@ mutable struct CallbackCtx{Item}
     destroyed::Bool                        # field 10 — idempotency guard for destroy_ctx!;
                                            #   Julia-side only, never read by the foreign thread,
                                            #   so it adds no foreign-accessed offset
+    # Fields 11-14: the pull guard (see `_pull_begin!`), Julia-side only like field 10.
+    pull_lock::Threads.SpinLock            # field 11 — guards fields 12-14
+    pulls::Int                             # field 12 — pulls in flight on this ctx
+    released::Bool                         # field 13 — owner closed, foreign side quiescent
+    torn::Bool                             # field 14 — teardown claimed
     CallbackCtx{Item}() where {Item} = new()
 end
 
@@ -161,6 +166,10 @@ function init_ctx!(ctx::CallbackCtx{Item}, async_cond::Base.AsyncCondition,
     ctx.dropped = 0
     ctx.closing = 0
     ctx.destroyed = false
+    ctx.pull_lock = Threads.SpinLock()
+    ctx.pulls     = 0
+    ctx.released  = false
+    ctx.torn      = false
     ctx.async   = Base.unsafe_convert(Ptr{Cvoid}, async_cond)
     rc = ccall(:uv_mutex_init, Cint, (Ptr{Cvoid},), ctx_p(ctx))
     rc == 0 || error("uv_mutex_init failed: $rc")
@@ -225,6 +234,7 @@ function destroy_ctx!(ctx::CallbackCtx{Owned},
     # so a plain flag suffices.
     ctx.destroyed && return
     ctx.destroyed = true
+    _mark_torn!(ctx)
     GC.@preserve ctx begin
         while ctx.count > 0
             ccall(drop_fp, Cvoid, (Ptr{Moved},),
@@ -243,8 +253,58 @@ function destroy_ctx_pod!(ctx::CallbackCtx{Item},
         close_async::Bool=true) where {Item}
     ctx.destroyed && return                  # idempotent (see destroy_ctx!)
     ctx.destroyed = true
+    _mark_torn!(ctx)
     ccall(:uv_mutex_destroy, Cvoid, (Ptr{Cvoid},), ctx_p(ctx))
     close_async && close(async_cond)
+end
+
+# --- Pull guard (buffered subscriber / channel queryable) -------------
+#
+# Lets `close` release a buffered handler's ctx synchronously. Each pull
+# registers before touching the ring; the ctx is torn down once the owner is
+# released, no pull is in flight and the ring is empty — by `close`, or by the
+# pull that drains the last buffered item. Each predicate returns `true` when
+# the caller has claimed the teardown and must run it. A pull that finds the
+# ctx torn returns as disconnected.
+@inline function _pull_begin!(ctx::CallbackCtx)
+    lock(ctx.pull_lock)
+    live = !ctx.torn
+    live && (ctx.pulls += 1)
+    unlock(ctx.pull_lock)
+    return live
+end
+
+@inline function _pull_end!(ctx::CallbackCtx)
+    lock(ctx.pull_lock)
+    ctx.pulls -= 1
+    claim = _claim_teardown!(ctx)
+    unlock(ctx.pull_lock)
+    return claim
+end
+
+# Called by `close` once the foreign side is quiescent (after the undeclare).
+function _release!(ctx::CallbackCtx)
+    lock(ctx.pull_lock)
+    ctx.released = true
+    claim = _claim_teardown!(ctx)
+    unlock(ctx.pull_lock)
+    return claim
+end
+
+# A teardown by any path stops later pulls from reaching the destroyed mutex.
+@inline function _mark_torn!(ctx::CallbackCtx)
+    lock(ctx.pull_lock)
+    ctx.torn = true
+    unlock(ctx.pull_lock)
+    return nothing
+end
+
+# Caller holds `pull_lock`. `count` is stable here: `released` is set only once
+# the foreign side has stopped pushing.
+@inline function _claim_teardown!(ctx::CallbackCtx)
+    claim = ctx.released && ctx.pulls == 0 && ctx.count == 0 && !ctx.torn
+    claim && (ctx.torn = true)
+    return claim
 end
 
 # --- Pull-form ring access (buffered handlers / channel get) ---------

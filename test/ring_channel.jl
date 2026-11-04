@@ -206,6 +206,68 @@ end
     end
 end
 
+@timed_testset "Ring: close releases an empty buffer at once" begin
+    sub = open(S1, Zenoh.Keyexpr("test/ring/release/sub"); channel=:fifo, capacity=4)
+    q = Zenoh.Queryable(S1, Zenoh.Keyexpr("test/ring/release/q"); channel=:fifo, complete=true)
+    sleep(0.2)
+    close(sub)
+    close(q)
+    @test sub.ctx.destroyed && !isopen(sub.async_cond)
+    @test q.backing.ctx.destroyed && !isopen(q.backing.async_cond)
+    @test Zenoh.tryrecv!(sub) === nothing
+    @test_throws Zenoh.ZenohError take!(q)
+end
+
+@timed_testset "Ring: a take! parked at close releases the buffer on wake" begin
+    sub = open(S1, Zenoh.Keyexpr("test/ring/release/parked-sub"); channel=:fifo, capacity=4)
+    q = Zenoh.Queryable(S1, Zenoh.Keyexpr("test/ring/release/parked-q"); channel=:fifo, complete=true)
+    sleep(0.2)
+    tasks = [(@async try take!(h); :got catch; :disconnected end) for h in (sub, q)]
+    sleep(0.2)
+    close(sub)
+    close(q)
+    @test fetch.(tasks) == [:disconnected, :disconnected]
+    @test sub.ctx.destroyed && !isopen(sub.async_cond)
+    @test q.backing.ctx.destroyed && !isopen(q.backing.async_cond)
+end
+
+@timed_testset "Ring: close keeps buffered samples for draining" begin
+    k = Zenoh.Keyexpr("test/ring/release/drain")
+    sub = open(S1, k; channel=:fifo, capacity=8)
+    pub = Zenoh.Publisher(S1, k)
+    sleep(0.3)
+    try
+        foreach(n -> Zenoh.put(pub, string(n)), 1:3)
+        sleep(0.4)
+        close(sub)
+        @test !sub.ctx.destroyed                     # buffered samples still drainable
+        got = [String(Zenoh.payload(smp)) for smp in (take!(sub) for _ in 1:3)]
+        @test got == ["1", "2", "3"]
+        @test sub.ctx.destroyed && !isopen(sub.async_cond)   # released by the last take!
+        @test Zenoh.tryrecv!(sub) === nothing
+    finally
+        close(pub)
+    end
+end
+
+@timed_testset "Ring: pulls after an explicit teardown report disconnected" begin
+    k = Zenoh.Keyexpr("test/ring/release/explicit")
+    sub = open(S1, k; channel=:fifo, capacity=8)
+    pub = Zenoh.Publisher(S1, k)
+    sleep(0.3)
+    try
+        Zenoh.put(pub, "left")
+        sleep(0.4)
+        close(sub)                                   # one sample still buffered
+        Zenoh._teardown_buffered_sub!(sub)           # drops it with the ring
+        @test sub.ctx.destroyed
+        @test Zenoh.tryrecv!(sub) === nothing
+        @test_throws Zenoh.ZenohError take!(sub)
+    finally
+        close(pub)
+    end
+end
+
 # Use-after-recycle guard: a tier-1/2 zero-copy view held over an in-place-reused
 # source (SampleHolder / iterate box) must raise BorrowError once the source
 # recycles, instead of silently reading freed memory. UInt8 views are always a

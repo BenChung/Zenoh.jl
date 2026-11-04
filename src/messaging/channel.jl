@@ -144,8 +144,8 @@ end
 # Two consumption shapes:
 #   • Buffered subscriber/queryable (infinite stream, keep-last-N): the caller
 #     pulls the ring directly via `_ring_take` / `_ring_pop!` — one bounded
-#     buffer, clean drop-oldest. Teardown is deferred to a finalizer (a
-#     concurrent iterate may still touch the ctx; reachability is the interlock).
+#     buffer, clean drop-oldest. The ctx is torn down at close or by the last
+#     draining pull (see `_pull_begin!`), or by the finalizer if left undrained.
 #   • Channel `get` (finite reply set): a consume task drains the ring into a
 #     `Base.Channel{Reply}`; the task owns the ctx lifetime until the get
 #     completes (drop trampoline fires), which makes abandonment safe (no
@@ -249,7 +249,13 @@ function Base.iterate(sh::AbstractSubscriberHandler, box=nothing)
         # memory with no `z_sample_drop`, never as a garbage owned-sample (which would
         # segfault `drop_in_place` at finalize/atexit).
         s = Ref{LibZenohC.z_owned_sample_t}()
-        _ring_take_into!(s, sh.ctx, sh.async_cond) || return nothing
+        _pull_begin!(sh.ctx) || return nothing
+        got = try
+            _ring_take_into!(s, sh.ctx, sh.async_cond)
+        finally
+            _sub_pull_end!(sh)
+        end
+        got || return nothing
         box = _IterBox(s, _RecycleEpoch())
         # Bump in the break-safety finalizer too: a zero-copy view held past a
         # `break` pins box.s/box.epoch but NOT this _IterBox wrapper, so when the
@@ -262,7 +268,13 @@ function Base.iterate(sh::AbstractSubscriberHandler, box=nothing)
     LibZenohC.z_sample_drop(_move(box.s))           # drop previous occupant promptly
     # `_move` left the box in the null gravestone, so the finalizer is safe even if the
     # refill below fails (drop of a null owned sample is a no-op).
-    _ring_take_into!(box.s, sh.ctx, sh.async_cond) || return nothing
+    _pull_begin!(sh.ctx) || return nothing
+    got = try
+        _ring_take_into!(box.s, sh.ctx, sh.async_cond)
+    finally
+        _sub_pull_end!(sh)
+    end
+    got || return nothing
     return (_borrow_sample(box.s, box.epoch), box)
 end
 
@@ -275,7 +287,12 @@ its buffer is drained. [`tryrecv!`](@ref) is the non-blocking counterpart;
 [`recv!`](@ref) with a [`SampleHolder`](@ref) is the allocation-free loop.
 """
 function Base.take!(sh::AbstractSubscriberHandler)
-    r = _ring_take(sh.ctx, sh.async_cond)
+    _pull_begin!(sh.ctx) || throw(ZenohError(LibZenohC.Z_CHANNEL_DISCONNECTED))
+    r = try
+        _ring_take(sh.ctx, sh.async_cond)
+    finally
+        _sub_pull_end!(sh)
+    end
     r === nothing && throw(ZenohError(LibZenohC.Z_CHANNEL_DISCONNECTED))
     return Sample(r)
 end
@@ -294,7 +311,12 @@ The non-blocking counterpart to [`take!`](@ref) / [`recv!`](@ref): poll it when
 you want to do other work rather than park waiting for an item.
 """
 function tryrecv!(sh::AbstractSubscriberHandler)
-    r = _ring_pop!(sh.ctx)
+    _pull_begin!(sh.ctx) || return nothing
+    r = try
+        _ring_pop!(sh.ctx)
+    finally
+        _sub_pull_end!(sh)
+    end
     r isa Base.RefValue && return Sample(r)
     return nothing                                  # :empty or :closed
 end
@@ -315,7 +337,13 @@ allocation-free receive loop:
 """
 function recv!(sh::AbstractSubscriberHandler, h::SampleHolder)
     _drop_current!(h)
-    _ring_take_into!(h.s, sh.ctx, sh.async_cond) || return nothing
+    _pull_begin!(sh.ctx) || return nothing
+    got = try
+        _ring_take_into!(h.s, sh.ctx, sh.async_cond)
+    finally
+        _sub_pull_end!(sh)
+    end
+    got || return nothing
     return h
 end
 
@@ -323,7 +351,13 @@ end
 # nothing is buffered.
 function tryrecv!(sh::AbstractSubscriberHandler, h::SampleHolder)
     _drop_current!(h)
-    _ring_pop_into!(h.s, sh.ctx) || return nothing
+    _pull_begin!(sh.ctx) || return nothing
+    got = try
+        _ring_pop_into!(h.s, sh.ctx)
+    finally
+        _sub_pull_end!(sh)
+    end
+    got || return nothing
     return h
 end
 
@@ -335,9 +369,13 @@ function Base.close(sh::AbstractSubscriberHandler)
     sh.closed = true
     signal_closing!(sh.ctx, sh.async_cond)          # closing=1 + wake any parked pull
     _handle_result(_undeclare_sub_handle(sh.sub))   # foreign side quiescent after this
-    # ctx teardown deferred to the finalizer: a concurrent iterate on another
-    # task may still be inside _ring_take. After close, closing=1 means it
-    # drains remnants then returns nothing (it never parks again).
+    _release!(sh.ctx) && _teardown_callback(Val(:sample), sh.ctx, sh.async_cond)
+    return nothing
+end
+
+# Pull guard around every ring access of a buffered subscriber; see `_pull_begin!`.
+@inline function _sub_pull_end!(sh::AbstractSubscriberHandler)
+    _pull_end!(sh.ctx) && _teardown_callback(Val(:sample), sh.ctx, sh.async_cond)
     return nothing
 end
 
@@ -346,7 +384,7 @@ end
 # `close(async_cond)` is legal (vs. finalizer task-switch limits) and so the
 # AsyncCondition stays alive across the safety-net undeclare's drop trampoline.
 _finalize_buffered_sub(sh::AbstractSubscriberHandler) =
-    Threads.@spawn _teardown_buffered_sub!(sh)
+    sh.ctx.destroyed || Threads.@spawn _teardown_buffered_sub!(sh)
 
 function _teardown_buffered_sub!(sh::AbstractSubscriberHandler)
     if !sh.closed
